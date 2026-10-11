@@ -85,7 +85,7 @@ export function OpportunitiesView() {
     let cancelled = false;
     const refreshPositions = async () => {
       const held = positionsRef.current;
-      const updates = (await Promise.all(held.map(async position => {
+      const quoteResults = await Promise.all(held.map(async position => {
         try {
           const pairs = await dexToken(position.chain, position.address);
           // Do not fall back to the pair's base token: the requested asset can
@@ -93,12 +93,15 @@ export function OpportunitiesView() {
           // price would corrupt the paper ledger.
           const preferred = pairs.find(pair => tokenKey(pair.chain, pair.address) === position.tokenId);
           if (!preferred) return null;
-          return {
+          const update: MarketUpdate = {
             tokenId: position.tokenId, priceUsd: preferred.priceUsd,
             liquidityUsd: preferred.liquidityUsd, fetchedAt: Date.now(),
-          } satisfies MarketUpdate;
+          };
+          return update;
         } catch { return null; }
-      }))).filter((row): row is MarketUpdate => row !== null);
+      }));
+      const updates: MarketUpdate[] = [];
+      for (const row of quoteResults) if (row !== null) updates.push(row);
       if (cancelled) return;
       setPortfolio(old => applyPaperMarketUpdates(old, updates, Date.now()));
     };
