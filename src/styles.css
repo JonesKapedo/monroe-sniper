@@ -14,6 +14,16 @@
   --color-gain: #a5d194;
   --color-loss: #e3a394;
   --color-warn: #e0b070;
+
+  --color-bg: #12110e;
+  --color-surface: #1c1a16;
+  --color-surface-2: #26231d;
+  --color-fg: #f3efe6;
+  --color-muted: #a39b8c;
+  --color-accent: #e2a23a;
+  --color-accent-ink: #1a1408;
+  --color-ok: #8faf7a;
+  --radius-card: 0.75rem;
 }
 
 @layer base {
@@ -100,4 +110,9 @@
   50% {
     opacity: 0.35;
   }
+}
+
+@utility num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
