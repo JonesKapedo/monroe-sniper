@@ -43,3 +43,23 @@ barrier, `model.ts` trains, and `catchup.ts` decides how many minutes are due. E
 has a matching `*.test.ts` next to it. The TypeScript suites run under
 `npm test` on a Node build with type stripping; run them directly with
 `node --experimental-strip-types --test src/lib/sniper/*.test.ts`.
+
+
+## Live market intelligence prototype
+
+The **Scanner** workspace adds public market-data adapters in `src/lib/data/market-sources.ts`.
+It normalizes DexScreener token pairs, provides CoinGecko search and price helpers, and checks
+supported token contracts with GoPlus and honeypot.is. SEC EDGAR search is best-effort enrichment
+only and is not treated as token-security evidence.
+
+The composite score uses 35% liquidity, 25% momentum, 20% security, and 20% pair novelty.
+A score of 70 is necessary but not sufficient for paper-gate eligibility. Honeypot detection,
+unlocked liquidity, mint/freeze authority, excessive tax, thin liquidity, and incomplete security
+evidence prevent a candidate from passing. Missing security data is always unverified.
+
+Public APIs can be rate-limited and browser CORS policies may block some endpoints. The scanner
+shows provider health and degrades visibly when a source cannot be reached. It does not submit
+orders or connect opportunities to the existing simulated stock-trading engine. Paper-gate
+eligibility is informational only; this prototype is not a live trading bot.
+
+Run `npm test` to exercise normalization, chain mapping, scoring, and fail-closed security gates.
