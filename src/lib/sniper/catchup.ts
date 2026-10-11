@@ -1,4 +1,4 @@
-import { clip } from "./format";
+import { clip } from "./format.ts";
 
 /** Longest wall-clock gap the desk will replay in one catch-up pass. */
 export const MAX_CATCHUP_MINUTES = 240;
