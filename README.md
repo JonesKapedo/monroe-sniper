@@ -63,3 +63,12 @@ orders or connect opportunities to the existing simulated stock-trading engine. 
 eligibility is informational only; this prototype is not a live trading bot.
 
 Run `npm test` to exercise normalization, chain mapping, scoring, and fail-closed security gates.
+
+
+## Paper risk gate and execution loop
+
+The Scanner now routes every candidate through an auditable, paper-only risk verdict before an entry can be simulated. The gate checks the 70/100 composite threshold, clean and recent dual-provider security evidence, known buy/sell tax, hard-reject flags, quote freshness, minimum liquidity, duplicate positions, available cash, and exposure limits.
+
+Paper sizing is capped at 5% of current equity per idea, three simultaneous positions, and 15% aggregate exposure. Open positions use the guide's hard stop at -8%, half-position scale-out at +20%, a 10% trailing stop after the scale-out, a six-hour time stop, and a liquidity-drop guard when observed pool liquidity falls more than 30% from its peak. Decisions, simulated fills, and exit history persist in this browser.
+
+The Scanner refreshes held-token quotes roughly every 30 seconds while the page is open. If it is closed, the browser does not run a background trading process; time-based exits are checked again when the Scanner is opened. This remains a simulation and never sends live orders.

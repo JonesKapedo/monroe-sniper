@@ -180,7 +180,7 @@ export async function verifySecurity(m: TokenMetrics): Promise<SecurityReport | 
   if (lpLocked === null) details.push("Liquidity-lock status could not be verified");
   return {
     honeypot: hpFlag, lpLocked, ownerCanMint: mint, ownerCanFreeze: freeze, buyTax, sellTax,
-    verified: Boolean(gp && hp && hpFlag !== null && lpLocked !== null && mint !== null && freeze !== null),
+    verified: Boolean(gp && hp && hpFlag !== null && lpLocked !== null && mint !== null && freeze !== null && buyTax !== null && sellTax !== null),
     checkedAt: Date.now(), providers: [...(gp ? ["GoPlus"] : []), ...(hp ? ["honeypot.is"] : [])], details,
   };
 }
@@ -210,7 +210,7 @@ export function scoreOpportunity(m: TokenMetrics, security: SecurityReport | nul
   const hardReject = flags.some(f => ["HONEYPOT", "LP-UNLOCKED", "MINT-AUTHORITY", "FREEZE-AUTHORITY", "HIGH-TAX"].includes(f));
   const securityVerified = Boolean(security?.verified && security.honeypot === false && security.lpLocked === true &&
     security.ownerCanMint === false && security.ownerCanFreeze === false &&
-    (security.buyTax === null || security.buyTax <= 0.15) && (security.sellTax === null || security.sellTax <= 0.15));
+    security.buyTax !== null && security.buyTax <= 0.15 && security.sellTax !== null && security.sellTax <= 0.15);
   const bounded = Math.round(clamp(score));
   return {
     id: `${m.chain}:${m.address.toLowerCase()}`, symbol: m.symbol, address: m.address, chain: m.chain,
