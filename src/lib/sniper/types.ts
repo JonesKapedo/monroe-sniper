@@ -1,5 +1,5 @@
-import { emptySourceSettings, type SourceId as MeshSourceId, type SourceSetting as MeshSourceSetting } from "./mesh-types";
-import type { Board, FillLog, MeshSourceStatus, OrderType, TimeInForce } from "./mesh-types";
+import { emptySourceSettings, type SourceId as MeshSourceId, type SourceSetting as MeshSourceSetting } from "./mesh-types.ts";
+import type { Board, FillLog, MeshSourceStatus, OrderType, TimeInForce } from "./mesh-types.ts";
 
 export type { SourceId as MeshSourceId, SourceSetting as MeshSourceSetting };
 
@@ -9,8 +9,8 @@ export type ExitReason = "TARGET" | "STOP" | "TIME" | "SIGNAL" | "MANUAL" | "EXP
 export type SourceId = "INVO" | "FINVIZ" | "SIMUL8OR";
 
 /** The desk's own route to the venue is expressed in `Settings["orders"]`. */
-export type { SourceReadout, MeshSourceStatus } from "./mesh-types";
-export type { OrderType, TimeInForce, Board, FillLog, TcaVerdict } from "./mesh-types";
+export type { SourceReadout, MeshSourceStatus } from "./mesh-types.ts";
+export type { OrderType, TimeInForce, Board, FillLog, TcaVerdict } from "./mesh-types.ts";
 export type LedgerKind = "DEPOSIT" | "WITHDRAW" | "CLOSE";
 export type Tone = "up" | "down" | "info";
 

@@ -1,5 +1,5 @@
-import { clip } from "./format";
-import { features, predict } from "./model";
+import { clip } from "./format.ts";
+import { features, predict } from "./model.ts";
 import {
   SOURCE_ORDER,
   SOURCE_SPECS,
@@ -11,7 +11,7 @@ import {
   type SourceId,
   type SourceReadout,
   type SourceSetting,
-} from "./mesh-types";
+} from "./mesh-types.ts";
 import type { ModelState, Settings, SymbolState } from "./types";
 
 /**

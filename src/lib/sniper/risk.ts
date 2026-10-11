@@ -1,4 +1,4 @@
-import { clip, round2 } from "./format";
+import { clip, round2 } from "./format.ts";
 import type { Book, BookSide, Trade } from "./types";
 
 export function unrealized(book: Book) {

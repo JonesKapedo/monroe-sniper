@@ -166,7 +166,7 @@ export async function verifySecurity(m: TokenMetrics): Promise<SecurityReport | 
   const freeze = gp ? (boolFlag(gp.owner_change_balance) === true || boolFlag(gp.is_blacklisted) === true ? true :
     boolFlag(gp.owner_change_balance) === false && boolFlag(gp.is_blacklisted) === false ? false : null) : null;
   const holders = Array.isArray(gp?.lp_holders) ? gp.lp_holders as unknown[] : [];
-  const lockedShare = holders.reduce((sum, holder) => {
+  const lockedShare = holders.reduce<number>((sum, holder) => {
     const h = obj(holder); return sum + (boolFlag(h.is_locked) === true ? (num(h.percent) ?? 0) : 0);
   }, 0);
   const lpLocked = gp && holders.length ? lockedShare >= 0.95 : null;

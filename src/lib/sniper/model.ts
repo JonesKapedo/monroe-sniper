@@ -1,4 +1,4 @@
-import { clip } from "./format";
+import { clip } from "./format.ts";
 import type { ModelState, SymbolState } from "./types";
 
 export const PRIOR = [0.02, 0.22, 0.34, 0.04, -0.08, 0.06, 0.12];
