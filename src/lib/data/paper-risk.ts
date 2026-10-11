@@ -94,7 +94,7 @@ export function evaluateRiskGate(signal: OpportunitySignal, portfolio: PaperPort
 
 export function auditScan(portfolio: PaperPortfolio, signals: OpportunitySignal[], now = Date.now()): PaperPortfolio {
   const decisions = signals.map(signal => evaluateRiskGate(signal, portfolio, now));
-  return { ...portfolio, decisions: [...decisions.reverse(), ...portfolio.decisions].slice(0, 150) };
+  return { ...portfolio, decisions: [...decisions, ...portfolio.decisions].slice(0, 150) };
 }
 
 export function enterPaperPosition(

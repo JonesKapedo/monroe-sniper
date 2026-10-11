@@ -88,8 +88,10 @@ export function OpportunitiesView() {
       const updates = (await Promise.all(held.map(async position => {
         try {
           const pairs = await dexToken(position.chain, position.address);
-          const preferred = pairs.find(pair => tokenKey(pair.chain, pair.address) === position.tokenId)
-            ?? pairs.sort((a, b) => (b.liquidityUsd ?? 0) - (a.liquidityUsd ?? 0))[0];
+          // Do not fall back to the pair's base token: the requested asset can
+          // appear as the quote token, and marking it with the other asset's
+          // price would corrupt the paper ledger.
+          const preferred = pairs.find(pair => tokenKey(pair.chain, pair.address) === position.tokenId);
           if (!preferred) return null;
           return {
             tokenId: position.tokenId, priceUsd: preferred.priceUsd,
