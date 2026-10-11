@@ -4,6 +4,7 @@ import {
   Brain,
   LayoutDashboard,
   Radar,
+  ScanSearch,
   SlidersHorizontal,
   Wallet,
 } from "lucide-react";
@@ -20,6 +21,7 @@ const NAV = [
   { to: "/", label: "Desk", short: "Desk", icon: LayoutDashboard },
   { to: "/tape", label: "Tape", short: "Tape", icon: Activity },
   { to: "/signals", label: "Signals", short: "Feed", icon: Radar },
+  { to: "/opportunities", label: "Scanner", short: "Scan", icon: ScanSearch },
   { to: "/learn", label: "Learning", short: "Learn", icon: Brain },
   { to: "/wallet", label: "Wallet", short: "Funds", icon: Wallet },
   { to: "/settings", label: "Settings", short: "Setup", icon: SlidersHorizontal },

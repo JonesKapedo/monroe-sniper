@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LearnRouteImport } from './routes/learn'
+import { Route as OpportunitiesRouteImport } from './routes/opportunities'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SignalsRouteImport } from './routes/signals'
 import { Route as TapeRouteImport } from './routes/tape'
@@ -24,6 +25,11 @@ const IndexRoute = IndexRouteImport.update({
 const LearnRoute = LearnRouteImport.update({
   id: '/learn',
   path: '/learn',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OpportunitiesRoute = OpportunitiesRouteImport.update({
+  id: '/opportunities',
+  path: '/opportunities',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsRoute = SettingsRouteImport.update({
@@ -50,6 +56,7 @@ const WalletRoute = WalletRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/learn': typeof LearnRoute
+  '/opportunities': typeof OpportunitiesRoute
   '/settings': typeof SettingsRoute
   '/signals': typeof SignalsRoute
   '/tape': typeof TapeRoute
@@ -58,6 +65,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/learn': typeof LearnRoute
+  '/opportunities': typeof OpportunitiesRoute
   '/settings': typeof SettingsRoute
   '/signals': typeof SignalsRoute
   '/tape': typeof TapeRoute
@@ -67,6 +75,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/learn': typeof LearnRoute
+  '/opportunities': typeof OpportunitiesRoute
   '/settings': typeof SettingsRoute
   '/signals': typeof SignalsRoute
   '/tape': typeof TapeRoute
@@ -74,16 +83,17 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/learn' | '/settings' | '/signals' | '/tape' | '/wallet'
+  fullPaths: '/' | '/learn' | '/opportunities' | '/settings' | '/signals' | '/tape' | '/wallet'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/learn' | '/settings' | '/signals' | '/tape' | '/wallet'
+  to: '/' | '/learn' | '/opportunities' | '/settings' | '/signals' | '/tape' | '/wallet'
   id:
-    '__root__' | '/' | '/learn' | '/settings' | '/signals' | '/tape' | '/wallet'
+    '__root__' | '/' | '/learn' | '/opportunities' | '/settings' | '/signals' | '/tape' | '/wallet'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LearnRoute: typeof LearnRoute
+  OpportunitiesRoute: typeof OpportunitiesRoute
   SettingsRoute: typeof SettingsRoute
   SignalsRoute: typeof SignalsRoute
   TapeRoute: typeof TapeRoute
@@ -104,6 +114,13 @@ declare module '@tanstack/react-router' {
       path: '/learn'
       fullPath: '/learn'
       preLoaderRoute: typeof LearnRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/opportunities': {
+      id: '/opportunities'
+      path: '/opportunities'
+      fullPath: '/opportunities'
+      preLoaderRoute: typeof OpportunitiesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings': {
@@ -140,6 +157,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LearnRoute: LearnRoute,
+  OpportunitiesRoute: OpportunitiesRoute,
   SettingsRoute: SettingsRoute,
   SignalsRoute: SignalsRoute,
   TapeRoute: TapeRoute,
