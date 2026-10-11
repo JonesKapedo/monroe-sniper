@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --color-ink: #10120e;
+  --color-panel: #171a14;
+  --color-panel-2: #22281c;
+  --color-cream: #f4f1e8;
+  --color-faint: #b7b3a6;
+  --color-line: #34392e;
+  --color-brass: #d7b56a;
+  --color-brass-ink: #1c170c;
+  --color-gain: #a5d194;
+  --color-loss: #e3a394;
+  --color-warn: #e0b070;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--color-ink);
+    color: var(--color-cream);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brass);
+    outline-offset: 2px;
+  }
+  input,
+  button {
+    font: inherit;
+  }
+  ::selection {
+    background: var(--color-brass);
+    color: var(--color-brass-ink);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pulse-dot {
+      animation: none;
+    }
+  }
+}
+
+@layer components {
+  .field {
+    width: 100%;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-panel-2);
+    color: var(--color-cream);
+    padding: 0.625rem 0.75rem;
+    min-height: 2.75rem;
+    font-family: var(--font-mono);
+  }
+  .pulse-dot {
+    animation: monroe-pulse 1.6s ease-in-out infinite;
+  }
+  .panel-quiet {
+    border: 1px dashed var(--color-line);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+  }
+  .stroodle {
+    display: flex;
+    flex-direction: column;
+  }
+  .node {
+    border-left: 2px solid var(--color-line);
+    padding: 0.5rem 0 0.5rem 0.875rem;
+    margin-left: 0.35rem;
+  }
+  .chain-arrow {
+    color: var(--color-faint);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 0.125rem 0 0.125rem 0.9rem;
+  }
+  .glyph-on {
+    border-color: var(--color-brass);
+    color: var(--color-brass);
+  }
+  .glyph-off {
+    border-color: var(--color-line);
+    color: var(--color-faint);
+  }
+}
+
+@keyframes monroe-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
