@@ -225,7 +225,7 @@ export type RejectLog = {
   detail: string;
 };
 
-export const PAPER_CASH = 25000;
+export const PAPER_CASH = 500;
 
 export const SOURCE_META: Record<SourceId, { label: string; role: string; href: string }> = {
   INVO: {

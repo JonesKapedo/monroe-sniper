@@ -28,7 +28,7 @@ export function pct(n: number, digits = 0) {
   return `${(n * 100).toFixed(digits)}%`;
 }
 
-import { formatNairobiTime } from "./nairobi-time";
+import { formatNairobiTime } from "./nairobi-time.ts";
 
 export function sessionClock(minute: number) {
   const day = Math.floor(minute / 390) + 1;

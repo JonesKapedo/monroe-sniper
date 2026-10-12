@@ -5,7 +5,7 @@ import type {
   RealMoneyReadiness,
 } from "./types";
 import type { Book } from "../paper";
-import { equity } from "../paper";
+import { equity, DEMO_START } from "../paper";
 
 export const defaultDisciplineRules: DisciplineRules = {
   maxDailyDrawdownPct: 0.03, // 3.0% max daily drawdown circuit breaker
@@ -349,6 +349,12 @@ export function calculateRealMoneyReadiness(book: Book): RealMoneyReadiness {
       "Bot is performing well in simulated market flow. Allow it to finish remaining sample trades to confirm drawdown stability.";
   }
 
+  let consecutiveWins = 0;
+  for (let i = book.trades.length - 1; i >= 0; i--) {
+    if (book.trades[i].pnl > 0) consecutiveWins++;
+    else break;
+  }
+
   return {
     readinessScore,
     status,
@@ -362,8 +368,8 @@ export function calculateRealMoneyReadiness(book: Book): RealMoneyReadiness {
     maxObservedDrawdownPct: Math.round(maxDrawdownPct * 10) / 10,
     maxAllowedDrawdownPct: 4.5,
     disciplineAdherenceScore: 100,
-    consecutiveWinsCurrent: book.streak,
-    totalDemoProfitUsd: Math.round((currentEquity - 100) * 100) / 100,
+    consecutiveWinsCurrent: consecutiveWins,
+    totalDemoProfitUsd: Math.round((currentEquity - DEMO_START) * 100) / 100,
     recommendation,
     checklist,
   };

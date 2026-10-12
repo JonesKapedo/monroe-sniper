@@ -31,10 +31,10 @@ export const Route = createRootRoute({
   }),
   component: () => (
     <html lang="en" suppressHydrationWarning>
-      <head>
+      <head suppressHydrationWarning>
         <HeadContent />
       </head>
-      <body>
+      <body suppressHydrationWarning>
         <PreviewHostBridge />
         <AuthProvider>
           <Frame>

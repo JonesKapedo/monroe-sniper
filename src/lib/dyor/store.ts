@@ -682,6 +682,7 @@ export const useDyorStore = create<DyorState>()(
     }),
     {
       name: "monroe_sniper_dyor_vault_v1",
+      skipHydration: true,
       partialize: (state) => ({
         instruments: state.instruments,
         connectedProfiles: state.connectedProfiles,

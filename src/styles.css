@@ -112,6 +112,34 @@
   }
 }
 
+@keyframes live-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes live-flash {
+  0% {
+    background-color: rgba(245, 158, 11, 0.35);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.live-pulse {
+  animation: live-pulse 1.8s ease-in-out infinite;
+}
+
+.live-flash-screen {
+  animation: live-flash 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 @utility num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;

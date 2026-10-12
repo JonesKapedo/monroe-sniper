@@ -311,7 +311,7 @@ export function SettingsView() {
           <p className="text-xs text-faint">Keeps cash, the PIN, and learned weights. Clears open risk and starts a new price path.</p>
           <div className="flex flex-col gap-2 rounded-xl border border-line bg-panel-2 p-3">
             <span className="text-sm font-semibold text-cream">Demo Sandbox Reset</span>
-            <p className="text-xs text-faint">Reset the Demo desk balance back to $100.00 and clear the adaptive learning memory.</p>
+            <p className="text-xs text-faint">Reset the Demo desk balance back to $500.00 and clear the adaptive learning memory.</p>
             <Button
               variant="ghost"
               onClick={() => {
@@ -319,7 +319,7 @@ export function SettingsView() {
               }}
               className="mt-1 w-fit"
             >
-              Reset Demo Desk to $100.00
+              Reset Demo Desk to $500.00
             </Button>
           </div>
           <label className="text-sm">

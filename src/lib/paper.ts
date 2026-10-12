@@ -1,4 +1,4 @@
-export const DEMO_START = 100;
+export const DEMO_START = 500;
 export const STARTING_CASH = DEMO_START;
 export const MAX_POSITIONS = 3;
 export const MAX_IDEA = 0.2;

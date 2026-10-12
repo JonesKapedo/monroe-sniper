@@ -2,13 +2,20 @@ import { useState } from "react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  Check,
   CheckCircle2,
+  Copy,
+  ExternalLink,
   History,
+  QrCode,
+  Sparkles,
+  Zap,
 } from "lucide-react";
 import { useDesk } from "@/lib/desk-store";
 import { equity, exposure } from "@/lib/paper";
 import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { DEPOSIT_NETWORKS, type DepositNetwork } from "@/lib/sniper/deposit-networks";
 
 const NETWORKS = [
   { id: "ETH", label: "Ethereum (ERC-20)", feeUsd: 1.5 },
@@ -37,6 +44,9 @@ export function WalletView() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [depositNet, setDepositNet] = useState<DepositNetwork>(DEPOSIT_NETWORKS[0]);
+  const [depositCopied, setDepositCopied] = useState(false);
+  const [showDepositQr, setShowDepositQr] = useState(false);
 
   const selectedNet = NETWORKS.find((n) => n.label === network) ?? NETWORKS[0];
   const numAmount = Number(amount) || 0;
@@ -110,7 +120,7 @@ export function WalletView() {
           <p className="mt-1 text-xs text-faint md:text-sm">
             {mode === "live"
               ? "Live trading ledger. Deposits and withdrawals reflect on-device ledger accounting for the live trading engine."
-              : "Demo sandbox wallet. Starts with $100.00 play funds to test risk sizing, execution speed, and learning memory."}
+              : "Demo sandbox wallet. Starts with $500.00 play funds to test risk sizing, execution speed, and learning memory."}
           </p>
         </div>
 
@@ -128,7 +138,7 @@ export function WalletView() {
               mode === "demo" ? "bg-brass text-ink" : "text-faint hover:text-cream",
             )}
           >
-            Demo ($100)
+            Demo ($500)
           </button>
           <button
             type="button"
@@ -142,7 +152,7 @@ export function WalletView() {
               mode === "live" ? "bg-amber-500 text-ink" : "text-faint hover:text-cream",
             )}
           >
-            Live ($0)
+            Live (${live.cash.toFixed(0)})
           </button>
         </div>
       </div>
@@ -357,46 +367,178 @@ export function WalletView() {
             )}
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-5">
             <div>
-              <h2 className="text-base font-semibold text-cream">Deposit Funds to Ledger</h2>
+              <h2 className="text-base font-semibold text-cream">Deposit Funds & On-Chain Addresses</h2>
               <p className="text-xs text-faint">
-                Top up funds for the {mode.toUpperCase()} desk. Instantly credits your available risk capital.
+                {mode === "live"
+                  ? "Send cryptocurrency or stablecoins to your dedicated Live Monroe execution address below."
+                  : "Send simulated crypto to test deposit confirmation, ledger auditing, and live equity sizing."}
               </p>
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="deposit-amount" className="text-xs font-semibold text-faint uppercase">Deposit Amount (USD)</label>
-              <input
-                id="deposit-amount"
-                inputMode="decimal"
-                value={amount}
-                onChange={(e) => {
-                  setAmount(e.target.value);
-                  setError("");
-                }}
-                className="field h-11 rounded-xl border border-line bg-panel-2 px-3.5 font-mono text-base text-cream outline-none focus:border-brass"
-              />
-              <div className="flex flex-wrap gap-2 pt-1">
-                {[50, 100, 250, 500, 1000].map((preset) => (
+            {/* Select Deposit Network */}
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-semibold text-faint uppercase">1. Select Blockchain Network</span>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {DEPOSIT_NETWORKS.map((net) => (
                   <button
-                    key={preset}
+                    key={net.id}
                     type="button"
-                    onClick={() => setAmount(String(preset))}
-                    className="rounded-lg border border-line bg-panel-2 px-3 py-1 text-xs text-faint hover:text-cream"
+                    onClick={() => {
+                      setDepositNet(net);
+                      setDepositCopied(false);
+                      setShowDepositQr(false);
+                    }}
+                    className={cn(
+                      "flex flex-col rounded-xl border p-2.5 text-left transition-all",
+                      depositNet.id === net.id
+                        ? "border-amber-400 bg-amber-500/15 text-cream shadow-xs"
+                        : "border-line bg-panel-2 text-faint hover:border-line/80 hover:text-cream",
+                    )}
                   >
-                    +${preset}
+                    <span className="text-xs font-bold">{net.name}</span>
+                    <span className="text-[10px] text-brass">{net.symbol}</span>
+                    <span className="mt-1 text-[9px] text-faint">{net.standard}</span>
                   </button>
                 ))}
               </div>
             </div>
 
+            {/* Deposit Address Box */}
+            <div className="rounded-xl border border-line bg-panel-2 p-4">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <span className="text-xs font-bold text-cream">
+                    {depositNet.name} Deposit Address ({depositNet.standard})
+                  </span>
+                  <p className="text-[11px] text-faint">{depositNet.note}</p>
+                </div>
+                <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                  {depositNet.confirmations}
+                </span>
+              </div>
+
+              {/* The Address Bar with Copy */}
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-line bg-ink p-3">
+                <span className="font-mono text-xs font-semibold text-cream break-all select-all">
+                  {depositNet.address}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(depositNet.address);
+                    setDepositCopied(true);
+                    setTimeout(() => setDepositCopied(false), 2000);
+                  }}
+                  className="flex shrink-0 items-center gap-1.5 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-bold text-amber-300 hover:bg-amber-500/30 transition-colors"
+                >
+                  {depositCopied ? (
+                    <>
+                      <Check className="size-4 text-gain" /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="size-4" /> Copy Address
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Network specs & explorer */}
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-3 text-xs">
+                <div className="flex items-center gap-3 text-faint">
+                  <span>Min deposit: <strong className="text-cream">${depositNet.minDepositUsd}</strong></span>
+                  <span>Arrival: <strong className="text-cream">{depositNet.estimatedArrival}</strong></span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowDepositQr(!showDepositQr)}
+                    className="flex items-center gap-1 text-brass hover:text-amber-300"
+                  >
+                    <QrCode className="size-3.5" />
+                    {showDepositQr ? "Hide QR" : "Show QR Code"}
+                  </button>
+                  <a
+                    href={`${depositNet.explorerUrl}${depositNet.address}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1 text-faint hover:text-cream"
+                  >
+                    Explorer <ExternalLink className="size-3" />
+                  </a>
+                </div>
+              </div>
+
+              {/* QR Code Container */}
+              {showDepositQr && (
+                <div className="mt-3 flex flex-col items-center justify-center rounded-xl bg-white p-4">
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="size-32 text-black"
+                    fill="currentColor"
+                    aria-label="Deposit QR Code"
+                  >
+                    <path d={depositNet.qrSvgPattern} />
+                  </svg>
+                  <p className="mt-2 text-[10px] text-neutral-800 font-mono text-center">
+                    Deposit {depositNet.name} ({depositNet.id})
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Instant Deposit Simulator Tool */}
+            <div className="rounded-xl border border-line/80 bg-panel-2/50 p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="size-4 text-brass" />
+                  <span className="text-xs font-semibold text-cream">
+                    Fast Simulation & Direct Credit
+                  </span>
+                </div>
+                <span className="text-[10px] text-faint">Immediate Settlement</span>
+              </div>
+              <p className="mt-1 text-xs text-faint">
+                Simulate an incoming on-chain deposit confirmation to fund the {mode.toUpperCase()} desk.
+              </p>
+
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  id="deposit-amount"
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(e) => {
+                    setAmount(e.target.value);
+                    setError("");
+                  }}
+                  placeholder="Amount in USD"
+                  className="field h-10 w-full rounded-lg border border-line bg-ink px-3 font-mono text-sm text-cream sm:w-48 outline-none focus:border-brass"
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {[100, 250, 500, 1000].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setAmount(String(preset))}
+                      className="rounded-lg border border-line bg-panel px-2.5 py-1 text-xs text-faint hover:text-cream"
+                    >
+                      +${preset}
+                    </button>
+                  ))}
+                </div>
+                <Button
+                  onClick={handleDeposit}
+                  className="h-10 text-xs font-bold ml-auto shrink-0"
+                >
+                  Confirm & Credit ${numAmount.toFixed(0)}
+                </Button>
+              </div>
+            </div>
+
             {error && <p className="text-xs font-medium text-loss">{error}</p>}
             {success && <p className="text-xs font-medium text-gain">{success}</p>}
-
-            <Button onClick={handleDeposit} className="mt-2 font-semibold">
-              Credit ${numAmount.toFixed(2)} to {mode.toUpperCase()} Desk
-            </Button>
           </div>
         )}
       </Card>

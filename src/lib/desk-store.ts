@@ -186,8 +186,8 @@ export const useDesk = create<DeskState>()(
       live: emptyBook(0),
       memory: emptyMemory(),
       tape: [],
-      note: "Paper trading sandbox active ($100). Arm power to auto-snipe.",
-      log: ["System initialized. Demo balance: $100.00", "Risk engine active: Volatility-adjusted ATR sizing"],
+      note: `Paper trading sandbox active ($${DEMO_START}). Arm power to auto-snipe.`,
+      log: [`System initialized. Demo balance: $${DEMO_START}.00`, "Risk engine active: Volatility-adjusted ATR sizing"],
       executions: initialExecutions(),
       riskSettings: defaultRiskSettings,
       disciplineRules: defaultDisciplineRules,
@@ -198,10 +198,10 @@ export const useDesk = create<DeskState>()(
           id: "tx-init-demo",
           ts: Date.now() - 3600000,
           type: "DEPOSIT",
-          amount: 100,
+          amount: DEMO_START,
           mode: "demo",
           status: "CONFIRMED",
-          note: "Demo desk opening grant: $100.00 USD",
+          note: `Demo desk opening grant: $${DEMO_START}.00 USD`,
         },
       ],
 
@@ -356,18 +356,21 @@ export const useDesk = create<DeskState>()(
           const aveCand: Candidate = {
             id: unheldAvenue.id,
             symbol: unheldAvenue.symbol,
+            name: unheldAvenue.symbol,
+            address: unheldAvenue.id,
             chain: unheldAvenue.chain,
-            venue: unheldAvenue.venueA.toLowerCase().includes("binance") ? "binance" : "raydium",
+            venue: unheldAvenue.venueA.toLowerCase().includes("binance") ? "binance" : "dex",
             priceUsd: unheldAvenue.priceA,
             change24h:
               (unheldAvenue.grossSpreadPct ?? 2.5) *
               (unheldAvenue.perpSide === "SHORT" ? -1 : 1),
             volume24h: 850_000,
             liquidityUsd: 420_000,
-            marketCapUsd: 12_500_000,
             score: unheldAvenue.confidenceScore,
-            spreadBps: 20,
-            txCount24h: 4200,
+            pairAgeHours: 24,
+            url: null,
+            flags: [],
+            rationale: [unheldAvenue.title, ...(unheldAvenue.disciplineNotes ?? [])],
           };
 
           const verdict = evaluateRiskAndSize(
@@ -647,8 +650,8 @@ export const useDesk = create<DeskState>()(
         set((s) => ({
           demo: emptyBook(DEMO_START),
           memory: emptyMemory(),
-          note: "Demo desk reset to $100.00. Self-learning memory reset.",
-          log: pushLog(s.log, "Demo reset to $100.00"),
+          note: `Demo desk reset to $${DEMO_START}.00. Self-learning memory reset.`,
+          log: pushLog(s.log, `Demo reset to $${DEMO_START}.00`),
         })),
 
       setDemoBalance: (amount: number) =>
@@ -704,6 +707,12 @@ export const useDesk = create<DeskState>()(
         botStartedAt: s.botStartedAt,
       }),
       skipHydration: true,
+      onRehydrateStorage: () => (state) => {
+        if (state && state.demo && state.demo.cash === 100 && state.demo.trades.length === 0) {
+          state.demo.cash = 500;
+          state.demo.peakEquity = 500;
+        }
+      },
     },
   ),
 );

@@ -29,7 +29,7 @@ function loadPaperPortfolio(): PaperPortfolio {
     if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.positions) || !Array.isArray(parsed.trades) || !Array.isArray(parsed.decisions)) {
       return createPaperPortfolio();
     }
-    const cashUsd = typeof parsed.cashUsd === "number" && Number.isFinite(parsed.cashUsd) ? Math.max(0, parsed.cashUsd) : 25_000;
+    const cashUsd = typeof parsed.cashUsd === "number" && Number.isFinite(parsed.cashUsd) ? Math.max(0, parsed.cashUsd) : 500;
     return { version: 1, cashUsd, positions: parsed.positions as PaperPosition[], trades: parsed.trades, decisions: parsed.decisions };
   } catch {
     return createPaperPortfolio();
@@ -49,7 +49,10 @@ export function OpportunitiesView() {
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<OpportunitySignal | null>(null);
   const [lastNotice, setLastNotice] = useState("");
-  const [portfolio, setPortfolio] = useState<PaperPortfolio>(loadPaperPortfolio);
+  const [portfolio, setPortfolio] = useState<PaperPortfolio>(createPaperPortfolio);
+  useEffect(() => {
+    setPortfolio(loadPaperPortfolio());
+  }, []);
   const positionsRef = useRef(portfolio.positions);
   useEffect(() => { positionsRef.current = portfolio.positions; }, [portfolio.positions]);
   useEffect(() => { persistPaperPortfolio(portfolio); }, [portfolio]);

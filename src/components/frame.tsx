@@ -18,8 +18,10 @@ import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
 import { hashPin } from "@/lib/sniper/wallet";
 import { useSniper } from "@/lib/sniper/store";
 import { useDesk } from "@/lib/desk-store";
+import { useDyorStore } from "@/lib/dyor/store";
 import { equity } from "@/lib/paper";
 import { Button } from "@/components/ui";
+import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
 
 import { loadFeeds } from "@/lib/market.functions";
 
@@ -79,6 +81,7 @@ export function Frame({ children }: { children: ReactNode }) {
       await Promise.all([
         useSniper.persist.rehydrate(),
         useDesk.persist.rehydrate(),
+        useDyorStore.persist.rehydrate(),
       ]);
       if (cancel) return;
       setReady(true);
@@ -128,9 +131,11 @@ function Shell({ children }: { children: ReactNode }) {
   const activeEq = equity(activeBook);
   const nairobi = formatNairobiTime(botStartedAt, nowTs);
   const readiness = getReadiness ? getReadiness() : null;
+  const [showLiveModal, setShowLiveModal] = useState(false);
+  const [justActivatedLive, setJustActivatedLive] = useState(false);
 
   return (
-    <div className="min-h-screen bg-ink text-cream md:pl-56">
+    <div className={cn("min-h-screen bg-ink text-cream md:pl-56 transition-colors duration-700", justActivatedLive && "live-flash-screen")}>
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-56 flex-col border-r border-line bg-panel md:flex">
         <div className="border-b border-line px-5 py-5">
           <div className="flex items-center justify-between">
@@ -149,7 +154,7 @@ function Shell({ children }: { children: ReactNode }) {
           <p className="mt-1 text-lg font-medium">Sniper Bot</p>
 
           {/* Nairobi Timezone Badge in Sidebar */}
-          <div className="mt-2.5 flex flex-col gap-0.5 rounded-lg border border-line/60 bg-panel-2 px-2.5 py-1.5 text-[11px]">
+          <div className="mt-2.5 flex flex-col gap-0.5 rounded-lg border border-line/60 bg-panel-2 px-2.5 py-1.5 text-[11px]" suppressHydrationWarning>
             <div className="flex items-center justify-between text-brass">
               <span className="font-medium">Nairobi EAT</span>
               <span className="rounded bg-emerald-500/20 px-1 py-0.2 text-[10px] font-bold text-emerald-300">
@@ -170,7 +175,7 @@ function Shell({ children }: { children: ReactNode }) {
 
         {/* Readiness progress in sidebar */}
         {readiness && (
-          <div className="border-t border-line px-4 py-3">
+          <div className="border-t border-line px-4 py-3" suppressHydrationWarning>
             <div className="flex items-center justify-between text-[11px]">
               <span className="text-faint">Real Money Readiness</span>
               <span className="font-semibold text-emerald-400">{readiness.readinessScore}%</span>
@@ -188,7 +193,7 @@ function Shell({ children }: { children: ReactNode }) {
         )}
 
         <div className="border-t border-line p-3">
-          <div className="rounded-lg border border-line bg-panel-2 p-2.5">
+          <div className="rounded-lg border border-line bg-panel-2 p-2.5" suppressHydrationWarning>
             <div className="flex items-center justify-between text-xs text-faint">
               <span>Active Mode</span>
               <span className={mode === "live" ? "text-amber-400 font-medium" : "text-gain font-medium"}>
@@ -208,7 +213,7 @@ function Shell({ children }: { children: ReactNode }) {
             <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-panel-2 text-brass">
               <Clock className="size-4" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0" suppressHydrationWarning>
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] font-semibold tracking-wider text-brass uppercase">
                   Nairobi EAT (UTC+3)
@@ -229,6 +234,7 @@ function Shell({ children }: { children: ReactNode }) {
               <div
                 title={readiness.statusMessage}
                 className="hidden items-center gap-2 rounded-full border border-line bg-panel-2 px-3 py-1 lg:flex"
+                suppressHydrationWarning
               >
                 <ShieldCheck className="size-3.5 text-brass" />
                 <div className="flex items-center gap-1.5 text-xs">
@@ -257,11 +263,17 @@ function Shell({ children }: { children: ReactNode }) {
                     : "text-faint hover:text-cream",
                 )}
               >
-                Demo ($100)
+                Demo ($500)
               </button>
               <button
                 type="button"
-                onClick={() => setMode("live")}
+                onClick={() => {
+                  if (mode !== "live") {
+                    setShowLiveModal(true);
+                  } else {
+                    setShowLiveModal(true);
+                  }
+                }}
                 className={cn(
                   "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
                   mode === "live"
@@ -269,16 +281,18 @@ function Shell({ children }: { children: ReactNode }) {
                     : "text-faint hover:text-cream",
                 )}
               >
-                Live ($0)
+                Live (${live.cash.toFixed(0)})
               </button>
             </div>
 
             {/* Active Equity Display */}
-            <div className="hidden text-right font-mono sm:block">
+            <div className="hidden text-right font-mono sm:block" suppressHydrationWarning>
               <span className="text-[10px] tracking-wider text-faint uppercase">
                 {mode === "live" ? "Live Bal" : "Demo Bal"}:
               </span>{" "}
-              <span className="text-sm font-semibold text-cream">${activeEq.toFixed(2)}</span>
+              <span className={cn("text-sm font-semibold", mode === "live" ? "text-amber-300" : "text-cream")}>
+                ${activeEq.toFixed(2)}
+              </span>
             </div>
 
             {/* Power / Armed Button */}
@@ -288,16 +302,57 @@ function Shell({ children }: { children: ReactNode }) {
               className={cn(
                 "inline-flex min-h-10 items-center gap-2 rounded-full border px-3 text-xs font-medium transition-colors",
                 power
-                  ? "border-gain/50 bg-gain/10 text-gain"
+                  ? mode === "live"
+                    ? "border-amber-500/60 bg-amber-500/15 text-amber-300"
+                    : "border-gain/50 bg-gain/10 text-gain"
                   : "border-line bg-panel text-faint hover:text-cream",
               )}
             >
-              <span className={cn("size-2 rounded-full", power ? "bg-gain pulse-dot" : "bg-faint")} />
-              {power ? "Sniper Armed" : "Standby"}
+              <span
+                className={cn(
+                  "size-2 rounded-full",
+                  power ? (mode === "live" ? "bg-amber-400 pulse-dot" : "bg-gain pulse-dot") : "bg-faint",
+                )}
+              />
+              {power ? (mode === "live" ? "Live Armed" : "Sniper Armed") : "Standby"}
             </button>
           </div>
         </header>
+
+        {/* Live Mode High-Stakes Banner */}
+        {mode === "live" && (
+          <div className="flex items-center justify-between border-b border-amber-500/40 bg-gradient-to-r from-amber-950/60 via-panel-2 to-amber-950/60 px-4 py-2 text-xs backdrop-blur md:px-8">
+            <div className="flex items-center gap-2">
+              <span className="size-2 rounded-full bg-amber-400 animate-ping" />
+              <span className="font-bold tracking-wider text-amber-300 uppercase">
+                ⚡ Live Capital Execution Rail Active
+              </span>
+              <span className="hidden text-faint md:inline">
+                · Non-custodial DEX/CEX execution routing with strict 1.5% ATR sizing
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowLiveModal(true)}
+              className="flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-300 hover:bg-amber-500/30 transition-colors"
+            >
+              Deposit Address & Rail Status
+            </button>
+          </div>
+        )}
+
         <main className="flex-1 px-4 py-4 md:px-8 md:py-6">{locked ? <LockScreen /> : children}</main>
+
+        <LiveModeTransitionModal
+          isOpen={showLiveModal}
+          onClose={() => setShowLiveModal(false)}
+          onConfirm={() => {
+            setMode("live");
+            setShowLiveModal(false);
+            setJustActivatedLive(true);
+            setTimeout(() => setJustActivatedLive(false), 2000);
+          }}
+        />
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-panel md:hidden">

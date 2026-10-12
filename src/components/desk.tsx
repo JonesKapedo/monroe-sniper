@@ -1,3 +1,4 @@
+import { useState, useEffect, useCallback } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -5,7 +6,6 @@ import {
   Coins,
   Crosshair,
   Globe2,
-  Layers,
   Pause,
   Play,
   RefreshCw,
@@ -28,10 +28,12 @@ import {
   exposure,
   portfolioLines,
   sampleTape,
+  type Candidate,
 } from "@/lib/paper";
 import { useDesk } from "@/lib/desk-store";
 import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
 
 const money = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -69,6 +71,7 @@ export function Desk() {
   const [filterVenue, setFilterVenue] = useState<"all" | "binance" | "dex">("all");
   const [avenueFilter, setAvenueFilter] = useState<"ALL" | AvenueCategory>("ALL");
   const [showReadinessModal, setShowReadinessModal] = useState(false);
+  const [showLiveModal, setShowLiveModal] = useState(false);
 
   // Live ticking clock for Nairobi EAT
   const [nowTs, setNowTs] = useState(Date.now());
@@ -104,21 +107,22 @@ export function Desk() {
 
   const snipeAvenue = useCallback(
     (opp: AvenueOpportunity) => {
-      const aveCand = {
+      const aveCand: Candidate = {
         id: opp.id,
         symbol: opp.symbol,
+        name: opp.symbol,
+        address: opp.id,
         chain: opp.chain,
-        venue: opp.venueA.toLowerCase().includes("binance")
-          ? ("binance" as const)
-          : ("raydium" as const),
+        venue: opp.venueA.toLowerCase().includes("binance") ? "binance" : "dex",
         priceUsd: opp.priceA,
         change24h: (opp.grossSpreadPct ?? 2.5) * (opp.perpSide === "SHORT" ? -1 : 1),
         volume24h: 850_000,
         liquidityUsd: 420_000,
-        marketCapUsd: 12_500_000,
         score: opp.confidenceScore,
-        spreadBps: 20,
-        txCount24h: 4200,
+        pairAgeHours: 24,
+        url: null,
+        flags: [],
+        rationale: [opp.title, ...(opp.disciplineNotes ?? [])],
       };
       manualEnter(aveCand);
     },
@@ -172,13 +176,13 @@ export function Desk() {
                   : "border border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
               )}
             >
-              {mode === "live" ? "Live Trading Active" : "Demo Mode ($100)"}
+              {mode === "live" ? "Live Trading Active" : "Demo Mode ($500)"}
             </span>
           </div>
           <p className="mt-1 text-xs text-faint md:text-sm">
             {mode === "live"
               ? "Live execution rail. Real cash ledger active. Connect signing keys or manage funds in the Wallet."
-              : "Safe simulated paper environment. Starts at $100. Bot combs global markets, analyzes risk, and learns from every fill."}
+              : "Safe simulated paper environment. Starts at $500. Bot combs global markets, analyzes risk, and learns from every fill."}
           </p>
         </div>
 
@@ -196,11 +200,17 @@ export function Desk() {
                   : "text-faint hover:text-cream",
               )}
             >
-              🟢 Paper Trading ($100)
+              🟢 Paper Trading ($500)
             </button>
             <button
               type="button"
-              onClick={() => setMode("live")}
+              onClick={() => {
+                if (mode !== "live") {
+                  setShowLiveModal(true);
+                } else {
+                  setShowLiveModal(true);
+                }
+              }}
               className={cn(
                 "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
                 mode === "live"
@@ -208,7 +218,7 @@ export function Desk() {
                   : "text-faint hover:text-cream",
               )}
             >
-              🔴 Live Trading ($0)
+              🔴 Live Trading (${live.cash.toFixed(0)})
             </button>
           </div>
 
@@ -262,16 +272,16 @@ export function Desk() {
           <div className="flex size-9 items-center justify-center rounded-lg border border-line bg-panel-2 text-brass">
             <Clock className="size-4" />
           </div>
-          <div>
+          <div suppressHydrationWarning>
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-brass uppercase tracking-wider">
                 EAT GMT(+3) Nairobi Timezone
               </span>
-              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300" suppressHydrationWarning>
                 {nairobi.dayLabel} (Started Today)
               </span>
             </div>
-            <p className="font-mono text-sm font-semibold text-cream">
+            <p className="font-mono text-sm font-semibold text-cream" suppressHydrationWarning>
               {nairobi.dayOfWeek}, {nairobi.dateString} · {nairobi.timeString}
             </p>
           </div>
@@ -906,7 +916,7 @@ export function Desk() {
           {mode === "demo" && (
             <div className="rounded-xl border border-line p-3 text-xs text-faint">
               <div className="flex items-center justify-between">
-                <span>Reset Demo Desk to $100</span>
+                <span>Reset Demo Desk to $500</span>
                 <button
                   type="button"
                   onClick={() => resetDemo()}
@@ -1016,6 +1026,16 @@ export function Desk() {
           </div>
         </div>
       )}
+
+      {/* Live Mode Transition Modal */}
+      <LiveModeTransitionModal
+        isOpen={showLiveModal}
+        onClose={() => setShowLiveModal(false)}
+        onConfirm={() => {
+          setMode("live");
+          setShowLiveModal(false);
+        }}
+      />
     </div>
   );
 }
