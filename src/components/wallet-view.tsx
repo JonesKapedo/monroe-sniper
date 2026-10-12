@@ -11,7 +11,7 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
-import { useDesk } from "@/lib/desk-store";
+import { useMascot } from "@/components/mascot";
 import { equity, exposure } from "@/lib/paper";
 import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
@@ -80,6 +80,7 @@ export function WalletView() {
     }
 
     setSuccess(`Withdrawal of $${numAmount.toFixed(2)} posted to ${address.slice(0, 6)}…${address.slice(-4)} (${network}).`);
+    useMascot.getState().ping("cigar");
     setConfirming(false);
     setAddress("");
   }
@@ -97,6 +98,7 @@ export function WalletView() {
       return;
     }
     setSuccess(`Successfully credited $${numAmount.toFixed(2)} to ${mode.toUpperCase()} wallet ledger.`);
+    useMascot.getState().ping("boost");
   }
 
   return (
@@ -161,7 +163,7 @@ export function WalletView() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">{mode.toUpperCase()} TOTAL EQUITY</p>
-          <p className="num mt-1 text-2xl font-bold text-cream">${eq.toFixed(2)}</p>
+          <p className="usd num mt-1 text-2xl font-bold">${eq.toFixed(2)}</p>
           <p className="text-[11px] text-faint">Combined balance</p>
         </Card>
         <Card>
@@ -171,7 +173,7 @@ export function WalletView() {
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">IN ACTIVE POSITIONS</p>
-          <p className="num mt-1 text-xl font-bold text-cream">${exp.toFixed(2)}</p>
+          <p className="usd num mt-1 text-xl font-bold">${exp.toFixed(2)}</p>
           <p className="text-[11px] text-faint">{book.positions.length} active positions</p>
         </Card>
         <Card>

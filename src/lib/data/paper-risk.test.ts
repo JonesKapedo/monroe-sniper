@@ -33,7 +33,7 @@ test("passes only a fully verified candidate and caps each idea at five percent"
   const s = signal();
   const verdict = evaluateRiskGate(s, createPaperPortfolio(), now);
   assert.equal(verdict.allowed, true);
-  assert.equal(verdict.plannedNotionalUsd, 1_250);
+  assert.equal(verdict.plannedNotionalUsd, 25);
   assert.equal(verdict.checks.every(x => x.pass), true);
   const entered = enterPaperPosition(createPaperPortfolio(), s, now);
   assert.equal(entered.entered, true);
@@ -76,7 +76,7 @@ test("hard stop exits the remaining position at the observed quote", () => {
   const updated = applyPaperMarketUpdates(entered.portfolio, [marketUpdate(s, 1.83)], now + 1_000);
   assert.equal(updated.positions.length, 0);
   assert.equal(updated.trades[0].reason, "STOP");
-  assert.ok(updated.cashUsd < 25_000);
+  assert.ok(updated.cashUsd < 500);
 });
 
 test("scales out half at +20%, then trailing stop exits the remainder", () => {

@@ -9,7 +9,6 @@ import { cn } from "@/lib/cn";
 
 export function SettingsView() {
   const resetDemo = useDesk((s) => s.resetDemo);
-  const setDemoBalance = useDesk((s) => s.setDemoBalance);
   const riskSettings = useDesk((s) => s.riskSettings);
   const updateRiskSettings = useDesk((s) => s.updateRiskSettings);
   const disciplineRules = useDesk((s) => s.disciplineRules);
@@ -26,8 +25,6 @@ export function SettingsView() {
   const settings = book.settings;
   const [phrase, setPhrase] = useState("");
   const kelly = kellyFraction(book.trades, settings.kellyCap);
-
-  const [customBalanceInput, setCustomBalanceInput] = useState("5000");
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
@@ -103,46 +100,14 @@ export function SettingsView() {
           </button>
         </div>
 
-        {/* Demo Capital Rebalancer Presets */}
         <div className="mt-4 border-t border-line/60 pt-4">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-cream">Demo Sandbox Capital Rebalance</span>
-            <span className="text-xs text-faint">Current: ${deskBook.cash.toFixed(2)}</span>
+            <span className="text-xs font-semibold text-cream">Opening capital</span>
+            <span className="usd text-xs">${deskBook.cash.toFixed(2)}</span>
           </div>
           <p className="mt-0.5 text-xs text-faint">
-            Instantly grants standard capital to observe dynamic position sizing and realistic compounding gains:
+            The practice book opens at $500. Reset it from Safety if a session drifts. Do not treat other amounts as the starting bankroll.
           </p>
-          <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            {[100, 1_000, 5_000, 10_000, 25_000, 50_000].map((amt) => (
-              <button
-                key={amt}
-                type="button"
-                onClick={() => setDemoBalance(amt)}
-                className="rounded-lg border border-line bg-panel-2 px-3 py-1.5 text-xs font-semibold hover:border-brass hover:text-brass"
-              >
-                ${amt >= 1000 ? `${amt / 1000}k` : amt}
-              </button>
-            ))}
-            <div className="flex items-center gap-1.5 ml-auto">
-              <input
-                type="number"
-                value={customBalanceInput}
-                onChange={(e) => setCustomBalanceInput(e.target.value)}
-                placeholder="Custom $"
-                className="w-24 rounded border border-line bg-ink px-2 py-1 text-xs text-cream"
-              />
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  const val = parseFloat(customBalanceInput);
-                  if (!isNaN(val) && val > 0) setDemoBalance(val);
-                }}
-                className="h-7 text-xs px-2"
-              >
-                Apply
-              </Button>
-            </div>
-          </div>
         </div>
 
         {/* Dynamic Knobs */}
@@ -323,7 +288,7 @@ export function SettingsView() {
             </Button>
           </div>
           <label className="text-sm">
-            Type RESET to restore the $25,000 opening book
+            Type RESET to restore the $500 opening book
             <input className="field mt-2" value={phrase} onChange={(e) => setPhrase(e.target.value)} aria-label="Type RESET to confirm" />
           </label>
           <Button

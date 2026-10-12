@@ -1,3 +1,5 @@
+import { assessEdge } from "./intel/emh";
+
 export const DEMO_START = 500;
 export const STARTING_CASH = DEMO_START;
 export const MAX_POSITIONS = 3;
@@ -465,9 +467,12 @@ export function learn(memory: Memory, pnl: number): Memory {
 }
 
 export function chooseEntry(book: Book, tape: Candidate[], minScore: number, now = Date.now()): Candidate | null {
-  const ranked = [...tape].sort((a, b) => b.score - a.score);
-  for (const c of ranked) {
-    if (entryVerdict(book, c, now, minScore).allowed) return c;
+  const ranked = tape
+    .map((c) => ({ c, edge: assessEdge(c) }))
+    .filter((row) => row.edge.act)
+    .sort((a, b) => b.edge.edge - a.edge.edge || b.c.score - a.c.score);
+  for (const row of ranked) {
+    if (entryVerdict(book, row.c, now, minScore).allowed) return row.c;
   }
   return null;
 }

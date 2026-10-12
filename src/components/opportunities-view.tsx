@@ -10,7 +10,7 @@ import {
 import {
   applyPaperMarketUpdates, auditScan, closePaperPosition, createPaperPortfolio,
   enterPaperPosition, evaluateRiskGate, gateStatusText, paperEquityUsd, paperExposureUsd,
-  resetPaperPortfolio, type MarketUpdate, type PaperPortfolio, type PaperPosition,
+  PAPER_STARTING_CASH, resetPaperPortfolio, type MarketUpdate, type PaperPortfolio, type PaperPosition,
 } from "@/lib/data/paper-risk";
 import { cn } from "@/lib/cn";
 
@@ -128,7 +128,7 @@ export function OpportunitiesView() {
   const items = result?.opportunities ?? [];
   const equity = paperEquityUsd(portfolio);
   const exposure = paperExposureUsd(portfolio);
-  const totalPnl = equity - 25_000;
+  const totalPnl = equity - PAPER_STARTING_CASH;
   const realizedPnl = portfolio.trades.reduce((sum, trade) => sum + trade.pnlUsd, 0);
   const unrealizedPnl = portfolio.positions.reduce((sum, position) => sum + (position.currentPrice - position.entryPrice) * position.qty, 0);
   const selectedVerdict = useMemo(
@@ -149,9 +149,9 @@ export function OpportunitiesView() {
     setLastNotice(`PAPER CLOSE · ${position.symbol} marked and closed at ${money(position.currentPrice)}.`);
   };
   const resetPaper = () => {
-    if (!window.confirm("Reset the paper portfolio to $25,000? This clears open positions and paper trade history.")) return;
+    if (!window.confirm(`Reset the paper portfolio to $${PAPER_STARTING_CASH.toLocaleString("en-US")}? This clears open positions and paper trade history.`)) return;
     setPortfolio(resetPaperPortfolio());
-    setLastNotice("Paper portfolio reset to $25,000. No live funds are involved.");
+    setLastNotice(`Paper portfolio reset to $${PAPER_STARTING_CASH.toLocaleString("en-US")}. No live funds are involved.`);
   };
 
   return <div className="mx-auto flex max-w-7xl flex-col gap-5">
