@@ -28,6 +28,8 @@ export function pct(n: number, digits = 0) {
   return `${(n * 100).toFixed(digits)}%`;
 }
 
+import { formatNairobiTime } from "./nairobi-time";
+
 export function sessionClock(minute: number) {
   const day = Math.floor(minute / 390) + 1;
   const m = ((minute % 390) + 390) % 390;
@@ -37,6 +39,10 @@ export function sessionClock(minute: number) {
   const hhText = String(hh).padStart(2, "0");
   const mmText = String(mm).padStart(2, "0");
   return { day, label: `Day ${day} · ${hhText}:${mmText}` };
+}
+
+export function nairobiClock(startTimestamp?: number, currentTimestamp: number = Date.now()) {
+  return formatNairobiTime(startTimestamp, currentTimestamp);
 }
 
 export function reasonLabel(reason: string) {

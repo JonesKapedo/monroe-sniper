@@ -1,0 +1,8 @@
+{
+  "name": "Monroe Sniper",
+  "description": "Paper trading desk that simulates every minute, sizes risk, and learns from its own fills.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

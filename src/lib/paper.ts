@@ -1,9 +1,11 @@
-export const STARTING_CASH = 25_000;
+export const DEMO_START = 100;
+export const STARTING_CASH = DEMO_START;
 export const MAX_POSITIONS = 3;
-export const MAX_IDEA = 0.05;
-export const MAX_BOOK = 0.15;
-export const MIN_SCORE = 70;
+export const MAX_IDEA = 0.2;
+export const MAX_BOOK = 0.6;
+export const MIN_SCORE = 62;
 export const MIN_LIQ = 10_000;
+export const MIN_TICKET = 5;
 
 export type Candidate = {
   id: string;
@@ -20,6 +22,7 @@ export type Candidate = {
   score: number;
   flags: string[];
   rationale: string[];
+  venue: "binance" | "dex";
 };
 
 export type Position = {
@@ -31,8 +34,10 @@ export type Position = {
   entryPrice: number;
   mark: number;
   stop: number;
+  target?: number;
   openedAt: number;
   notional: number;
+  venue?: "binance" | "dex";
 };
 
 export type ClosedTrade = {
@@ -57,12 +62,13 @@ export type Book = {
 
 export type GateLine = { id: string; label: string; pass: boolean; detail: string };
 
-export function emptyBook(): Book {
+export function emptyBook(cashUsd = DEMO_START): Book {
+  const cash = Math.max(0, cashUsd);
   return {
-    cash: STARTING_CASH,
+    cash,
     positions: [],
     trades: [],
-    peakEquity: STARTING_CASH,
+    peakEquity: Math.max(cash, 1),
     dayPnl: 0,
     consecutiveLosses: 0,
     cooldownUntil: null,
@@ -90,6 +96,7 @@ export function scoreCandidate(input: {
   change24h: number | null;
   pairCreatedAt: number | null;
   url: string | null;
+  venue?: "binance" | "dex";
 }): Candidate | null {
   if (!input.address || !input.priceUsd || input.priceUsd <= 0) return null;
   const liq = input.liquidityUsd ?? 0;
@@ -138,6 +145,7 @@ export function scoreCandidate(input: {
     score,
     flags,
     rationale,
+    venue: input.venue ?? "dex",
   };
 }
 
@@ -151,7 +159,7 @@ export function simulateBuy(notional: number, mid: number, liquidity: number) {
   const impact = impactPct(notional, liquidity);
   const fee = 0.003;
   const buffer = 0.005;
-  const gas = 1.5;
+  const gas = notional < 50 ? 0.1 : 1.5;
   const fill = mid * (1 + impact + buffer);
   const costPct = notional > 0 ? (notional * (impact + buffer + fee) + gas) / notional : 1;
   const qty = Math.max(0, (notional - notional * fee - gas) / fill);
@@ -196,7 +204,7 @@ export function portfolioLines(book: Book, now = Date.now()): GateLine[] {
   ];
 }
 
-export function entryVerdict(book: Book, c: Candidate, now = Date.now()): {
+export function entryVerdict(book: Book, c: Candidate, now = Date.now(), minScore = MIN_SCORE): {
   allowed: boolean;
   lines: GateLine[];
   notional: number;
@@ -211,8 +219,8 @@ export function entryVerdict(book: Book, c: Candidate, now = Date.now()): {
     ...portfolioLines(book, now),
     {
       id: "score",
-      label: "Score at least 70",
-      pass: c.score >= MIN_SCORE,
+      label: `Score at least ${minScore}`,
+      pass: c.score >= minScore,
       detail: `${c.score}/100`,
     },
     {
@@ -236,7 +244,7 @@ export function entryVerdict(book: Book, c: Candidate, now = Date.now()): {
     {
       id: "cash",
       label: "Cash and cap allow a ticket",
-      pass: notional >= 50,
+      pass: notional >= MIN_TICKET,
       detail: `Planned $${notional.toFixed(0)}`,
     },
   ];
@@ -266,29 +274,42 @@ function stamp(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-export function enter(book: Book, c: Candidate, now = Date.now()): { book: Book; ok: boolean; note: string } {
-  const v = entryVerdict(book, c, now);
+export function enter(
+  book: Book,
+  c: Candidate,
+  now = Date.now(),
+  minScore = MIN_SCORE,
+  customSizing?: { notional?: number; stop?: number; target?: number },
+): { book: Book; ok: boolean; note: string } {
+  const v = entryVerdict(book, c, now, minScore);
   if (!v.allowed || !v.sim) {
     const fail = v.lines.filter((l) => !l.pass).map((l) => l.label);
     return { book, ok: false, note: fail.join(", ") || "Blocked" };
   }
+  const notionalToUse = Math.min(book.cash, customSizing?.notional ?? v.notional);
+  const qtyToUse = notionalToUse > 0 ? notionalToUse / v.sim.fill : v.sim.qty;
+  const stopToUse = customSizing?.stop ?? v.sim.fill * 0.92;
+  const targetToUse = customSizing?.target ?? v.sim.fill * 1.06;
+
   const pos: Position = {
     id: stamp("pos"),
     tokenId: c.id,
     symbol: c.symbol,
     chain: c.chain,
-    qty: v.sim.qty,
+    qty: qtyToUse,
     entryPrice: v.sim.fill,
     mark: v.sim.fill,
-    stop: v.sim.fill * 0.92,
+    stop: stopToUse,
+    target: targetToUse,
     openedAt: now,
-    notional: v.notional,
+    notional: notionalToUse,
+    venue: c.venue,
   };
   const next: Book = {
     ...book,
-    cash: book.cash - v.notional,
+    cash: book.cash - notionalToUse,
     positions: [...book.positions, pos],
-    peakEquity: Math.max(book.peakEquity, equity({ ...book, cash: book.cash - v.notional, positions: [...book.positions, pos] })),
+    peakEquity: Math.max(book.peakEquity, equity({ ...book, cash: book.cash - notionalToUse, positions: [...book.positions, pos] })),
   };
   return { book: armIfNeeded(next), ok: true, note: `Paper fill ${c.symbol}` };
 }
@@ -305,8 +326,17 @@ export function markBook(book: Book, prices: Record<string, number>, now = Date.
   for (const p of book.positions) {
     const px = prices[p.tokenId] && prices[p.tokenId] > 0 ? prices[p.tokenId] : p.mark;
     const aged = now - p.openedAt > 6 * 60 * 60 * 1000;
-    const stopped = px <= p.stop;
-    if (aged || stopped) {
+    
+    // Outperformance & Capital Preservation: Trailing Breakeven Ratchet
+    // Once position moves +3.0% into profit, raise stop loss above entry price to lock in a risk-free trade
+    let activeStop = p.stop;
+    if (px >= p.entryPrice * 1.03 && activeStop < p.entryPrice * 1.008) {
+      activeStop = p.entryPrice * 1.008; // Locked in at +0.8% profit
+    }
+
+    const stopped = px <= activeStop;
+    const targetHit = px >= (p.target ?? p.entryPrice * 1.06);
+    if (aged || stopped || targetHit) {
       const pnl = (px - p.entryPrice) * p.qty;
       cash += p.qty * px;
       day += pnl;
@@ -316,11 +346,11 @@ export function markBook(book: Book, prices: Record<string, number>, now = Date.
         id: stamp("tr"),
         symbol: p.symbol,
         pnl,
-        reason: stopped ? "STOP" : "TIME",
+        reason: targetHit ? "TARGET" : stopped ? (px > p.entryPrice ? "BREAKEVEN" : "STOP") : "TIME",
         closedAt: now,
       });
     } else {
-      kept.push({ ...p, mark: px });
+      kept.push({ ...p, mark: px, stop: activeStop });
     }
   }
 
@@ -401,7 +431,57 @@ export function sampleTape(now = Date.now()): Candidate[] {
         change24h: r[7],
         pairCreatedAt: now - r[8] * 3_600_000,
         url: null,
+        venue: "dex",
       }),
     )
     .filter((x): x is Candidate => x !== null);
 }
+
+export type Memory = {
+  seen: number;
+  wins: number;
+  losses: number;
+  realized: number;
+  minScore: number;
+};
+
+export function emptyMemory(): Memory {
+  return { seen: 0, wins: 0, losses: 0, realized: 0, minScore: MIN_SCORE };
+}
+
+/** Nudge the score floor from closed-trade evidence. History is the only teacher. */
+export function learn(memory: Memory, pnl: number): Memory {
+  const wins = memory.wins + (pnl > 0 ? 1 : 0);
+  const losses = memory.losses + (pnl < 0 ? 1 : 0);
+  const seen = memory.seen + 1;
+  const realized = memory.realized + pnl;
+  let minScore = memory.minScore;
+  if (seen >= 4) {
+    const winRate = wins / seen;
+    if (winRate < 0.4 || realized < 0) minScore = Math.min(85, minScore + 2);
+    else if (winRate > 0.55 && realized > 0) minScore = Math.max(55, minScore - 1);
+  }
+  return { seen, wins, losses, realized, minScore };
+}
+
+export function chooseEntry(book: Book, tape: Candidate[], minScore: number, now = Date.now()): Candidate | null {
+  const ranked = [...tape].sort((a, b) => b.score - a.score);
+  for (const c of ranked) {
+    if (entryVerdict(book, c, now, minScore).allowed) return c;
+  }
+  return null;
+}
+
+export function deposit(book: Book, amount: number): Book {
+  if (!(amount > 0)) return book;
+  const next = { ...book, cash: book.cash + amount };
+  next.peakEquity = Math.max(book.peakEquity, equity(next));
+  return next;
+}
+
+export function withdraw(book: Book, amount: number): { book: Book; ok: boolean; note: string } {
+  if (!(amount > 0)) return { book, ok: false, note: "Amount must be positive" };
+  if (amount > book.cash + 0.0001) return { book, ok: false, note: "Not enough free cash" };
+  return { book: { ...book, cash: book.cash - amount }, ok: true, note: "Withdrawal posted to the ledger" };
+}
+

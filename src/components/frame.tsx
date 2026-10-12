@@ -1,10 +1,12 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
-  Brain,
+  Clock,
   LayoutDashboard,
   Radar,
   ScanSearch,
+  Search,
+  ShieldCheck,
   SlidersHorizontal,
   Wallet,
 } from "lucide-react";
@@ -12,17 +14,21 @@ import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { catchUpTicks } from "@/lib/sniper/catchup";
 import { sessionClock } from "@/lib/sniper/format";
-import { snapshot } from "@/lib/sniper/risk";
+import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
 import { hashPin } from "@/lib/sniper/wallet";
 import { useSniper } from "@/lib/sniper/store";
+import { useDesk } from "@/lib/desk-store";
+import { equity } from "@/lib/paper";
 import { Button } from "@/components/ui";
+
+import { loadFeeds } from "@/lib/market.functions";
 
 const NAV = [
   { to: "/", label: "Desk", short: "Desk", icon: LayoutDashboard },
   { to: "/tape", label: "Tape", short: "Tape", icon: Activity },
   { to: "/signals", label: "Signals", short: "Feed", icon: Radar },
   { to: "/opportunities", label: "Scanner", short: "Scan", icon: ScanSearch },
-  { to: "/learn", label: "Learning", short: "Learn", icon: Brain },
+  { to: "/learn", label: "DYOR", short: "DYOR", icon: Search },
   { to: "/wallet", label: "Wallet", short: "Funds", icon: Wallet },
   { to: "/settings", label: "Settings", short: "Setup", icon: SlidersHorizontal },
 ] as const;
@@ -33,16 +39,47 @@ export function Frame({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancel = false;
     let timer = 0;
-    const loop = () => {
+    let tickCount = 0;
+    const loop = async () => {
       if (cancel) return;
       const book = useSniper.getState().book;
       const interval = Math.max(1, book.settings.scanSeconds) * 1000;
       const due = catchUpTicks(Date.now(), book.lastWall, book.settings.scanSeconds);
       if (due > 0) useSniper.getState().runTicks(due);
+
+      const desk = useDesk.getState();
+      tickCount++;
+
+      // Continuous background market fetching & simulation training on real prices
+      if (desk.power && tickCount % 3 === 0) {
+        try {
+          const feeds = await loadFeeds({ data: {} });
+          const combined = [...feeds.binance, ...feeds.dex];
+          if (combined.length) {
+            desk.setTape(combined, feeds.note);
+            const prices: Record<string, number> = {};
+            for (const c of combined) {
+              prices[c.id] = c.priceUsd;
+            }
+            desk.tick(prices);
+          }
+        } catch {
+          // Graceful fallback during momentary rate limit
+        }
+      }
+
+      // Auto-step desk sniper if power is on
+      if (desk.power) {
+        desk.autoStep();
+      }
+
       timer = window.setTimeout(loop, interval);
     };
     void (async () => {
-      await useSniper.persist.rehydrate();
+      await Promise.all([
+        useSniper.persist.rehydrate(),
+        useDesk.persist.rehydrate(),
+      ]);
       if (cancel) return;
       setReady(true);
       loop();
@@ -69,42 +106,194 @@ function Shell({ children }: { children: ReactNode }) {
   const book = useSniper((s) => s.book);
   const unlocked = useSniper((s) => s.unlocked);
   const locked = Boolean(book.pinHash) && !unlocked;
-  const snap = snapshot(book);
-  const clock = sessionClock(book.minute);
-  const updateSettings = useSniper((s) => s.updateSettings);
+
+  // Real-time ticking clock for Nairobi EAT (UTC+3) timezone
+  const [nowTs, setNowTs] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // Read active mode and balances from useDesk
+  const mode = useDesk((s) => s.mode);
+  const setMode = useDesk((s) => s.setMode);
+  const power = useDesk((s) => s.power);
+  const setPower = useDesk((s) => s.setPower);
+  const demo = useDesk((s) => s.demo);
+  const live = useDesk((s) => s.live);
+  const botStartedAt = useDesk((s) => s.botStartedAt);
+  const getReadiness = useDesk((s) => s.getReadiness);
+
+  const activeBook = mode === "live" ? live : demo;
+  const activeEq = equity(activeBook);
+  const nairobi = formatNairobiTime(botStartedAt, nowTs);
+  const readiness = getReadiness ? getReadiness() : null;
 
   return (
     <div className="min-h-screen bg-ink text-cream md:pl-56">
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-56 flex-col border-r border-line bg-panel md:flex">
         <div className="border-b border-line px-5 py-5">
-          <p className="text-xs tracking-widest text-brass uppercase">Monroe</p>
-          <p className="mt-1 text-lg font-medium">Sniper</p>
+          <div className="flex items-center justify-between">
+            <p className="text-xs tracking-widest text-brass uppercase">Monroe</p>
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wider uppercase",
+                mode === "live"
+                  ? "border border-amber-500/40 bg-amber-500/20 text-amber-300"
+                  : "border border-emerald-500/40 bg-emerald-500/20 text-emerald-300",
+              )}
+            >
+              {mode.toUpperCase()}
+            </span>
+          </div>
+          <p className="mt-1 text-lg font-medium">Sniper Bot</p>
+
+          {/* Nairobi Timezone Badge in Sidebar */}
+          <div className="mt-2.5 flex flex-col gap-0.5 rounded-lg border border-line/60 bg-panel-2 px-2.5 py-1.5 text-[11px]">
+            <div className="flex items-center justify-between text-brass">
+              <span className="font-medium">Nairobi EAT</span>
+              <span className="rounded bg-emerald-500/20 px-1 py-0.2 text-[10px] font-bold text-emerald-300">
+                {nairobi.dayLabel}
+              </span>
+            </div>
+            <div className="font-mono text-[10px] text-faint">
+              {nairobi.dateString} · {nairobi.timeString}
+            </div>
+          </div>
         </div>
+
         <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
           {NAV.map((item) => (
             <NavLink key={item.to} {...item} />
           ))}
         </nav>
-        <p className="px-5 py-4 text-xs text-faint">Paper book. Not a broker. No promised profit.</p>
+
+        {/* Readiness progress in sidebar */}
+        {readiness && (
+          <div className="border-t border-line px-4 py-3">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-faint">Real Money Readiness</span>
+              <span className="font-semibold text-emerald-400">{readiness.readinessScore}%</span>
+            </div>
+            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-line">
+              <div
+                className="h-full rounded-full bg-emerald-400 transition-all duration-500"
+                style={{ width: `${readiness.readinessScore}%` }}
+              />
+            </div>
+            <p className="mt-1 text-[10px] text-faint">
+              {readiness.completedDemoTrades}/{readiness.targetDemoTrades} demo trades trained
+            </p>
+          </div>
+        )}
+
+        <div className="border-t border-line p-3">
+          <div className="rounded-lg border border-line bg-panel-2 p-2.5">
+            <div className="flex items-center justify-between text-xs text-faint">
+              <span>Active Mode</span>
+              <span className={mode === "live" ? "text-amber-400 font-medium" : "text-gain font-medium"}>
+                {mode === "live" ? "Live Rail" : "Demo Sandbox"}
+              </span>
+            </div>
+            <p className="num mt-1 text-base font-semibold text-cream">${activeEq.toFixed(2)}</p>
+          </div>
+        </div>
+        <p className="px-5 py-3 text-[11px] text-faint">Global sniper desk. Automated risk & execution.</p>
       </aside>
 
       <div className="flex min-h-screen flex-col pb-20 md:pb-0">
         <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-line bg-ink/95 px-4 py-3 backdrop-blur md:px-8">
-          <div className="min-w-0">
-            <p className="text-xs text-faint md:hidden">Monroe Sniper</p>
-            <p className="truncate font-mono text-sm text-cream">{clock.label}</p>
+          {/* Nairobi EAT (UTC+3) Clock & Active Day Header */}
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-panel-2 text-brass">
+              <Clock className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-semibold tracking-wider text-brass uppercase">
+                  Nairobi EAT (UTC+3)
+                </span>
+                <span className="rounded bg-emerald-500/20 px-1.5 py-0.2 text-[10px] font-bold text-emerald-300">
+                  {nairobi.dayLabel}
+                </span>
+              </div>
+              <p className="truncate font-mono text-xs font-medium text-cream md:text-sm">
+                {nairobi.dateString} · {nairobi.timeString}
+              </p>
+            </div>
           </div>
+
           <div className="flex items-center gap-2 sm:gap-3">
-            <p className="hidden font-mono text-sm sm:block">{moneyShort(snap.equity)}</p>
+            {/* Demo Training & Live Readiness Badge */}
+            {readiness && (
+              <div
+                title={readiness.statusMessage}
+                className="hidden items-center gap-2 rounded-full border border-line bg-panel-2 px-3 py-1 lg:flex"
+              >
+                <ShieldCheck className="size-3.5 text-brass" />
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-faint">Demo Training:</span>
+                  <span
+                    className={cn(
+                      "font-semibold",
+                      readiness.readinessScore >= 85 ? "text-gain" : "text-amber-400",
+                    )}
+                  >
+                    {readiness.readinessScore}% Ready
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Mode Switcher */}
+            <div className="flex items-center rounded-full border border-line bg-panel-2 p-0.5">
+              <button
+                type="button"
+                onClick={() => setMode("demo")}
+                className={cn(
+                  "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                  mode === "demo"
+                    ? "bg-brass text-ink font-semibold shadow-xs"
+                    : "text-faint hover:text-cream",
+                )}
+              >
+                Demo ($100)
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("live")}
+                className={cn(
+                  "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                  mode === "live"
+                    ? "bg-amber-500 text-ink font-semibold shadow-xs"
+                    : "text-faint hover:text-cream",
+                )}
+              >
+                Live ($0)
+              </button>
+            </div>
+
+            {/* Active Equity Display */}
+            <div className="hidden text-right font-mono sm:block">
+              <span className="text-[10px] tracking-wider text-faint uppercase">
+                {mode === "live" ? "Live Bal" : "Demo Bal"}:
+              </span>{" "}
+              <span className="text-sm font-semibold text-cream">${activeEq.toFixed(2)}</span>
+            </div>
+
+            {/* Power / Armed Button */}
             <button
               type="button"
-              onClick={() => updateSettings({ autoTrade: !book.settings.autoTrade })}
-              className="inline-flex min-h-11 items-center gap-2 rounded-full border border-line px-3 text-sm"
+              onClick={() => setPower(!power)}
+              className={cn(
+                "inline-flex min-h-10 items-center gap-2 rounded-full border px-3 text-xs font-medium transition-colors",
+                power
+                  ? "border-gain/50 bg-gain/10 text-gain"
+                  : "border-line bg-panel text-faint hover:text-cream",
+              )}
             >
-              <span
-                className={cn("size-2 rounded-full", book.settings.autoTrade ? "bg-gain pulse-dot" : "bg-faint")}
-              />
-              {book.settings.autoTrade ? "Armed" : "Paused"}
+              <span className={cn("size-2 rounded-full", power ? "bg-gain pulse-dot" : "bg-faint")} />
+              {power ? "Sniper Armed" : "Standby"}
             </button>
           </div>
         </header>
@@ -118,10 +307,6 @@ function Shell({ children }: { children: ReactNode }) {
       </nav>
     </div>
   );
-}
-
-function moneyShort(n: number) {
-  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
 function NavLink({
@@ -146,7 +331,7 @@ function NavLink({
         compact
           ? "flex min-h-14 min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 text-xs"
           : "flex min-h-11 items-center gap-3 rounded-xl px-3 py-2 text-sm",
-        on ? "bg-panel-2 text-cream" : "text-faint",
+        on ? "bg-panel-2 text-cream" : "text-faint hover:text-cream",
       )}
     >
       <Icon className="size-4 shrink-0" aria-hidden="true" />

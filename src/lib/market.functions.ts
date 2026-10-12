@@ -67,6 +67,78 @@ async function pull(url: string): Promise<Pair[]> {
   }
 }
 
+const BINANCE = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "XRPUSDT",
+  "DOGEUSDT",
+  "PEPEUSDT",
+  "SUIUSDT",
+  "NEARUSDT",
+  "AVAXUSDT",
+  "LINKUSDT",
+  "ADAUSDT",
+] as const;
+
+function binanceRows(rows: { symbol?: string; lastPrice?: string; quoteVolume?: string; priceChangePercent?: string }[]): Candidate[] {
+  const out: Candidate[] = [];
+  for (const row of rows) {
+    const symbol = (row.symbol ?? "").replace("USDT", "");
+    const c = scoreCandidate({
+      symbol,
+      name: `${symbol} / USDT`,
+      chain: "binance",
+      address: row.symbol ?? symbol,
+      priceUsd: num(row.lastPrice),
+      liquidityUsd: num(row.quoteVolume),
+      volume24h: num(row.quoteVolume),
+      change24h: num(row.priceChangePercent),
+      pairCreatedAt: null,
+      url: row.symbol ? `https://www.binance.com/en/trade/${row.symbol}` : null,
+      venue: "binance",
+    });
+    if (c) out.push(c);
+  }
+  return out;
+}
+
+export const loadFeeds = createServerFn({ method: "POST" })
+  .validator((input: { query?: string }) => ({
+    query: String(input?.query ?? "").trim().slice(0, 64),
+  }))
+  .handler(async ({ data }): Promise<{ binance: Candidate[]; dex: Candidate[]; note: string }> => {
+    const symbols = encodeURIComponent(JSON.stringify([...BINANCE]));
+    const dexUrl = data.query
+      ? `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(data.query)}`
+      : "https://api.dexscreener.com/token-profiles/latest/v1";
+    const [bx, dx] = await Promise.allSettled([
+      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${symbols}`, {
+        headers: { Accept: "application/json" },
+      }).then(async (res) => {
+        if (!res.ok) throw new Error(`Binance HTTP ${res.status}`);
+        return (await res.json()) as { symbol?: string; lastPrice?: string; quoteVolume?: string; priceChangePercent?: string }[];
+      }),
+      pull(dexUrl),
+    ]);
+    const binance = bx.status === "fulfilled" ? binanceRows(bx.value) : [];
+    const dexMap = new Map<string, Candidate>();
+    if (dx.status === "fulfilled") {
+      for (const c of dx.value.map(fromPair)) {
+        if (!c) continue;
+        const prev = dexMap.get(c.id);
+        if (!prev || c.liquidityUsd > prev.liquidityUsd) dexMap.set(c.id, c);
+      }
+    }
+    const dex = [...dexMap.values()].sort((a, b) => b.score - a.score).slice(0, 12);
+    const note = [
+      bx.status === "fulfilled" ? `Binance ${binance.length}` : "Binance down",
+      dx.status === "fulfilled" ? `DEX ${dex.length}` : "DEX down",
+    ].join(" · ");
+    return { binance, dex, note };
+  });
+
 export const scanMarket = createServerFn({ method: "POST" })
   .validator((input: { query?: string }) => ({
     query: String(input?.query ?? "").trim().slice(0, 64),

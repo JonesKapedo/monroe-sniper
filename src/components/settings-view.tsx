@@ -3,10 +3,20 @@ import { money, pct } from "@/lib/sniper/format";
 import { kellyFraction } from "@/lib/sniper/risk";
 import { useSniper } from "@/lib/sniper/store";
 import { SOURCE_META, type SourceId } from "@/lib/sniper/types";
+import { useDesk } from "@/lib/desk-store";
 import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
 export function SettingsView() {
+  const resetDemo = useDesk((s) => s.resetDemo);
+  const setDemoBalance = useDesk((s) => s.setDemoBalance);
+  const riskSettings = useDesk((s) => s.riskSettings);
+  const updateRiskSettings = useDesk((s) => s.updateRiskSettings);
+  const disciplineRules = useDesk((s) => s.disciplineRules);
+  const updateDisciplineRules = useDesk((s) => s.updateDisciplineRules);
+  const deskMode = useDesk((s) => s.mode);
+  const deskBook = useDesk((s) => s[s.mode]);
+
   const book = useSniper((s) => s.book);
   const update = useSniper((s) => s.updateSettings);
   const setSource = useSniper((s) => s.setSource);
@@ -17,24 +27,227 @@ export function SettingsView() {
   const [phrase, setPhrase] = useState("");
   const kelly = kellyFraction(book.trades, settings.kellyCap);
 
+  const [customBalanceInput, setCustomBalanceInput] = useState("5000");
+
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4">
+    <div className="mx-auto flex max-w-3xl flex-col gap-5">
       <div>
-        <h1 className="text-2xl font-medium md:text-3xl">Settings</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-bold md:text-3xl">Professional Trader Settings</h1>
+          <span className="rounded-full bg-brass/20 px-2.5 py-0.5 text-xs font-semibold text-brass">
+            EAT GMT(+3) Nairobi Desk
+          </span>
+        </div>
         <p className="mt-1 text-sm text-faint">
-          These knobs change the next minute, not the past tape. Tighter confidence means fewer, pickier fills.
+          Fine-tune the quantitative sniper engine, dynamic position sizing corridors, capital preservation circuits, and academic research safeguards.
         </p>
       </div>
 
+      {/* Dynamic Sizing Profile & Capital Grant Selector */}
       <Card>
-        <Label>Execution</Label>
-        <Slider label="Minimum confidence" value={settings.minConfidence} min={0.35} max={0.9} step={0.01} format={(v) => pct(v)} onChange={(v) => update({ minConfidence: v })} />
-        <Slider label="Minutes before a time stop" value={settings.timeStop} min={8} max={120} step={1} format={(v) => `${Math.round(v)} min`} onChange={(v) => update({ timeStop: v })} />
-        <Slider label="Seconds per market minute" value={settings.scanSeconds} min={1} max={20} step={1} format={(v) => `${Math.round(v)}s`} onChange={(v) => update({ scanSeconds: v })} />
-        <div className="mt-4">
-          <Button variant="ghost" onClick={() => runTicks(30)}>
-            Advance 30 minutes
-          </Button>
+        <div className="flex items-center justify-between">
+          <Label>Quantitative Risk Engine & Position Sizing Profile</Label>
+          <span className="text-xs text-brass font-medium">Outperformance Architecture</span>
+        </div>
+        <p className="mt-1 text-xs text-faint">
+          Selects the dynamic compounding corridor. Sizes positions wisely based on current balance—never starved in micro $1 pennies, nor reckless with capital.
+        </p>
+
+        <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+          <button
+            type="button"
+            onClick={() => updateRiskSettings({ sizingProfile: "CONSERVATIVE", riskPerTrade: 0.015, maxIdeaExposure: 0.18, rewardMultiple: 2.5 })}
+            className={cn(
+              "flex flex-col items-start rounded-xl border p-3 text-left transition-all",
+              riskSettings.sizingProfile === "CONSERVATIVE"
+                ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
+                : "border-line bg-panel-2 text-faint hover:text-cream",
+            )}
+          >
+            <span className="font-bold text-sm">🛡️ Conservative</span>
+            <span className="text-xs mt-1">1.5% Risk · 18% Max Slot</span>
+            <span className="text-[11px] text-faint mt-1">Max capital preservation</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateRiskSettings({ sizingProfile: "OPTIMUM_SWEET_SPOT", riskPerTrade: 0.025, maxIdeaExposure: 0.28, rewardMultiple: 3.0 })}
+            className={cn(
+              "flex flex-col items-start rounded-xl border p-3 text-left transition-all relative",
+              riskSettings.sizingProfile === "OPTIMUM_SWEET_SPOT"
+                ? "border-brass bg-brass/10 text-brass ring-1 ring-brass/40"
+                : "border-line bg-panel-2 text-faint hover:text-cream",
+            )}
+          >
+            <span className="absolute -top-2 right-2 rounded bg-brass px-1.5 py-0.2 text-[10px] font-bold text-ink uppercase">
+              Recommended
+            </span>
+            <span className="font-bold text-sm">⭐ Optimum Sweet Spot</span>
+            <span className="text-xs mt-1">2.5% Risk · 28% Max Slot</span>
+            <span className="text-[11px] text-faint mt-1">Dynamic balance compounding</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateRiskSettings({ sizingProfile: "AGGRESSIVE", riskPerTrade: 0.035, maxIdeaExposure: 0.35, rewardMultiple: 3.5 })}
+            className={cn(
+              "flex flex-col items-start rounded-xl border p-3 text-left transition-all",
+              riskSettings.sizingProfile === "AGGRESSIVE"
+                ? "border-amber-500 bg-amber-500/10 text-amber-300"
+                : "border-line bg-panel-2 text-faint hover:text-cream",
+            )}
+          >
+            <span className="font-bold text-sm">⚡ Aggressive Growth</span>
+            <span className="text-xs mt-1">3.5% Risk · 35% Max Slot</span>
+            <span className="text-[11px] text-faint mt-1">High-velocity compounding</span>
+          </button>
+        </div>
+
+        {/* Demo Capital Rebalancer Presets */}
+        <div className="mt-4 border-t border-line/60 pt-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-cream">Demo Sandbox Capital Rebalance</span>
+            <span className="text-xs text-faint">Current: ${deskBook.cash.toFixed(2)}</span>
+          </div>
+          <p className="mt-0.5 text-xs text-faint">
+            Instantly grants standard capital to observe dynamic position sizing and realistic compounding gains:
+          </p>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            {[100, 1_000, 5_000, 10_000, 25_000, 50_000].map((amt) => (
+              <button
+                key={amt}
+                type="button"
+                onClick={() => setDemoBalance(amt)}
+                className="rounded-lg border border-line bg-panel-2 px-3 py-1.5 text-xs font-semibold hover:border-brass hover:text-brass"
+              >
+                ${amt >= 1000 ? `${amt / 1000}k` : amt}
+              </button>
+            ))}
+            <div className="flex items-center gap-1.5 ml-auto">
+              <input
+                type="number"
+                value={customBalanceInput}
+                onChange={(e) => setCustomBalanceInput(e.target.value)}
+                placeholder="Custom $"
+                className="w-24 rounded border border-line bg-ink px-2 py-1 text-xs text-cream"
+              />
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  const val = parseFloat(customBalanceInput);
+                  if (!isNaN(val) && val > 0) setDemoBalance(val);
+                }}
+                className="h-7 text-xs px-2"
+              >
+                Apply
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* Dynamic Knobs */}
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Slider
+            label="Equity Risk Per Trade"
+            value={riskSettings.riskPerTrade}
+            min={0.01}
+            max={0.05}
+            step={0.005}
+            format={(v) => pct(v, 1)}
+            onChange={(v) => updateRiskSettings({ riskPerTrade: v })}
+          />
+          <Slider
+            label="Target Reward Multiple"
+            value={riskSettings.rewardMultiple}
+            min={2.0}
+            max={4.5}
+            step={0.1}
+            format={(v) => `${v.toFixed(1)}R Floor`}
+            onChange={(v) => updateRiskSettings({ rewardMultiple: v })}
+          />
+          <Slider
+            label="Max Concurrent Open Slots"
+            value={riskSettings.maxPositions}
+            min={2}
+            max={6}
+            step={1}
+            format={(v) => `${Math.round(v)} assets`}
+            onChange={(v) => updateRiskSettings({ maxPositions: v })}
+          />
+          <Slider
+            label="Max Single Position Exposure"
+            value={riskSettings.maxIdeaExposure}
+            min={0.1}
+            max={0.4}
+            step={0.02}
+            format={(v) => pct(v)}
+            onChange={(v) => updateRiskSettings({ maxIdeaExposure: v })}
+          />
+        </div>
+      </Card>
+
+      {/* Academic Research & Anti-Mistake Safeguards (The 7 Pillars) */}
+      <Card>
+        <div className="flex items-center justify-between">
+          <Label>Academic Research & Anti-Mistake Safeguards</Label>
+          <span className="text-xs text-emerald-400 font-medium">All 7 Shields Active</span>
+        </div>
+        <p className="mt-1 text-xs text-faint">
+          Architectural rules synthesized from Investopedia, Medium Outperformance, ResearchGate, Binance, and AML Watcher:
+        </p>
+
+        <div className="mt-3 flex flex-col divide-y divide-line/60">
+          <div className="py-2.5 flex items-center justify-between gap-3 text-xs">
+            <div>
+              <p className="font-semibold text-cream">1 & 2. Anti-FOMO Green Candle Filter (Investopedia)</p>
+              <p className="text-faint">Rejects buying extended tops with 24h &gt;75% pump and volume/liquidity &gt;2.0x</p>
+            </div>
+            <span className="rounded bg-emerald-500/20 px-2 py-0.5 font-bold text-emerald-300">PROTECTED</span>
+          </div>
+
+          <div className="py-2.5 flex items-center justify-between gap-3 text-xs">
+            <div>
+              <p className="font-semibold text-cream">3. Trailing Breakeven Stop Ratchet (Medium Outperformance)</p>
+              <p className="text-faint">Once position gains +3.0%, stop loss automatically lifts to +0.8% to guarantee a risk-free trade</p>
+            </div>
+            <span className="rounded bg-emerald-500/20 px-2 py-0.5 font-bold text-emerald-300">ARMED</span>
+          </div>
+
+          <div className="py-2.5 flex items-center justify-between gap-3 text-xs">
+            <div>
+              <p className="font-semibold text-cream">5. Rug Pull & Mint Exploit Gate (AML Watcher)</p>
+              <p className="text-faint">Enforces minimum $12,000 liquidity depth, verified lock, and verifies mint authority revoked</p>
+            </div>
+            <span className="rounded bg-emerald-500/20 px-2 py-0.5 font-bold text-emerald-300">ACTIVE</span>
+          </div>
+
+          <div className="py-2.5 flex items-center justify-between gap-3 text-xs">
+            <div>
+              <p className="font-semibold text-cream">6 & 7. Insider Anticipated Purchases (IAP) Shield (ResearchGate & Binance)</p>
+              <p className="text-faint">Flags abnormal pre-announcement volume rushes & order book skew typical of pump-and-dump rings</p>
+            </div>
+            <span className="rounded bg-emerald-500/20 px-2 py-0.5 font-bold text-emerald-300">ENFORCED</span>
+          </div>
+
+          <div className="py-2.5 flex items-center justify-between gap-3 text-xs">
+            <div>
+              <p className="font-semibold text-cream">4. Fee & Slippage Erosion Guard (Investopedia Mistake #6)</p>
+              <p className="text-faint">Guarantees potential profit exceeds round-trip gas and exchange fees by at least 4x</p>
+            </div>
+            <span className="rounded bg-emerald-500/20 px-2 py-0.5 font-bold text-emerald-300">ACTIVE</span>
+          </div>
+        </div>
+
+        <div className="mt-3 pt-3 border-t border-line/60">
+          <Slider
+            label="Intraday Drawdown Circuit Breaker"
+            value={disciplineRules.maxDailyDrawdownPct}
+            min={0.01}
+            max={0.08}
+            step={0.005}
+            format={(v) => pct(v, 1)}
+            onChange={(v) => updateDisciplineRules({ maxDailyDrawdownPct: v })}
+          />
         </div>
       </Card>
 
@@ -96,6 +309,19 @@ export function SettingsView() {
             Start a flat session
           </Button>
           <p className="text-xs text-faint">Keeps cash, the PIN, and learned weights. Clears open risk and starts a new price path.</p>
+          <div className="flex flex-col gap-2 rounded-xl border border-line bg-panel-2 p-3">
+            <span className="text-sm font-semibold text-cream">Demo Sandbox Reset</span>
+            <p className="text-xs text-faint">Reset the Demo desk balance back to $100.00 and clear the adaptive learning memory.</p>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                resetDemo();
+              }}
+              className="mt-1 w-fit"
+            >
+              Reset Demo Desk to $100.00
+            </Button>
+          </div>
           <label className="text-sm">
             Type RESET to restore the $25,000 opening book
             <input className="field mt-2" value={phrase} onChange={(e) => setPhrase(e.target.value)} aria-label="Type RESET to confirm" />
