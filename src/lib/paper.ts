@@ -1,4 +1,6 @@
-export const DEMO_START = 100;
+import { assessEdge } from "./intel/emh";
+
+export const DEMO_START = 500;
 export const STARTING_CASH = DEMO_START;
 export const MAX_POSITIONS = 3;
 export const MAX_IDEA = 0.2;
@@ -34,8 +36,10 @@ export type Position = {
   entryPrice: number;
   mark: number;
   stop: number;
+  target?: number;
   openedAt: number;
   notional: number;
+  venue?: "binance" | "dex";
 };
 
 export type ClosedTrade = {
@@ -157,7 +161,7 @@ export function simulateBuy(notional: number, mid: number, liquidity: number) {
   const impact = impactPct(notional, liquidity);
   const fee = 0.003;
   const buffer = 0.005;
-  const gas = 1.5;
+  const gas = notional < 50 ? 0.1 : 1.5;
   const fill = mid * (1 + impact + buffer);
   const costPct = notional > 0 ? (notional * (impact + buffer + fee) + gas) / notional : 1;
   const qty = Math.max(0, (notional - notional * fee - gas) / fill);
@@ -272,29 +276,42 @@ function stamp(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-export function enter(book: Book, c: Candidate, now = Date.now(), minScore = MIN_SCORE): { book: Book; ok: boolean; note: string } {
+export function enter(
+  book: Book,
+  c: Candidate,
+  now = Date.now(),
+  minScore = MIN_SCORE,
+  customSizing?: { notional?: number; stop?: number; target?: number },
+): { book: Book; ok: boolean; note: string } {
   const v = entryVerdict(book, c, now, minScore);
   if (!v.allowed || !v.sim) {
     const fail = v.lines.filter((l) => !l.pass).map((l) => l.label);
     return { book, ok: false, note: fail.join(", ") || "Blocked" };
   }
+  const notionalToUse = Math.min(book.cash, customSizing?.notional ?? v.notional);
+  const qtyToUse = notionalToUse > 0 ? notionalToUse / v.sim.fill : v.sim.qty;
+  const stopToUse = customSizing?.stop ?? v.sim.fill * 0.92;
+  const targetToUse = customSizing?.target ?? v.sim.fill * 1.06;
+
   const pos: Position = {
     id: stamp("pos"),
     tokenId: c.id,
     symbol: c.symbol,
     chain: c.chain,
-    qty: v.sim.qty,
+    qty: qtyToUse,
     entryPrice: v.sim.fill,
     mark: v.sim.fill,
-    stop: v.sim.fill * 0.92,
+    stop: stopToUse,
+    target: targetToUse,
     openedAt: now,
-    notional: v.notional,
+    notional: notionalToUse,
+    venue: c.venue,
   };
   const next: Book = {
     ...book,
-    cash: book.cash - v.notional,
+    cash: book.cash - notionalToUse,
     positions: [...book.positions, pos],
-    peakEquity: Math.max(book.peakEquity, equity({ ...book, cash: book.cash - v.notional, positions: [...book.positions, pos] })),
+    peakEquity: Math.max(book.peakEquity, equity({ ...book, cash: book.cash - notionalToUse, positions: [...book.positions, pos] })),
   };
   return { book: armIfNeeded(next), ok: true, note: `Paper fill ${c.symbol}` };
 }
@@ -311,8 +328,17 @@ export function markBook(book: Book, prices: Record<string, number>, now = Date.
   for (const p of book.positions) {
     const px = prices[p.tokenId] && prices[p.tokenId] > 0 ? prices[p.tokenId] : p.mark;
     const aged = now - p.openedAt > 6 * 60 * 60 * 1000;
-    const stopped = px <= p.stop;
-    if (aged || stopped) {
+    
+    // Outperformance & Capital Preservation: Trailing Breakeven Ratchet
+    // Once position moves +3.0% into profit, raise stop loss above entry price to lock in a risk-free trade
+    let activeStop = p.stop;
+    if (px >= p.entryPrice * 1.03 && activeStop < p.entryPrice * 1.008) {
+      activeStop = p.entryPrice * 1.008; // Locked in at +0.8% profit
+    }
+
+    const stopped = px <= activeStop;
+    const targetHit = px >= (p.target ?? p.entryPrice * 1.06);
+    if (aged || stopped || targetHit) {
       const pnl = (px - p.entryPrice) * p.qty;
       cash += p.qty * px;
       day += pnl;
@@ -322,11 +348,11 @@ export function markBook(book: Book, prices: Record<string, number>, now = Date.
         id: stamp("tr"),
         symbol: p.symbol,
         pnl,
-        reason: stopped ? "STOP" : "TIME",
+        reason: targetHit ? "TARGET" : stopped ? (px > p.entryPrice ? "BREAKEVEN" : "STOP") : "TIME",
         closedAt: now,
       });
     } else {
-      kept.push({ ...p, mark: px });
+      kept.push({ ...p, mark: px, stop: activeStop });
     }
   }
 
@@ -441,9 +467,12 @@ export function learn(memory: Memory, pnl: number): Memory {
 }
 
 export function chooseEntry(book: Book, tape: Candidate[], minScore: number, now = Date.now()): Candidate | null {
-  const ranked = [...tape].sort((a, b) => b.score - a.score);
-  for (const c of ranked) {
-    if (entryVerdict(book, c, now, minScore).allowed) return c;
+  const ranked = tape
+    .map((c) => ({ c, edge: assessEdge(c) }))
+    .filter((row) => row.edge.act)
+    .sort((a, b) => b.edge.edge - a.edge.edge || b.c.score - a.c.score);
+  for (const row of ranked) {
+    if (entryVerdict(book, row.c, now, minScore).allowed) return row.c;
   }
   return null;
 }

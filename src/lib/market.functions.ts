@@ -1,4 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
+import { binanceExecutionStatus } from "./feeds/execution";
+import type { FeedHealth } from "./feeds/status";
 import { scoreCandidate, type Candidate } from "./paper";
 
 type Pair = {
@@ -67,7 +69,20 @@ async function pull(url: string): Promise<Pair[]> {
   }
 }
 
-const BINANCE = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"] as const;
+const BINANCE = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "XRPUSDT",
+  "DOGEUSDT",
+  "PEPEUSDT",
+  "SUIUSDT",
+  "NEARUSDT",
+  "AVAXUSDT",
+  "LINKUSDT",
+  "ADAUSDT",
+] as const;
 
 function binanceRows(rows: { symbol?: string; lastPrice?: string; quoteVolume?: string; priceChangePercent?: string }[]): Candidate[] {
   const out: Candidate[] = [];
@@ -91,23 +106,117 @@ function binanceRows(rows: { symbol?: string; lastPrice?: string; quoteVolume?: 
   return out;
 }
 
+export type FeedPack = {
+  binance: Candidate[];
+  dex: Candidate[];
+  reference: Candidate[];
+  health: FeedHealth[];
+  note: string;
+  executionNote: string;
+};
+
+export type Candle = { time: number; open: number; high: number; low: number; close: number };
+
+type GeckoCoin = {
+  id?: string;
+  symbol?: string;
+  name?: string;
+  current_price?: number;
+  total_volume?: number;
+  market_cap?: number;
+  price_change_percentage_24h?: number;
+};
+
+const cache = new Map<string, { at: number; pack: FeedPack }>();
+const CACHE_MS = 12_000;
+
+async function getJson<T>(url: string, headers?: Record<string, string>, ms = 5000): Promise<T> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json", ...headers }, signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function referenceRows(rows: GeckoCoin[], source: "coingecko" | "coinmarketcap"): Candidate[] {
+  const out: Candidate[] = [];
+  for (const row of rows) {
+    const symbol = (row.symbol || "").toUpperCase();
+    if (!symbol || !row.id) continue;
+    const c = scoreCandidate({
+      symbol,
+      name: `${row.name || symbol} · ${source === "coingecko" ? "CoinGecko" : "CMC"}`,
+      chain: source,
+      address: row.id,
+      priceUsd: num(row.current_price),
+      liquidityUsd: num(row.market_cap),
+      volume24h: num(row.total_volume),
+      change24h: num(row.price_change_percentage_24h),
+      pairCreatedAt: null,
+      url: null,
+      venue: "dex",
+    });
+    if (c) out.push(c);
+  }
+  return out;
+}
+
+async function pullCoinGecko(): Promise<Candidate[]> {
+  const rows = await getJson<GeckoCoin[]>(
+    "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=volume_desc&per_page=12&page=1&price_change_percentage=24h",
+  );
+  return referenceRows(rows, "coingecko");
+}
+
+async function pullCoinMarketCap(): Promise<{ rows: Candidate[]; locked: boolean }> {
+  const key = process.env.CMC_API_KEY?.trim() || process.env.COINMARKETCAP_API_KEY?.trim();
+  if (!key) return { rows: [], locked: true };
+  const body = await getJson<{
+    data?: {
+      id?: number;
+      name?: string;
+      symbol?: string;
+      quote?: { USD?: { price?: number; volume_24h?: number; market_cap?: number; percent_change_24h?: number } };
+    }[];
+  }>("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest?limit=12&convert=USD", {
+    "X-CMC_PRO_API_KEY": key,
+  });
+  const mapped: GeckoCoin[] = (body.data ?? []).map((row) => ({
+    id: String(row.id ?? row.symbol ?? ""),
+    symbol: row.symbol,
+    name: row.name,
+    current_price: row.quote?.USD?.price,
+    total_volume: row.quote?.USD?.volume_24h,
+    market_cap: row.quote?.USD?.market_cap,
+    price_change_percentage_24h: row.quote?.USD?.percent_change_24h,
+  }));
+  return { rows: referenceRows(mapped, "coinmarketcap"), locked: false };
+}
+
 export const loadFeeds = createServerFn({ method: "POST" })
   .validator((input: { query?: string }) => ({
     query: String(input?.query ?? "").trim().slice(0, 64),
   }))
-  .handler(async ({ data }): Promise<{ binance: Candidate[]; dex: Candidate[]; note: string }> => {
+  .handler(async ({ data }): Promise<FeedPack> => {
+    const key = data.query || "*";
+    const hit = cache.get(key);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.pack;
+
     const symbols = encodeURIComponent(JSON.stringify([...BINANCE]));
     const dexUrl = data.query
       ? `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(data.query)}`
       : "https://api.dexscreener.com/token-profiles/latest/v1";
-    const [bx, dx] = await Promise.allSettled([
-      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${symbols}`, {
-        headers: { Accept: "application/json" },
-      }).then(async (res) => {
-        if (!res.ok) throw new Error(`Binance HTTP ${res.status}`);
-        return (await res.json()) as { symbol?: string; lastPrice?: string; quoteVolume?: string; priceChangePercent?: string }[];
-      }),
+    const [bx, dx, gx, cx] = await Promise.allSettled([
+      getJson<{ symbol?: string; lastPrice?: string; quoteVolume?: string; priceChangePercent?: string }[]>(
+        `https://api.binance.com/api/v3/ticker/24hr?symbols=${symbols}`,
+      ),
       pull(dexUrl),
+      pullCoinGecko(),
+      pullCoinMarketCap(),
     ]);
     const binance = bx.status === "fulfilled" ? binanceRows(bx.value) : [];
     const dexMap = new Map<string, Candidate>();
@@ -119,11 +228,52 @@ export const loadFeeds = createServerFn({ method: "POST" })
       }
     }
     const dex = [...dexMap.values()].sort((a, b) => b.score - a.score).slice(0, 12);
-    const note = [
-      bx.status === "fulfilled" ? `Binance ${binance.length}` : "Binance down",
-      dx.status === "fulfilled" ? `DEX ${dex.length}` : "DEX down",
-    ].join(" · ");
-    return { binance, dex, note };
+    const gecko = gx.status === "fulfilled" ? gx.value : [];
+    const cmc = cx.status === "fulfilled" ? cx.value : { rows: [], locked: !process.env.CMC_API_KEY && !process.env.COINMARKETCAP_API_KEY };
+    const health: FeedHealth[] = [
+      { id: "binance", label: "Binance", state: binance.length ? "live" : "down", detail: binance.length ? `${binance.length} spot quotes` : "Public ticker unavailable" },
+      { id: "dex", label: "DEX", state: dex.length ? "live" : "down", detail: dex.length ? `${dex.length} pairs` : "DexScreener unavailable" },
+      { id: "coingecko", label: "CoinGecko", state: gecko.length ? "live" : "down", detail: gecko.length ? `${gecko.length} markets` : "CoinGecko unavailable" },
+      {
+        id: "coinmarketcap",
+        label: "CoinMarketCap",
+        state: cmc.locked ? "locked" : cmc.rows.length ? "live" : "down",
+        detail: cmc.locked ? "Add CMC_API_KEY on the host" : cmc.rows.length ? `${cmc.rows.length} listings` : "CMC request failed",
+      },
+    ];
+    const reference = [...gecko, ...cmc.rows].slice(0, 16);
+    const executionNote = binanceExecutionStatus().note;
+    const note = health.map((row) => `${row.label} ${row.state}`).join(" · ");
+    const pack: FeedPack = { binance, dex, reference, health, note, executionNote };
+    cache.set(key, { at: Date.now(), pack });
+    return pack;
+  });
+
+const INTERVALS = new Set(["1m", "5m", "15m", "1h"]);
+
+export const loadKlines = createServerFn({ method: "POST" })
+  .validator((input: { symbol?: string; interval?: string }) => {
+    const symbol = String(input?.symbol ?? "BTCUSDT").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
+    const interval = INTERVALS.has(String(input?.interval)) ? String(input?.interval) : "5m";
+    return { symbol: symbol || "BTCUSDT", interval };
+  })
+  .handler(async ({ data }): Promise<{ candles: Candle[]; note: string }> => {
+    try {
+      const rows = await getJson<number[][]>(
+        `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(data.symbol)}&interval=${data.interval}&limit=48`,
+      );
+      const candles: Candle[] = rows.map((row) => ({
+        time: Number(row[0]),
+        open: Number(row[1]),
+        high: Number(row[2]),
+        low: Number(row[3]),
+        close: Number(row[4]),
+      })).filter((bar) => Number.isFinite(bar.open) && Number.isFinite(bar.close));
+      return { candles, note: candles.length ? `Binance ${data.symbol} ${data.interval}` : "No klines" };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Klines unavailable";
+      return { candles: [], note: message };
+    }
   });
 
 export const scanMarket = createServerFn({ method: "POST" })
