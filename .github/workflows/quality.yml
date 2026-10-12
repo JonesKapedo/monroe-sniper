@@ -24,11 +24,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install dependencies
-        # npm install is used until package-lock.json is regenerated in sync with package.json
         run: npm install --no-audit --no-fund
       - name: Run unit tests
         run: npm test
       - name: Type-check
         run: npm run typecheck
       - name: Build production bundle
-        run: npm run build:dev
+        run: npm run build
