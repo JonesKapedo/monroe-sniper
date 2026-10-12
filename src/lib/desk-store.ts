@@ -30,7 +30,7 @@ import {
   scanAllAvenues,
   calculateRealMoneyReadiness,
 } from "./avenues/engine";
-import { formatNairobiTime } from "./sniper/nairobi-time";
+import { assessEdge } from "./intel/emh";
 
 export type Mode = "demo" | "live";
 
@@ -470,7 +470,8 @@ export const useDesk = create<DeskState>()(
           riskReward: verdict.riskRewardRatio,
         };
 
-        const noteLine = `Risk-Sized Buy: ${pick.symbol} $${verdict.notional.toFixed(2)} on ${venueName} (Stop $${verdict.stopPrice.toFixed(4)}, Target $${verdict.targetPrice.toFixed(4)})`;
+        const edge = assessEdge(pick);
+        const noteLine = `${edge.stance === "EARLY" ? "Early position" : "Risk-sized buy"}: ${pick.symbol} $${verdict.notional.toFixed(2)} on ${venueName}. ${edge.why}`;
 
         set({
           [targetKey]: result.book,

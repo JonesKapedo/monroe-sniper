@@ -1,6 +1,6 @@
 import type { OpportunitySignal } from "./market-sources";
 
-export const PAPER_STARTING_CASH = 25_000;
+export const PAPER_STARTING_CASH = 500;
 export const MAX_PAPER_POSITIONS = 3;
 export const MAX_IDEA_EXPOSURE = 0.05;
 export const MAX_PORTFOLIO_EXPOSURE = 0.15;

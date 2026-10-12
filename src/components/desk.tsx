@@ -19,7 +19,7 @@ import {
   TrendingUp,
   Zap,
 } from "lucide-react";
-import { loadFeeds } from "@/lib/market.functions";
+import { useFeedHealth } from "@/lib/feeds/status";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
 import { scanAllAvenues } from "@/lib/avenues/engine";
 import type { AvenueCategory, AvenueOpportunity } from "@/lib/avenues/types";
@@ -92,7 +92,8 @@ export function Desk() {
     setBusy(true);
     try {
       const res = await loadFeeds({ data: { query: q } });
-      const combined = [...res.binance, ...res.dex];
+      const combined = [...res.binance, ...res.dex, ...res.reference];
+      useFeedHealth.getState().setRows(res.health);
       if (combined.length) {
         setTape(combined, res.note);
       } else {
@@ -1058,8 +1059,7 @@ function StatCard({
       <p className="text-[10px] tracking-wider text-faint uppercase">{label}</p>
       <p
         className={cn(
-          "num mt-1 text-lg font-bold sm:text-xl",
-          tone === "gain" && "text-gain",
+          "num mt-1 text-lg font-bold text-gain sm:text-xl",
           tone === "loss" && "text-loss",
           accent && "text-brass",
         )}
