@@ -145,7 +145,7 @@ function authPopupPlugin(): Plugin {
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
-export default defineConfig(({ command, isPreview }) => ({
+export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 8080,
@@ -167,17 +167,15 @@ export default defineConfig(({ command, isPreview }) => ({
     grokPwaPlugin(),
     tailwindcss(),
     tanstackStart(),
-    ...(command === "build" || isPreview
-      ? [
-          nitro({
-            preset: "vercel",
-            // Auto-registers server/middleware/* (the PWA install page +
-            // manifest + head-tag middleware). Nitro v3 defaults serverDir to
-            // false, so removing this silently unwires /?install=1 on deploys.
-            serverDir: "./server",
-          }),
-        ]
-      : []),
+    // Always register Nitro so production `vite build` emits Vercel Build Output API
+    // (`.vercel/output/config.json`). Conditional registration caused missing config on deploy.
+    nitro({
+      preset: "vercel",
+      // Auto-registers server/middleware/* (the PWA install page +
+      // manifest + head-tag middleware). Nitro v3 defaults serverDir to
+      // false, so removing this silently unwires /?install=1 on deploys.
+      serverDir: "./server",
+    }),
     viteReact(),
   ],
-}));
+});
