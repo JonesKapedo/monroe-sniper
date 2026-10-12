@@ -1,11 +1,8 @@
 {
   "name": "app-builder-workspace",
+  "version": "0.0.0",
   "private": true,
-  "sideEffects": false,
   "type": "module",
-  "overrides": {
-    "nf3": "0.3.17"
-  },
   "scripts": {
     "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
     "build": "node scripts/with-app-env.mjs vite build && npm run db:migrate",
@@ -19,6 +16,10 @@
     "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts src/lib/paper.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
+  },
+  "overrides": {
+    "nf3": "0.3.17",
+    "ajv": "^8.20.0"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",
@@ -51,6 +52,7 @@
     "@tanstack/react-table": "^8.21.0",
     "@tanstack/router-plugin": "^1.168.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "ajv": "^8.20.0",
     "better-auth": "~1.6.30",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
