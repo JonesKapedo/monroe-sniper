@@ -5,7 +5,7 @@ import { cn } from "@/lib/cn";
 import { loadKlines } from "@/lib/market.functions";
 import { equity, type Position } from "@/lib/paper";
 import { useDesk } from "@/lib/desk-store";
-import type { Candle } from "@/lib/market.functions";
+import type { Candle } from "@/lib/market-candles";
 
 type Timeframe = "1m" | "5m" | "15m" | "1h";
 
@@ -251,7 +251,7 @@ export function TapeView() {
               <Label>Market price chart</Label>
             </div>
             <p className="mt-1 text-xs text-faint">
-              {selectedPair} · Binance public candlestick feed
+              {selectedPair} · Live public candlestick feed
               {positions.some(
                 (position) => position.venue === "dex" && matchesPair(position, selectedPair),
               )

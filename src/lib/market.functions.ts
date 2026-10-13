@@ -2,6 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { binanceExecutionStatus } from "./feeds/execution";
 import type { FeedHealth } from "./feeds/status";
 import { scoreCandidate, type Candidate } from "./paper";
+import {
+  krakenIntervalFor,
+  krakenPairFor,
+  parseKrakenCandles,
+  type Candle,
+} from "./market-candles";
 
 type Pair = {
   chainId?: string;
@@ -114,8 +120,6 @@ export type FeedPack = {
   note: string;
   executionNote: string;
 };
-
-export type Candle = { time: number; open: number; high: number; low: number; close: number };
 
 type GeckoCoin = {
   id?: string;
@@ -250,6 +254,8 @@ export const loadFeeds = createServerFn({ method: "POST" })
   });
 
 const INTERVALS = new Set(["1m", "5m", "15m", "1h"]);
+const candleCache = new Map<string, { at: number; result: { candles: Candle[]; note: string } }>();
+const CANDLE_CACHE_MS = 12_000;
 
 export const loadKlines = createServerFn({ method: "POST" })
   .validator((input: { symbol?: string; interval?: string }) => {
@@ -258,21 +264,68 @@ export const loadKlines = createServerFn({ method: "POST" })
     return { symbol: symbol || "BTCUSDT", interval };
   })
   .handler(async ({ data }): Promise<{ candles: Candle[]; note: string }> => {
+    const cacheKey = `${data.symbol}:${data.interval}`;
+    const cached = candleCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < CANDLE_CACHE_MS) return cached.result;
+
     try {
       const rows = await getJson<number[][]>(
         `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(data.symbol)}&interval=${data.interval}&limit=48`,
       );
-      const candles: Candle[] = rows.map((row) => ({
-        time: Number(row[0]),
-        open: Number(row[1]),
-        high: Number(row[2]),
-        low: Number(row[3]),
-        close: Number(row[4]),
-      })).filter((bar) => Number.isFinite(bar.open) && Number.isFinite(bar.close));
-      return { candles, note: candles.length ? `Binance ${data.symbol} ${data.interval}` : "No klines" };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Klines unavailable";
-      return { candles: [], note: message };
+      const candles: Candle[] = rows
+        .map((row) => ({
+          time: Number(row[0]),
+          open: Number(row[1]),
+          high: Number(row[2]),
+          low: Number(row[3]),
+          close: Number(row[4]),
+        }))
+        .filter(
+          (bar) =>
+            [bar.time, bar.open, bar.high, bar.low, bar.close].every(Number.isFinite) &&
+            bar.time > 0 &&
+            bar.open > 0 &&
+            bar.high > 0 &&
+            bar.low > 0 &&
+            bar.close > 0 &&
+            bar.high >= bar.low,
+        );
+      if (!candles.length) throw new Error("Binance returned no usable candles");
+      const result = { candles, note: `Binance ${data.symbol} ${data.interval}` };
+      candleCache.set(cacheKey, { at: Date.now(), result });
+      return result;
+    } catch (binanceError) {
+      const binanceMessage =
+        binanceError instanceof Error ? binanceError.message : "Klines unavailable";
+      const pair = krakenPairFor(data.symbol);
+      const interval = krakenIntervalFor(data.interval);
+      if (!pair || interval === null) {
+        return {
+          candles: [],
+          note: `Binance unavailable (${binanceMessage}); no alternate feed for this pair`,
+        };
+      }
+
+      try {
+        const payload = await getJson<{ error?: unknown; result?: Record<string, unknown> }>(
+          `https://api.kraken.com/0/public/OHLC?pair=${encodeURIComponent(pair)}&interval=${interval}`,
+        );
+        const candles = parseKrakenCandles(payload);
+        if (!candles.length) throw new Error(`Kraken returned no usable candles for ${pair}`);
+        const result = {
+          candles,
+          note: `Kraken ${pair} ${data.interval} · Binance unavailable (${binanceMessage})`,
+        };
+        candleCache.set(cacheKey, { at: Date.now(), result });
+        return result;
+      } catch (krakenError) {
+        const krakenMessage =
+          krakenError instanceof Error ? krakenError.message : "Klines unavailable";
+        return {
+          candles: [],
+          note: `Binance unavailable (${binanceMessage}); Kraken unavailable (${krakenMessage})`,
+        };
+      }
     }
   });
 
