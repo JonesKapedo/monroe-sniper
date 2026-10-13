@@ -16,6 +16,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SignalsRouteImport } from './routes/signals'
 import { Route as TapeRouteImport } from './routes/tape'
 import { Route as WalletRouteImport } from './routes/wallet'
+import { Route as ApiSolanaSwapsRouteImport } from './routes/api/solana-swaps'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,6 +53,11 @@ const WalletRoute = WalletRouteImport.update({
   path: '/wallet',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSolanaSwapsRoute = ApiSolanaSwapsRouteImport.update({
+  id: '/api/solana-swaps',
+  path: '/api/solana-swaps',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -61,6 +67,7 @@ export interface FileRoutesByFullPath {
   '/signals': typeof SignalsRoute
   '/tape': typeof TapeRoute
   '/wallet': typeof WalletRoute
+  '/api/solana-swaps': typeof ApiSolanaSwapsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -70,6 +77,7 @@ export interface FileRoutesByTo {
   '/signals': typeof SignalsRoute
   '/tape': typeof TapeRoute
   '/wallet': typeof WalletRoute
+  '/api/solana-swaps': typeof ApiSolanaSwapsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -80,6 +88,7 @@ export interface FileRoutesById {
   '/signals': typeof SignalsRoute
   '/tape': typeof TapeRoute
   '/wallet': typeof WalletRoute
+  '/api/solana-swaps': typeof ApiSolanaSwapsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +100,7 @@ export interface FileRouteTypes {
     | '/signals'
     | '/tape'
     | '/wallet'
+    | '/api/solana-swaps'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -100,6 +110,7 @@ export interface FileRouteTypes {
     | '/signals'
     | '/tape'
     | '/wallet'
+    | '/api/solana-swaps'
   id:
     | '__root__'
     | '/'
@@ -109,6 +120,7 @@ export interface FileRouteTypes {
     | '/signals'
     | '/tape'
     | '/wallet'
+    | '/api/solana-swaps'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -119,6 +131,7 @@ export interface RootRouteChildren {
   SignalsRoute: typeof SignalsRoute
   TapeRoute: typeof TapeRoute
   WalletRoute: typeof WalletRoute
+  ApiSolanaSwapsRoute: typeof ApiSolanaSwapsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -172,6 +185,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WalletRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/solana-swaps': {
+      id: '/api/solana-swaps'
+      path: '/api/solana-swaps'
+      fullPath: '/api/solana-swaps'
+      preLoaderRoute: typeof ApiSolanaSwapsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -183,6 +203,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignalsRoute: SignalsRoute,
   TapeRoute: TapeRoute,
   WalletRoute: WalletRoute,
+  ApiSolanaSwapsRoute: ApiSolanaSwapsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

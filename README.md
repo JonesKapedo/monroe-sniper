@@ -44,7 +44,6 @@ has a matching `*.test.ts` next to it. The TypeScript suites run under `npm test
 with `tsx` because the environment's built-in Node type-stripping is unavailable.
 Run the direct suite with `npx tsx --test src/lib/sniper/*.test.ts`.
 
-
 ## Live market intelligence prototype
 
 The **Scanner** workspace adds public market-data adapters in `src/lib/data/market-sources.ts`.
@@ -64,7 +63,6 @@ eligibility is informational only; this prototype is not a live trading bot.
 
 Run `npm test` to exercise normalization, chain mapping, scoring, and fail-closed security gates.
 
-
 ## Paper risk gate and execution loop
 
 The Scanner now routes every candidate through an auditable, paper-only risk verdict before an entry can be simulated. The gate checks the 70/100 composite threshold, clean and recent dual-provider security evidence, known buy/sell tax, hard-reject flags, quote freshness, minimum liquidity, duplicate positions, available cash, and exposure limits.
@@ -72,6 +70,19 @@ The Scanner now routes every candidate through an auditable, paper-only risk ver
 Paper sizing is capped at 5% of current equity per idea, three simultaneous positions, and 15% aggregate exposure. Open positions use the guide's hard stop at -8%, half-position scale-out at +20%, a 10% trailing stop after the scale-out, a six-hour time stop, and a liquidity-drop guard when observed pool liquidity falls more than 30% from its peak. Decisions, simulated fills, and exit history persist in this browser.
 
 The Scanner refreshes held-token quotes roughly every 30 seconds while the page is open. If it is closed, the browser does not run a background trading process; time-based exits are checked again when the Scanner is opened. This remains a simulation and never sends live orders.
+
+## Solana live swap chart
+
+The Tape page defaults to a server-side Helius WebSocket feed for confirmed SOL/USDC swaps. It
+subscribes to the highest-liquidity direct SOL/USDC pool found for Raydium and PumpSwap, fetches
+confirmed transactions from Helius, and builds candles and the recent-swap tape only from observed
+signer token-balance changes. Candles begin with the first swap received after connecting; no
+synthetic prices or historical bars are substituted. The CEX tab remains a separate public
+Binance/Kraken candle view.
+
+Set `HELIUS_API_KEY` as a server-only Vercel environment variable for Production (and Preview, if
+needed). Never expose it through a `VITE_` variable. The key is used only by the server stream
+route; paper positions and fills remain simulations and are not connected to DEX execution.
 
 ## Persisted paper learning
 

@@ -6,8 +6,11 @@ import { loadKlines } from "@/lib/market.functions";
 import { equity, type Position } from "@/lib/paper";
 import { useDesk } from "@/lib/desk-store";
 import type { Candle } from "@/lib/market-candles";
+import { solanaSwapCandles, type SolanaSwap } from "@/lib/solana-swaps";
 
 type Timeframe = "1m" | "5m" | "15m" | "1h";
+type ChartSource = "solana-dex" | "cex";
+type StreamStatus = "checking" | "connecting" | "waiting" | "live" | "error" | "reconnecting";
 
 const PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"];
 const TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h"];
@@ -121,24 +124,28 @@ export function TapeView() {
   const positions = demo.positions;
   const net = trades.reduce((sum, trade) => sum + trade.pnl, 0);
 
+  const [chartSource, setChartSource] = useState<ChartSource>("solana-dex");
   const [selectedPair, setSelectedPair] = useState(PAIRS[0]);
   const [timeframe, setTimeframe] = useState<Timeframe>("5m");
-  const [candles, setCandles] = useState<Candle[]>([]);
-  const [feedNote, setFeedNote] = useState("Loading public market candles…");
+  const [cexCandles, setCexCandles] = useState<Candle[]>([]);
+  const [solanaSwaps, setSolanaSwaps] = useState<SolanaSwap[]>([]);
+  const [feedNote, setFeedNote] = useState("Checking Helius market feed…");
+  const [streamStatus, setStreamStatus] = useState<StreamStatus>("checking");
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
   useEffect(() => {
+    if (chartSource !== "cex") return;
     let current = true;
     const refresh = async () => {
       try {
         const result = await loadKlines({ data: { symbol: selectedPair, interval: timeframe } });
         if (!current) return;
-        setCandles(result.candles);
+        setCexCandles(result.candles);
         setFeedNote(result.note);
         setLastUpdated(result.candles.length ? Date.now() : null);
       } catch (error) {
         if (!current) return;
-        setCandles([]);
+        setCexCandles([]);
         setLastUpdated(null);
         setFeedNote(error instanceof Error ? error.message : "Public market data unavailable.");
       }
@@ -149,7 +156,81 @@ export function TapeView() {
       current = false;
       window.clearInterval(timer);
     };
-  }, [selectedPair, timeframe]);
+  }, [chartSource, selectedPair, timeframe]);
+
+  useEffect(() => {
+    if (chartSource !== "solana-dex") return;
+    let current = true;
+    let stream: EventSource | null = null;
+    setStreamStatus("checking");
+    setFeedNote("Checking server-side Helius connection…");
+
+    const connect = async () => {
+      try {
+        const response = await fetch("/api/solana-swaps?check=1", { cache: "no-store" });
+        const body = (await response.json()) as
+          { error?: string } | { pairs: { dexId: string; pairAddress: string }[] };
+        if (!response.ok) {
+          throw new Error("error" in body ? body.error : "Helius stream is unavailable.");
+        }
+        if (!current || !("pairs" in body)) return;
+        setStreamStatus("connecting");
+        const venueNames = [...new Set(body.pairs.map((pair) => pair.dexId))].join(" + ");
+        setFeedNote(`Opening confirmed ${venueNames} SOL/USDC swap stream…`);
+
+        stream = new EventSource("/api/solana-swaps");
+        stream.addEventListener("ready", () => {
+          if (!current) return;
+          setStreamStatus("waiting");
+          setFeedNote(`Connected to Solana mainnet · ${venueNames} · Waiting for confirmed swaps`);
+        });
+        stream.addEventListener("swap", (event) => {
+          if (!current) return;
+          const swap = JSON.parse((event as MessageEvent<string>).data) as SolanaSwap;
+          setSolanaSwaps((previous) =>
+            [...previous.filter((item) => item.signature !== swap.signature), swap]
+              .sort((a, b) => a.time - b.time)
+              .slice(-1000),
+          );
+          setStreamStatus("live");
+          setFeedNote(`Confirmed ${swap.dexId} swap · ${new Date(swap.time).toLocaleTimeString()}`);
+          setLastUpdated(Date.now());
+        });
+        stream.addEventListener("feed-error", (event) => {
+          if (!current) return;
+          const detail = JSON.parse((event as MessageEvent<string>).data) as {
+            fatal: boolean;
+            message: string;
+          };
+          setStreamStatus((previous) =>
+            detail.fatal ? "reconnecting" : previous === "live" ? "live" : "waiting",
+          );
+          setFeedNote(detail.message);
+        });
+        stream.onerror = () => {
+          if (!current) return;
+          setStreamStatus("reconnecting");
+          setFeedNote("Solana feed disconnected · retrying automatically");
+        };
+      } catch (error) {
+        if (!current) return;
+        setStreamStatus("error");
+        setFeedNote(error instanceof Error ? error.message : "Solana market feed unavailable.");
+      }
+    };
+
+    void connect();
+    return () => {
+      current = false;
+      stream?.close();
+    };
+  }, [chartSource]);
+
+  const dexCandles = useMemo(
+    () => solanaSwapCandles(solanaSwaps, timeframe),
+    [solanaSwaps, timeframe],
+  );
+  const candles = chartSource === "solana-dex" ? dexCandles : cexCandles;
 
   const currentCandle = candles.at(-1);
   const previousCandle = candles.at(-2);
@@ -158,7 +239,8 @@ export function TapeView() {
       ? ((currentCandle.close - previousCandle.close) / previousCandle.close) * 100
       : 0;
   const relevantPositions = positions.filter(
-    (position) => position.venue === "binance" && matchesPair(position, selectedPair),
+    (position) =>
+      chartSource === "cex" && position.venue === "binance" && matchesPair(position, selectedPair),
   );
   const closedExecutions = executions.filter((execution) => execution.type !== "MARKET_FLOW");
   const wins = trades.filter((trade) => trade.pnl > 0).length;
@@ -248,54 +330,120 @@ export function TapeView() {
           <div>
             <div className="flex items-center gap-2">
               <CandlestickChart className="size-4 text-brass" aria-hidden="true" />
-              <Label>Market price chart</Label>
+              <Label>
+                {chartSource === "solana-dex" ? "Live Solana DEX chart" : "CEX market chart"}
+              </Label>
             </div>
             <p className="mt-1 text-xs text-faint">
-              {selectedPair} · Live public candlestick feed
-              {positions.some(
+              {chartSource === "solana-dex"
+                ? "SOL/USDC · Raydium + PumpSwap · confirmed on-chain swaps"
+                : `${selectedPair} · public ${feedNote}`}
+              {chartSource === "cex" &&
+              positions.some(
                 (position) => position.venue === "dex" && matchesPair(position, selectedPair),
               )
                 ? " · DEX positions are not plotted against this market"
                 : ""}
             </p>
           </div>
-          <div className="min-w-0 text-right">
-            {currentCandle ? (
-              <>
-                <p className="font-mono text-lg font-semibold text-cream">
-                  ${formatPrice(currentCandle.close)}
-                </p>
-                <p
-                  className={cn("font-mono text-xs", priceChange >= 0 ? "text-gain" : "text-loss")}
-                >
-                  {priceChange >= 0 ? "+" : ""}
-                  {priceChange.toFixed(2)}% last candle
-                </p>
-              </>
-            ) : (
-              <p className="text-xs text-faint">Quote unavailable</p>
-            )}
+          <div className="flex min-w-0 items-center gap-3">
+            {chartSource === "solana-dex" ? (
+              <span
+                className="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-faint"
+                aria-live="polite"
+              >
+                <span
+                  className={cn(
+                    "size-2 rounded-full",
+                    streamStatus === "live"
+                      ? "bg-gain"
+                      : streamStatus === "error"
+                        ? "bg-loss"
+                        : "bg-warn",
+                  )}
+                />
+                {streamStatus === "live"
+                  ? "Live swaps"
+                  : streamStatus === "waiting"
+                    ? "Connected · waiting"
+                    : streamStatus === "error"
+                      ? "Feed unavailable"
+                      : streamStatus === "reconnecting"
+                        ? "Reconnecting"
+                        : "Connecting"}
+              </span>
+            ) : null}
+            <div className="text-right">
+              {currentCandle ? (
+                <>
+                  <p className="font-mono text-lg font-semibold text-cream">
+                    ${formatPrice(currentCandle.close)}
+                  </p>
+                  <p
+                    className={cn(
+                      "font-mono text-xs",
+                      priceChange >= 0 ? "text-gain" : "text-loss",
+                    )}
+                  >
+                    {priceChange >= 0 ? "+" : ""}
+                    {priceChange.toFixed(2)}% last candle
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs text-faint">Quote unavailable</p>
+              )}
+            </div>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-1.5" aria-label="Market pair">
-            {PAIRS.map((pair) => (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex gap-1.5" aria-label="Market source">
               <button
-                key={pair}
                 type="button"
-                aria-pressed={selectedPair === pair}
-                onClick={() => setSelectedPair(pair)}
+                aria-pressed={chartSource === "solana-dex"}
+                onClick={() => setChartSource("solana-dex")}
                 className={cn(
                   "min-h-9 rounded-lg px-2.5 text-xs font-semibold",
-                  selectedPair === pair
+                  chartSource === "solana-dex"
                     ? "bg-brass text-ink"
                     : "border border-line bg-panel-2 text-faint hover:text-cream",
                 )}
               >
-                {pair.replace("USDT", "/USDT")}
+                Solana DEX
               </button>
-            ))}
+              <button
+                type="button"
+                aria-pressed={chartSource === "cex"}
+                onClick={() => setChartSource("cex")}
+                className={cn(
+                  "min-h-9 rounded-lg px-2.5 text-xs font-semibold",
+                  chartSource === "cex"
+                    ? "bg-brass text-ink"
+                    : "border border-line bg-panel-2 text-faint hover:text-cream",
+                )}
+              >
+                CEX
+              </button>
+            </div>
+            {chartSource === "cex"
+              ? PAIRS.map((pair) => (
+                  <button
+                    key={pair}
+                    type="button"
+                    aria-pressed={selectedPair === pair}
+                    onClick={() => setSelectedPair(pair)}
+                    className={cn(
+                      "min-h-9 rounded-lg px-2.5 text-xs font-semibold",
+                      selectedPair === pair
+                        ? "bg-brass text-ink"
+                        : "border border-line bg-panel-2 text-faint hover:text-cream",
+                    )}
+                  >
+                    {pair.replace("USDT", "/USDT")}
+                  </button>
+                ))
+              : null}
           </div>
           <div
             className="flex rounded-lg border border-line bg-panel-2 p-0.5 text-xs"
@@ -322,7 +470,7 @@ export function TapeView() {
           <div className="relative min-w-0 overflow-hidden rounded-lg border border-line bg-ink p-2">
             <svg
               role="img"
-              aria-label={`${selectedPair} ${timeframe} real market candlestick chart with paper position levels`}
+              aria-label={`${chartSource === "solana-dex" ? "SOL/USDC Solana DEX" : selectedPair} ${timeframe} real market candlestick chart`}
               className="block h-64 w-full sm:h-80"
               viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
               preserveAspectRatio="none"
@@ -472,13 +620,55 @@ export function TapeView() {
                 {lastUpdated ? ` · Updated ${new Date(lastUpdated).toLocaleTimeString()}` : ""}
               </span>
             </div>
+            {chartSource === "solana-dex" ? (
+              <ol className="mt-3 grid gap-2 sm:grid-cols-2" aria-label="Recent confirmed swaps">
+                {solanaSwaps
+                  .slice(-4)
+                  .reverse()
+                  .map((swap) => (
+                    <li
+                      key={swap.signature}
+                      className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-line bg-panel-2 px-3 py-2 text-[11px]"
+                    >
+                      <span
+                        className={cn(
+                          "shrink-0 font-semibold uppercase",
+                          swap.side === "buy" ? "text-gain" : "text-loss",
+                        )}
+                      >
+                        {swap.side} SOL
+                      </span>
+                      <span className="truncate font-mono text-cream">
+                        {swap.baseAmount.toFixed(4)} SOL · ${formatPrice(swap.priceUsd)}
+                      </span>
+                      <a
+                        href={`https://solscan.io/tx/${encodeURIComponent(swap.signature)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="shrink-0 text-brass underline-offset-2 hover:underline"
+                        aria-label={`View ${swap.dexId} transaction on Solscan`}
+                      >
+                        {swap.dexId}
+                      </a>
+                    </li>
+                  ))}
+              </ol>
+            ) : null}
           </div>
         ) : (
           <div className="flex min-h-64 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line bg-ink px-5 text-center">
             <CircleAlert className="size-5 text-warn" aria-hidden="true" />
-            <p className="text-sm font-medium text-cream">Market candles are unavailable</p>
+            <p className="text-sm font-medium text-cream">
+              {chartSource === "solana-dex"
+                ? streamStatus === "waiting"
+                  ? "Waiting for the first confirmed SOL/USDC swap"
+                  : "Live Solana DEX chart is unavailable"
+                : "Market candles are unavailable"}
+            </p>
             <p className="max-w-md text-xs leading-relaxed text-faint">
-              {feedNote}. No synthetic prices are shown as a substitute.
+              {chartSource === "solana-dex"
+                ? `${feedNote}. No synthetic prices or trades are shown.`
+                : `${feedNote}. No synthetic prices are shown as a substitute.`}
             </p>
           </div>
         )}
