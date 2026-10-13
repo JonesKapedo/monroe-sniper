@@ -3,8 +3,7 @@ node_modules/
 .github_repo
 .env
 .env.*
-# Ignore local Vercel link metadata, but keep Build Output API files.
-# Ignoring `.vercel/` makes Vercel drop `.vercel/output/config.json` after `vite build`.
-.vercel/*
-!.vercel/output/
+# Vercel output is generated during deployment; tracking it makes Vercel skip
+# the source build and can leave an incomplete Build Output API directory.
+.vercel/
 .neon
