@@ -75,15 +75,15 @@ export function evaluateRiskGate(signal: OpportunitySignal, portfolio: PaperPort
   );
   const checks: GateCheck[] = [
     { id: "score", label: "Composite score ≥ 70", pass: signal.score >= MIN_OPPORTUNITY_SCORE, detail: `${signal.score}/100; minimum ${MIN_OPPORTUNITY_SCORE}` },
-    { id: "security", label: "Verified clean security", pass: securityClean, detail: securityClean ? "Both security sources returned a clean report" : "Missing, stale, incomplete, or adverse secur[...]" },
-    { id: "hard-reject", label: "No hard-reject flags", pass: !hardRejected(signal), detail: hardRejected(signal) ? signal.flags.filter(f => (HARD_REJECT_FLAGS as readonly string[]).includes(f)).j[...] },
+    { id: "security", label: "Verified clean security", pass: securityClean, detail: securityClean ? "Both security sources returned a clean report" : "Missing, stale, incomplete, or adverse security report" },
+    { id: "hard-reject", label: "No hard-reject flags", pass: !hardRejected(signal), detail: hardRejected(signal) ? signal.flags.filter(f => (HARD_REJECT_FLAGS as readonly string[]).includes(f)).join(", ") : "No hard-reject flags" },
     { id: "liquidity", label: "Liquidity ≥ $10,000", pass: (m.liquidityUsd ?? 0) >= MIN_LIQUIDITY_USD, detail: `${usd(m.liquidityUsd ?? 0)}; minimum ${usd(MIN_LIQUIDITY_USD)}` },
-    { id: "quote", label: "Fresh, usable market quote", pass: m.priceUsd !== null && Number.isFinite(m.priceUsd) && m.priceUsd > 0 && quoteAge >= 0 && quoteAge <= MAX_QUOTE_AGE_MS, detail: m.price[...] },
-    { id: "security-age", label: "Security check ≤ 5 minutes", pass: Boolean(report && securityAge >= 0 && securityAge <= MAX_SECURITY_AGE_MS), detail: report ? `Security evidence age ${security[...]` },
-    { id: "slots", label: `Position slots available (max ${MAX_PAPER_POSITIONS})`, pass: portfolio.positions.length < MAX_PAPER_POSITIONS, detail: `${portfolio.positions.length}/${MAX_PAPER_POSITI[...]` },
+    { id: "quote", label: "Fresh, usable market quote", pass: m.priceUsd !== null && Number.isFinite(m.priceUsd) && m.priceUsd > 0 && quoteAge >= 0 && quoteAge <= MAX_QUOTE_AGE_MS, detail: m.priceUsd === null ? "No price" : `${usd(m.priceUsd)}; quote age ${Math.round(quoteAge / 1000)}s` },
+    { id: "security-age", label: "Security check ≤ 5 minutes", pass: Boolean(report && securityAge >= 0 && securityAge <= MAX_SECURITY_AGE_MS), detail: report ? `Security evidence age ${Math.round(securityAge / 1000)}s` : "No security report" },
+    { id: "slots", label: `Position slots available (max ${MAX_PAPER_POSITIONS})`, pass: portfolio.positions.length < MAX_PAPER_POSITIONS, detail: `${portfolio.positions.length}/${MAX_PAPER_POSITIONS} open` },
     { id: "duplicate", label: "No duplicate open position", pass: !sameToken, detail: sameToken ? "A paper position for this token is already open" : "No duplicate token position" },
-    { id: "idea-budget", label: "Idea exposure ≤ 5% of equity", pass: equity > 0 && notional > 0 && notional <= equity * MAX_IDEA_EXPOSURE + 0.01, detail: `Planned notional ${usd(notional)}; equ[...]` },
-    { id: "portfolio-budget", label: "Aggregate exposure ≤ 15% of equity", pass: equity > 0 && exposure + notional <= equity * MAX_PORTFOLIO_EXPOSURE + 0.01, detail: `Current ${usd(exposure)}; a[...]` },
+    { id: "idea-budget", label: "Idea exposure ≤ 5% of equity", pass: equity > 0 && notional > 0 && notional <= equity * MAX_IDEA_EXPOSURE + 0.01, detail: `Planned notional ${usd(notional)}; equity ${usd(equity)}` },
+    { id: "portfolio-budget", label: "Aggregate exposure ≤ 15% of equity", pass: equity > 0 && exposure + notional <= equity * MAX_PORTFOLIO_EXPOSURE + 0.01, detail: `Current ${usd(exposure)}; after trade ${usd(exposure + notional)}` },
     { id: "cash", label: "Paper cash available", pass: portfolio.cashUsd > 0 && notional > 0, detail: `${usd(portfolio.cashUsd)} available` },
   ];
   return {
