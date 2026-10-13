@@ -1,14 +1,76 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/paper-DIU7_PCo.js
-var STARTING_CASH = 25e3;
-var MAX_IDEA = .05;
-var MAX_BOOK = .15;
-var MIN_LIQ = 1e4;
-function emptyBook() {
+//#region node_modules/.nitro/vite/services/ssr/assets/paper-MZacH4KP.js
+var HARD = [
+	"HONEYPOT",
+	"LP-UNLOCKED",
+	"MINT-AUTHORITY",
+	"FREEZE-AUTHORITY",
+	"HIGH-TAX"
+];
+function assessEdge(input) {
+	if ((input.flags ?? []).some((flag) => HARD.includes(flag))) return {
+		act: false,
+		edge: 0,
+		stance: "SKIP",
+		why: "Hard risk flag. No trade."
+	};
+	if (!(input.liquidityUsd >= 1e4)) return {
+		act: false,
+		edge: 0,
+		stance: "SKIP",
+		why: "Book too thin to clear costs."
+	};
+	const change = Number.isFinite(input.change24h) ? input.change24h : 0;
+	const age = input.pairAgeHours;
+	const sentiment = input.sentiment;
+	let edge = input.score;
+	const notes = [];
+	if (typeof sentiment === "number" && Number.isFinite(sentiment)) {
+		if (Math.sign(sentiment) !== 0 && Math.sign(change) !== 0 && Math.sign(sentiment) !== Math.sign(change)) {
+			edge -= 18;
+			notes.push("Social tone fights the tape");
+		} else if (Math.abs(sentiment) >= .35 && Math.sign(sentiment) === Math.sign(change)) {
+			edge += 6;
+			notes.push("Social tone agrees");
+		}
+	} else notes.push("No social feed");
+	if (Math.abs(change) < .45 && (age == null || age > 48) && input.score < 78) return {
+		act: false,
+		edge: Math.max(0, edge),
+		stance: "SKIP",
+		why: "Efficient quote. No fresh information edge."
+	};
+	if (age != null && age >= 0 && age < 8 && input.score >= 68 && input.liquidityUsd >= 2e4 && change > -3) return {
+		act: true,
+		edge: Math.min(100, edge + 8),
+		stance: "EARLY",
+		why: `Early print (${age.toFixed(1)}h). ${notes.join(". ")}`.trim()
+	};
+	const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidityUsd : 0;
+	const trending = change >= 1.2 && participation >= .08 && input.score >= 62;
+	const strongBook = input.score >= 80 && change > 0;
+	if (trending || strongBook) return {
+		act: true,
+		edge: Math.min(100, edge),
+		stance: "TREND",
+		why: `Statistical lean ${change.toFixed(1)}% with participation ${participation.toFixed(2)}. ${notes.join(". ")}`.trim()
+	};
 	return {
-		cash: STARTING_CASH,
+		act: false,
+		edge: Math.max(0, edge),
+		stance: "SKIP",
+		why: "Edge does not clear the prior. Stand aside."
+	};
+}
+var MAX_IDEA = .2;
+var MAX_BOOK = .6;
+var MIN_LIQ = 1e4;
+function emptyBook(cashUsd = 500) {
+	const cash = Math.max(0, cashUsd);
+	return {
+		cash,
 		positions: [],
 		trades: [],
-		peakEquity: STARTING_CASH,
+		peakEquity: Math.max(cash, 1),
 		dayPnl: 0,
 		consecutiveLosses: 0,
 		cooldownUntil: null,
@@ -67,7 +129,8 @@ function scoreCandidate(input) {
 		url: input.url,
 		score,
 		flags,
-		rationale
+		rationale,
+		venue: input.venue ?? "dex"
 	};
 }
 /** Constant-product style impact, capped. */
@@ -79,7 +142,7 @@ function simulateBuy(notional, mid, liquidity) {
 	const impact = impactPct(notional, liquidity);
 	const fee = .003;
 	const buffer = .005;
-	const gas = 1.5;
+	const gas = notional < 50 ? .1 : 1.5;
 	const fill = mid * (1 + impact + buffer);
 	const costPct = notional > 0 ? (notional * (impact + buffer + fee) + gas) / notional : 1;
 	const qty = Math.max(0, (notional - notional * fee - gas) / fill);
@@ -129,7 +192,7 @@ function portfolioLines(book, now = Date.now()) {
 		}
 	];
 }
-function entryVerdict(book, c, now = Date.now()) {
+function entryVerdict(book, c, now = Date.now(), minScore = 62) {
 	const eq = equity(book);
 	const exp = exposure(book);
 	const room = Math.max(0, eq * MAX_BOOK - exp);
@@ -139,8 +202,8 @@ function entryVerdict(book, c, now = Date.now()) {
 		...portfolioLines(book, now),
 		{
 			id: "score",
-			label: "Score at least 70",
-			pass: c.score >= 70,
+			label: `Score at least ${minScore}`,
+			pass: c.score >= minScore,
 			detail: `${c.score}/100`
 		},
 		{
@@ -164,7 +227,7 @@ function entryVerdict(book, c, now = Date.now()) {
 		{
 			id: "cash",
 			label: "Cash and cap allow a ticket",
-			pass: notional >= 50,
+			pass: notional >= 5,
 			detail: `Planned $${notional.toFixed(0)}`
 		}
 	];
@@ -191,33 +254,39 @@ function entryVerdict(book, c, now = Date.now()) {
 function stamp(prefix) {
 	return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
-function enter(book, c, now = Date.now()) {
-	const v = entryVerdict(book, c, now);
+function enter(book, c, now = Date.now(), minScore = 62, customSizing) {
+	const v = entryVerdict(book, c, now, minScore);
 	if (!v.allowed || !v.sim) return {
 		book,
 		ok: false,
 		note: v.lines.filter((l) => !l.pass).map((l) => l.label).join(", ") || "Blocked"
 	};
+	const notionalToUse = Math.min(book.cash, customSizing?.notional ?? v.notional);
+	const qtyToUse = notionalToUse > 0 ? notionalToUse / v.sim.fill : v.sim.qty;
+	const stopToUse = customSizing?.stop ?? v.sim.fill * .92;
+	const targetToUse = customSizing?.target ?? v.sim.fill * 1.06;
 	const pos = {
 		id: stamp("pos"),
 		tokenId: c.id,
 		symbol: c.symbol,
 		chain: c.chain,
-		qty: v.sim.qty,
+		qty: qtyToUse,
 		entryPrice: v.sim.fill,
 		mark: v.sim.fill,
-		stop: v.sim.fill * .92,
+		stop: stopToUse,
+		target: targetToUse,
 		openedAt: now,
-		notional: v.notional
+		notional: notionalToUse,
+		venue: c.venue
 	};
 	return {
 		book: armIfNeeded({
 			...book,
-			cash: book.cash - v.notional,
+			cash: book.cash - notionalToUse,
 			positions: [...book.positions, pos],
 			peakEquity: Math.max(book.peakEquity, equity({
 				...book,
-				cash: book.cash - v.notional,
+				cash: book.cash - notionalToUse,
 				positions: [...book.positions, pos]
 			}))
 		}),
@@ -236,8 +305,11 @@ function markBook(book, prices, now = Date.now()) {
 	for (const p of book.positions) {
 		const px = prices[p.tokenId] && prices[p.tokenId] > 0 ? prices[p.tokenId] : p.mark;
 		const aged = now - p.openedAt > 216e5;
-		const stopped = px <= p.stop;
-		if (aged || stopped) {
+		let activeStop = p.stop;
+		if (px >= p.entryPrice * 1.03 && activeStop < p.entryPrice * 1.008) activeStop = p.entryPrice * 1.008;
+		const stopped = px <= activeStop;
+		const targetHit = px >= (p.target ?? p.entryPrice * 1.06);
+		if (aged || stopped || targetHit) {
 			const pnl = (px - p.entryPrice) * p.qty;
 			cash += p.qty * px;
 			day += pnl;
@@ -247,12 +319,13 @@ function markBook(book, prices, now = Date.now()) {
 				id: stamp("tr"),
 				symbol: p.symbol,
 				pnl,
-				reason: stopped ? "STOP" : "TIME",
+				reason: targetHit ? "TARGET" : stopped ? px > p.entryPrice ? "BREAKEVEN" : "STOP" : "TIME",
 				closedAt: now
 			});
 		} else kept.push({
 			...p,
-			mark: px
+			mark: px,
+			stop: activeStop
 		});
 	}
 	next = {
@@ -382,8 +455,75 @@ function sampleTape(now = Date.now()) {
 		volume24h: r[6],
 		change24h: r[7],
 		pairCreatedAt: now - r[8] * 36e5,
-		url: null
+		url: null,
+		venue: "dex"
 	})).filter((x) => x !== null);
 }
+function emptyMemory() {
+	return {
+		seen: 0,
+		wins: 0,
+		losses: 0,
+		realized: 0,
+		minScore: 62
+	};
+}
+/** Nudge the score floor from closed-trade evidence. History is the only teacher. */
+function learn(memory, pnl) {
+	const wins = memory.wins + (pnl > 0 ? 1 : 0);
+	const losses = memory.losses + (pnl < 0 ? 1 : 0);
+	const seen = memory.seen + 1;
+	const realized = memory.realized + pnl;
+	let minScore = memory.minScore;
+	if (seen >= 4) {
+		const winRate = wins / seen;
+		if (winRate < .4 || realized < 0) minScore = Math.min(85, minScore + 2);
+		else if (winRate > .55 && realized > 0) minScore = Math.max(55, minScore - 1);
+	}
+	return {
+		seen,
+		wins,
+		losses,
+		realized,
+		minScore
+	};
+}
+function chooseEntry(book, tape, minScore, now = Date.now()) {
+	const ranked = tape.map((c) => ({
+		c,
+		edge: assessEdge(c)
+	})).filter((row) => row.edge.act).sort((a, b) => b.edge.edge - a.edge.edge || b.c.score - a.c.score);
+	for (const row of ranked) if (entryVerdict(book, row.c, now, minScore).allowed) return row.c;
+	return null;
+}
+function deposit(book, amount) {
+	if (!(amount > 0)) return book;
+	const next = {
+		...book,
+		cash: book.cash + amount
+	};
+	next.peakEquity = Math.max(book.peakEquity, equity(next));
+	return next;
+}
+function withdraw(book, amount) {
+	if (!(amount > 0)) return {
+		book,
+		ok: false,
+		note: "Amount must be positive"
+	};
+	if (amount > book.cash + 1e-4) return {
+		book,
+		ok: false,
+		note: "Not enough free cash"
+	};
+	return {
+		book: {
+			...book,
+			cash: book.cash - amount
+		},
+		ok: true,
+		note: "Withdrawal posted to the ledger"
+	};
+}
 //#endregion
-export { equity as a, portfolioLines as c, setKill as d, entryVerdict as i, sampleTape as l, emptyBook as n, exposure as o, enter as r, markBook as s, closeOne as t, scoreCandidate as u };
+export { emptyBook as a, equity as c, markBook as d, portfolioLines as f, withdraw as g, setKill as h, deposit as i, exposure as l, scoreCandidate as m, chooseEntry as n, emptyMemory as o, sampleTape as p, closeOne as r, enter as s, assessEdge as t, learn as u };
