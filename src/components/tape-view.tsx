@@ -1,501 +1,595 @@
-import { useState, useEffect, useMemo } from "react";
-import {
-  Activity,
-  Cpu,
-  Radio,
-} from "lucide-react";
-import { useDesk } from "@/lib/desk-store";
-import { equity } from "@/lib/paper";
+import { useEffect, useMemo, useState } from "react";
+import { Activity, CandlestickChart, CircleAlert, Radio } from "lucide-react";
 import { Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { loadKlines } from "@/lib/market.functions";
+import { equity, type Position } from "@/lib/paper";
+import { useDesk } from "@/lib/desk-store";
+import type { Candle } from "@/lib/market.functions";
 
-type Timeframe = "1M" | "5M" | "15M" | "1H";
+type Timeframe = "1m" | "5m" | "15m" | "1h";
 
-const PAIRS = [
-  { symbol: "SOL/USDT", base: 184.2, vol: 0.024, venue: "Binance Spot" },
-  { symbol: "BTC/USDT", base: 87400.0, vol: 0.008, venue: "Binance Spot" },
-  { symbol: "ETH/USDT", base: 3120.0, vol: 0.012, venue: "Binance Spot" },
-  { symbol: "PEPE/SOL", base: 0.0000108, vol: 0.045, venue: "Raydium CLMM" },
-  { symbol: "SUI/USDT", base: 2.84, vol: 0.03, venue: "Binance Spot" },
-];
+const PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"];
+const TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h"];
+const WIDTH = 760;
+const HEIGHT = 320;
+const LEFT = 18;
+const RIGHT = 682;
+const TOP = 18;
+const BOTTOM = 282;
+
+function formatPrice(value: number): string {
+  if (value >= 1000) return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (value >= 1) return value.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  return value.toPrecision(5);
+}
+
+function formatUsd(value: number): string {
+  return `${value >= 0 ? "+" : "-"}$${Math.abs(value).toFixed(2)}`;
+}
+
+function matchesPair(position: Position, symbol: string): boolean {
+  const base = symbol.replace(/USDT$/, "");
+  return position.symbol.toUpperCase().split(/[/:]/)[0] === base;
+}
+
+function levelsFor(position: Position) {
+  return [
+    { label: `ENTRY ${position.symbol}`, value: position.entryPrice, color: "#d7b56a", dash: "0" },
+    { label: "TAKE PROFIT", value: position.target, color: "#a5d194", dash: "5 4" },
+    { label: "STOP", value: position.stop, color: "#e3a394", dash: "3 4" },
+  ].filter(
+    (level): level is { label: string; value: number; color: string; dash: string } =>
+      typeof level.value === "number" && Number.isFinite(level.value),
+  );
+}
+
+function PositionCard({
+  position,
+  onClose,
+}: {
+  position: Position;
+  onClose: (id: string) => void;
+}) {
+  const unrealized = (position.mark - position.entryPrice) * position.qty;
+  const toTarget = ((position.target ?? position.entryPrice * 1.06) - position.mark) * position.qty;
+  const toStop = (position.stop - position.mark) * position.qty;
+
+  return (
+    <article className="rounded-xl border border-line bg-panel-2 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">{position.symbol}</h3>
+          <p className="mt-1 text-xs text-faint">
+            Entry {formatPrice(position.entryPrice)} · Last mark {formatPrice(position.mark)} ·
+            Quantity {position.qty.toPrecision(5)}
+          </p>
+        </div>
+        <p
+          className={cn(
+            "font-mono text-sm font-semibold",
+            unrealized >= 0 ? "text-gain" : "text-loss",
+          )}
+        >
+          {formatUsd(unrealized)}
+          <span className="ml-1 text-[10px] font-normal text-faint">unrealized</span>
+        </p>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 border-t border-line pt-3 text-xs">
+        <p className="text-faint">
+          At target{" "}
+          <span
+            className={cn(
+              "ml-1 font-mono font-semibold",
+              toTarget >= 0 ? "text-gain" : "text-loss",
+            )}
+          >
+            {formatUsd(toTarget)}
+          </span>
+        </p>
+        <p className="text-faint">
+          At stop{" "}
+          <span
+            className={cn("ml-1 font-mono font-semibold", toStop >= 0 ? "text-gain" : "text-loss")}
+          >
+            {formatUsd(toStop)}
+          </span>
+        </p>
+      </div>
+      <p className="mt-2 text-[11px] text-faint">
+        Paper scenarios from the last quote; not forecasts. Standby leaves this position open.
+      </p>
+      <button
+        type="button"
+        onClick={() => onClose(position.id)}
+        className="mt-3 min-h-10 rounded-lg border border-loss/40 px-3 text-xs font-semibold text-loss hover:bg-loss/10"
+      >
+        Close {position.symbol} at last paper mark
+      </button>
+    </article>
+  );
+}
 
 export function TapeView() {
-  const mode = useDesk((s) => s.mode);
-  const demo = useDesk((s) => s.demo);
-  const live = useDesk((s) => s.live);
-  const executions = useDesk((s) => s.executions);
-  const log = useDesk((s) => s.log);
-
-  const book = mode === "live" ? live : demo;
-  const eq = equity(book);
-  const trades = book.trades;
-  const wins = trades.filter((t) => t.pnl > 0).length;
-  const net = trades.reduce((sum, t) => sum + t.pnl, 0);
+  const demo = useDesk((state) => state.demo);
+  const executions = useDesk((state) => state.executions);
+  const log = useDesk((state) => state.log);
+  const power = useDesk((state) => state.power);
+  const flatten = useDesk((state) => state.flatten);
+  const eq = equity(demo);
+  const trades = demo.trades;
+  const positions = demo.positions;
+  const net = trades.reduce((sum, trade) => sum + trade.pnl, 0);
 
   const [selectedPair, setSelectedPair] = useState(PAIRS[0]);
-  const [timeframe, setTimeframe] = useState<Timeframe>("5M");
-  const [chartTicks, setChartTicks] = useState<Array<{ time: string; price: number; high: number; low: number }>>([]);
+  const [timeframe, setTimeframe] = useState<Timeframe>("5m");
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [feedNote, setFeedNote] = useState("Loading public market candles…");
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
-  // Generate real-time charting points for selected pair
   useEffect(() => {
-    let currentPx = selectedPair.base;
-    const initialPoints = Array.from({ length: 30 }).map((_, i) => {
-      const d = new Date(Date.now() - (30 - i) * 60000);
-      currentPx = currentPx * (1 + (Math.random() - 0.49) * selectedPair.vol);
-      return {
-        time: d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        price: currentPx,
-        high: currentPx * (1 + Math.random() * 0.004),
-        low: currentPx * (1 - Math.random() * 0.004),
-      };
-    });
-    setChartTicks(initialPoints);
+    let current = true;
+    const refresh = async () => {
+      try {
+        const result = await loadKlines({ data: { symbol: selectedPair, interval: timeframe } });
+        if (!current) return;
+        setCandles(result.candles);
+        setFeedNote(result.note);
+        setLastUpdated(result.candles.length ? Date.now() : null);
+      } catch (error) {
+        if (!current) return;
+        setCandles([]);
+        setLastUpdated(null);
+        setFeedNote(error instanceof Error ? error.message : "Public market data unavailable.");
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 15_000);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+    };
+  }, [selectedPair, timeframe]);
 
-    const interval = setInterval(() => {
-      setChartTicks((prev) => {
-        const last = prev[prev.length - 1];
-        if (!last) return prev;
-        const nextPx = last.price * (1 + (Math.random() - 0.49) * (selectedPair.vol * 0.4));
-        const now = new Date();
-        const nextPoint = {
-          time: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          price: nextPx,
-          high: Math.max(last.price, nextPx) * 1.002,
-          low: Math.min(last.price, nextPx) * 0.998,
-        };
-        return [...prev.slice(1), nextPoint];
-      });
-    }, 2500);
+  const currentCandle = candles.at(-1);
+  const previousCandle = candles.at(-2);
+  const priceChange =
+    currentCandle && previousCandle?.close
+      ? ((currentCandle.close - previousCandle.close) / previousCandle.close) * 100
+      : 0;
+  const relevantPositions = positions.filter(
+    (position) => position.venue === "binance" && matchesPair(position, selectedPair),
+  );
+  const closedExecutions = executions.filter((execution) => execution.type !== "MARKET_FLOW");
+  const wins = trades.filter((trade) => trade.pnl > 0).length;
 
-    return () => clearInterval(interval);
-  }, [selectedPair]);
+  const chart = useMemo(() => {
+    if (candles.length === 0) return null;
+    const rawMin = Math.min(...candles.map((candle) => candle.low));
+    const rawMax = Math.max(...candles.map((candle) => candle.high));
+    const padding = (rawMax - rawMin) * 0.08 || rawMax * 0.005;
+    const min = Math.max(0, rawMin - padding);
+    const max = rawMax + padding;
+    const range = max - min || 1;
+    const x = (index: number) => LEFT + (index / Math.max(1, candles.length - 1)) * (RIGHT - LEFT);
+    const y = (price: number) => TOP + ((max - price) / range) * (BOTTOM - TOP);
+    const barWidth = Math.max(3, Math.min(12, ((RIGHT - LEFT) / candles.length) * 0.56));
+    return { min, max, x, y, barWidth };
+  }, [candles]);
 
-  // SVG Chart Dimensions
-  const minPrice = useMemo(() => Math.min(...chartTicks.map((c) => c.low || c.price)), [chartTicks]);
-  const maxPrice = useMemo(() => Math.max(...chartTicks.map((c) => c.high || c.price)), [chartTicks]);
-  const priceRange = maxPrice - minPrice || 1;
-
-  const currentPrice = chartTicks[chartTicks.length - 1]?.price ?? selectedPair.base;
-  const startPrice = chartTicks[0]?.price ?? selectedPair.base;
-  const priceChange = ((currentPrice - startPrice) / startPrice) * 100;
+  const unrealized = positions.reduce(
+    (sum, position) => sum + (position.mark - position.entryPrice) * position.qty,
+    0,
+  );
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5">
-      {/* Tape Header */}
-      <div className="flex flex-col gap-3 rounded-xl border border-line bg-panel p-4 md:flex-row md:items-center md:justify-between md:p-5">
+      <section className="flex flex-col gap-3 rounded-xl border border-line bg-panel p-4 md:flex-row md:items-center md:justify-between md:p-5">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Live Trading Tape</h1>
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase",
-                mode === "live"
-                  ? "border border-amber-500/40 bg-amber-500/15 text-amber-300"
-                  : "border border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
-              )}
-            >
-              {mode.toUpperCase()} DESK TAPE
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">
+              Market &amp; Paper Activity
+            </h1>
+            <span className="rounded-full border border-brass/40 bg-brass/10 px-2.5 py-0.5 text-xs font-semibold uppercase text-brass">
+              Paper simulation
             </span>
           </div>
-          <p className="mt-1 text-xs text-faint md:text-sm">
-            Institutional time-and-sales stream, cryptographic execution telemetry, and smart order router fills.
+          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-faint md:text-sm">
+            Public market candles and simulated paper fills. No brokerage connection or real-money
+            orders are available.
           </p>
         </div>
-
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 rounded-lg border border-line bg-panel-2 px-3 py-1.5 font-mono text-xs">
-            <Radio className="size-3 text-gain pulse-dot" />
-            <span className="text-faint">Smart Router:</span>
-            <span className="font-semibold text-gain">42ms Latency</span>
-          </div>
+        <div className="flex items-center gap-2 self-start rounded-lg border border-line bg-panel-2 px-3 py-2 text-xs sm:self-auto">
+          <span
+            className={cn("size-2 rounded-full", power ? "bg-gain" : "bg-faint")}
+            aria-hidden="true"
+          />
+          <span className="font-medium">{power ? "Paper bot armed" : "Standby"}</span>
+          <span className="text-faint">· {positions.length} held</span>
         </div>
-      </div>
+      </section>
 
-      {/* Top Tape Metrics */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card>
-          <p className="text-[10px] tracking-wider text-faint uppercase">Active Mode Equity</p>
+          <p className="text-[10px] tracking-wider text-faint uppercase">Paper equity</p>
           <p className="num mt-1 text-xl font-bold text-cream">${eq.toFixed(2)}</p>
-          <p className="text-[11px] text-faint">{mode === "live" ? "Live Rail" : "Demo Sandbox"}</p>
+          <p className="text-[11px] text-faint">Simulation balance</p>
         </Card>
         <Card>
-          <p className="text-[10px] tracking-wider text-faint uppercase">Realized P&L</p>
+          <p className="text-[10px] tracking-wider text-faint uppercase">Unrealized P&amp;L</p>
           <p
             className={cn(
               "num mt-1 text-xl font-bold",
-              net >= 0 ? "text-gain" : "text-loss",
+              unrealized >= 0 ? "text-gain" : "text-loss",
             )}
           >
-            {net >= 0 ? "+" : ""}${net.toFixed(2)}
+            {formatUsd(unrealized)}
           </p>
-          <p className="text-[11px] text-faint">{wins} wins / {trades.length} closed</p>
+          <p className="text-[11px] text-faint">{positions.length} open paper positions</p>
         </Card>
         <Card>
-          <p className="text-[10px] tracking-wider text-faint uppercase">Avg Execution Speed</p>
-          <p className="num mt-1 text-xl font-bold text-brass">41 ms</p>
-          <p className="text-[11px] text-faint">Direct WebSocket / RPC</p>
+          <p className="text-[10px] tracking-wider text-faint uppercase">Realized P&amp;L</p>
+          <p className={cn("num mt-1 text-xl font-bold", net >= 0 ? "text-gain" : "text-loss")}>
+            {formatUsd(net)}
+          </p>
+          <p className="text-[11px] text-faint">
+            {wins} wins / {trades.length} closes
+          </p>
         </Card>
         <Card>
-          <p className="text-[10px] tracking-wider text-faint uppercase">Avg Slippage</p>
-          <p className="num mt-1 text-xl font-bold text-cream">+0.3 bps</p>
-          <p className="text-[11px] text-gain">Inside spread budget</p>
+          <p className="text-[10px] tracking-wider text-faint uppercase">Paper fills</p>
+          <p className="num mt-1 text-xl font-bold text-cream">{closedExecutions.length}</p>
+          <p className="text-[11px] text-faint">This browser session</p>
         </Card>
-        <Card className="col-span-2 sm:col-span-4 lg:col-span-1">
-          <p className="text-[10px] tracking-wider text-faint uppercase">Router Venues</p>
-          <p className="num mt-1 text-xl font-bold text-cream">Binance + Raydium</p>
-          <p className="text-[11px] text-faint">CEX & DEX deep liquidity</p>
-        </Card>
-      </div>
+      </section>
 
-      {/* Institutional Trading Chart Section */}
-      <Card className="flex flex-col gap-4">
-        {/* Chart Header with Pair Selector and Timeframe */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
-          <div className="flex flex-wrap items-center gap-2">
-            {PAIRS.map((p) => (
+      <Card className="flex min-w-0 flex-col gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <CandlestickChart className="size-4 text-brass" aria-hidden="true" />
+              <Label>Market price chart</Label>
+            </div>
+            <p className="mt-1 text-xs text-faint">
+              {selectedPair} · Binance public candlestick feed
+              {positions.some(
+                (position) => position.venue === "dex" && matchesPair(position, selectedPair),
+              )
+                ? " · DEX positions are not plotted against this market"
+                : ""}
+            </p>
+          </div>
+          <div className="min-w-0 text-right">
+            {currentCandle ? (
+              <>
+                <p className="font-mono text-lg font-semibold text-cream">
+                  ${formatPrice(currentCandle.close)}
+                </p>
+                <p
+                  className={cn("font-mono text-xs", priceChange >= 0 ? "text-gain" : "text-loss")}
+                >
+                  {priceChange >= 0 ? "+" : ""}
+                  {priceChange.toFixed(2)}% last candle
+                </p>
+              </>
+            ) : (
+              <p className="text-xs text-faint">Quote unavailable</p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-1.5" aria-label="Market pair">
+            {PAIRS.map((pair) => (
               <button
-                key={p.symbol}
+                key={pair}
                 type="button"
-                onClick={() => setSelectedPair(p)}
+                aria-pressed={selectedPair === pair}
+                onClick={() => setSelectedPair(pair)}
                 className={cn(
-                  "rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors",
-                  selectedPair.symbol === p.symbol
+                  "min-h-9 rounded-lg px-2.5 text-xs font-semibold",
+                  selectedPair === pair
                     ? "bg-brass text-ink"
                     : "border border-line bg-panel-2 text-faint hover:text-cream",
                 )}
               >
-                {p.symbol}
+                {pair.replace("USDT", "/USDT")}
               </button>
             ))}
           </div>
-
-          <div className="flex items-center gap-3">
-            <div className="text-right">
-              <span className="font-mono text-base font-bold text-cream">
-                ${currentPrice >= 1 ? currentPrice.toLocaleString("en-US", { maximumFractionDigits: 2 }) : currentPrice.toPrecision(4)}
-              </span>
-              <span
+          <div
+            className="flex rounded-lg border border-line bg-panel-2 p-0.5 text-xs"
+            aria-label="Chart timeframe"
+          >
+            {TIMEFRAMES.map((period) => (
+              <button
+                key={period}
+                type="button"
+                aria-pressed={timeframe === period}
+                onClick={() => setTimeframe(period)}
                 className={cn(
-                  "ml-2 font-mono text-xs font-semibold",
-                  priceChange >= 0 ? "text-gain" : "text-loss",
+                  "min-h-8 rounded px-2 font-medium uppercase",
+                  timeframe === period ? "bg-panel text-cream" : "text-faint hover:text-cream",
                 )}
               >
-                {priceChange >= 0 ? "+" : ""}
-                {priceChange.toFixed(2)}%
+                {period}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {chart ? (
+          <div className="relative min-w-0 overflow-hidden rounded-lg border border-line bg-ink p-2">
+            <svg
+              role="img"
+              aria-label={`${selectedPair} ${timeframe} real market candlestick chart with paper position levels`}
+              className="block h-64 w-full sm:h-80"
+              viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+              preserveAspectRatio="none"
+            >
+              <defs>
+                <clipPath id="market-chart-clip">
+                  <rect x={LEFT} y={TOP} width={RIGHT - LEFT} height={BOTTOM - TOP} />
+                </clipPath>
+              </defs>
+              {[0, 1, 2, 3, 4].map((index) => {
+                const ratio = index / 4;
+                const y = TOP + ratio * (BOTTOM - TOP);
+                const price = chart.max - ratio * (chart.max - chart.min);
+                return (
+                  <g key={index}>
+                    <line
+                      x1={LEFT}
+                      y1={y}
+                      x2={RIGHT}
+                      y2={y}
+                      stroke="var(--theme-line)"
+                      strokeDasharray="3 5"
+                    />
+                    <text
+                      x={RIGHT + 8}
+                      y={y + 4}
+                      fill="var(--theme-faint)"
+                      fontSize="10"
+                      fontFamily="monospace"
+                    >
+                      {formatPrice(price)}
+                    </text>
+                  </g>
+                );
+              })}
+              <g clipPath="url(#market-chart-clip)">
+                {candles.map((candle, index) => {
+                  const x = chart.x(index);
+                  const rising = candle.close >= candle.open;
+                  const color = rising ? "var(--theme-gain)" : "var(--theme-loss)";
+                  const bodyTop = chart.y(Math.max(candle.open, candle.close));
+                  const bodyBottom = chart.y(Math.min(candle.open, candle.close));
+                  return (
+                    <g key={`${candle.time}-${index}`}>
+                      <line
+                        x1={x}
+                        y1={chart.y(candle.high)}
+                        x2={x}
+                        y2={chart.y(candle.low)}
+                        stroke={color}
+                        strokeWidth="1.2"
+                      />
+                      <rect
+                        x={x - chart.barWidth / 2}
+                        y={bodyTop}
+                        width={chart.barWidth}
+                        height={Math.max(1.5, bodyBottom - bodyTop)}
+                        fill={color}
+                        rx="0.5"
+                      />
+                    </g>
+                  );
+                })}
+                {relevantPositions.flatMap((position) =>
+                  levelsFor(position).map((level) => {
+                    if (level.value < chart.min || level.value > chart.max) return null;
+                    const y = chart.y(level.value);
+                    return (
+                      <g key={`${position.id}-${level.label}`}>
+                        <line
+                          x1={LEFT}
+                          y1={y}
+                          x2={RIGHT}
+                          y2={y}
+                          stroke={level.color}
+                          strokeDasharray={level.dash}
+                          strokeWidth="1.25"
+                          opacity="0.9"
+                        />
+                      </g>
+                    );
+                  }),
+                )}
+                {currentCandle ? (
+                  <>
+                    <line
+                      x1={LEFT}
+                      y1={chart.y(currentCandle.close)}
+                      x2={RIGHT}
+                      y2={chart.y(currentCandle.close)}
+                      stroke="var(--theme-brass)"
+                      strokeDasharray="2 4"
+                      strokeWidth="1"
+                    />
+                    <circle
+                      cx={chart.x(candles.length - 1)}
+                      cy={chart.y(currentCandle.close)}
+                      r="3"
+                      fill="var(--theme-brass)"
+                    />
+                  </>
+                ) : null}
+              </g>
+              {[candles[0], candles[Math.floor(candles.length / 2)], candles.at(-1)].map(
+                (candle, index) =>
+                  candle ? (
+                    <text
+                      key={`${candle.time}-${index}`}
+                      x={[LEFT, (LEFT + RIGHT) / 2, RIGHT][index]}
+                      y={HEIGHT - 5}
+                      textAnchor={(["start", "middle", "end"] as const)[index]}
+                      fill="var(--theme-faint)"
+                      fontSize="10"
+                      fontFamily="monospace"
+                    >
+                      {new Date(candle.time).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </text>
+                  ) : null,
+              )}
+            </svg>
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line pt-2 text-[10px] text-faint">
+              <span className="inline-flex items-center gap-1.5">
+                <i className="size-2 rounded-full bg-brass" />
+                Last price
+              </span>
+              {relevantPositions.length ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5">
+                    <i className="size-2 rounded-full bg-brass" />
+                    Entry
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <i className="size-2 rounded-full bg-gain" />
+                    Target
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <i className="size-2 rounded-full bg-loss" />
+                    Stop
+                  </span>
+                </>
+              ) : null}
+              <span className="ml-auto">
+                {feedNote}
+                {lastUpdated ? ` · Updated ${new Date(lastUpdated).toLocaleTimeString()}` : ""}
               </span>
             </div>
-
-            <div className="flex rounded-lg border border-line bg-panel-2 p-0.5 text-xs">
-              {(["1M", "5M", "15M", "1H"] as Timeframe[]).map((tf) => (
-                <button
-                  key={tf}
-                  type="button"
-                  onClick={() => setTimeframe(tf)}
-                  className={cn(
-                    "rounded px-2 py-0.5 font-medium transition-colors",
-                    timeframe === tf ? "bg-brass text-ink font-semibold" : "text-faint hover:text-cream",
-                  )}
-                >
-                  {tf}
-                </button>
-              ))}
-            </div>
           </div>
-        </div>
-
-        {/* SVG Interactive Candlestick / Area Trading Chart */}
-        <div className="relative h-64 w-full">
-          <svg className="h-full w-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 600 200">
-            <defs>
-              <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#d7b56a" stopOpacity="0.25" />
-                <stop offset="100%" stopColor="#d7b56a" stopOpacity="0.0" />
-              </linearGradient>
-            </defs>
-
-            {/* Horizontal Grid lines */}
-            {[0.25, 0.5, 0.75].map((ratio) => (
-              <line
-                key={ratio}
-                x1="0"
-                y1={200 * ratio}
-                x2="600"
-                y2={200 * ratio}
-                stroke="#34392e"
-                strokeDasharray="4 4"
-                strokeWidth="1"
-              />
-            ))}
-
-            {/* Price Area fill */}
-            {chartTicks.length > 1 && (
-              <path
-                d={
-                  `M 0,${200 - ((chartTicks[0].price - minPrice) / priceRange) * 180 - 10} ` +
-                  chartTicks
-                    .map((pt, i) => {
-                      const x = (i / (chartTicks.length - 1)) * 600;
-                      const y = 200 - ((pt.price - minPrice) / priceRange) * 180 - 10;
-                      return `L ${x},${y}`;
-                    })
-                    .join(" ") +
-                  ` L 600,200 L 0,200 Z`
-                }
-                fill="url(#chartGradient)"
-              />
-            )}
-
-            {/* Price Line */}
-            {chartTicks.length > 1 && (
-              <path
-                d={
-                  `M 0,${200 - ((chartTicks[0].price - minPrice) / priceRange) * 180 - 10} ` +
-                  chartTicks
-                    .map((pt, i) => {
-                      const x = (i / (chartTicks.length - 1)) * 600;
-                      const y = 200 - ((pt.price - minPrice) / priceRange) * 180 - 10;
-                      return `L ${x},${y}`;
-                    })
-                    .join(" ")
-                }
-                fill="none"
-                stroke="#d7b56a"
-                strokeWidth="2"
-              />
-            )}
-
-            {/* High/Low Wicks on each point */}
-            {chartTicks.map((pt, i) => {
-              const x = (i / (chartTicks.length - 1)) * 600;
-              const yHigh = 200 - ((pt.high - minPrice) / priceRange) * 180 - 10;
-              const yLow = 200 - ((pt.low - minPrice) / priceRange) * 180 - 10;
-              return (
-                <line
-                  key={`wick-${i}`}
-                  x1={x}
-                  y1={yHigh}
-                  x2={x}
-                  y2={yLow}
-                  stroke="#b7b3a6"
-                  strokeWidth="1"
-                  opacity="0.4"
-                />
-              );
-            })}
-
-            {/* Trade Execution Markers directly on the Chart */}
-            {chartTicks.length > 10 && (
-              <>
-                {/* Simulated Buy Entry Marker */}
-                <circle cx="240" cy="120" r="5" fill="#a5d194" stroke="#10120e" strokeWidth="2" />
-                <text x="250" y="124" fill="#a5d194" fontSize="10" fontFamily="monospace" fontWeight="bold">
-                  ▲ BUY FILL ($184.20)
-                </text>
-
-                {/* Simulated Take Profit Marker */}
-                <circle cx="480" cy="50" r="5" fill="#d7b56a" stroke="#10120e" strokeWidth="2" />
-                <text x="380" y="44" fill="#d7b56a" fontSize="10" fontFamily="monospace" fontWeight="bold">
-                  ★ TAKE PROFIT (+6.2%)
-                </text>
-              </>
-            )}
-          </svg>
-
-          {/* Current Price Banner */}
-          <div className="absolute bottom-2 right-2 rounded-md border border-line bg-panel/90 px-2.5 py-1 backdrop-blur">
-            <span className="font-mono text-xs font-semibold text-brass">
-              Venue: {selectedPair.venue} · Feed Live
-            </span>
+        ) : (
+          <div className="flex min-h-64 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line bg-ink px-5 text-center">
+            <CircleAlert className="size-5 text-warn" aria-hidden="true" />
+            <p className="text-sm font-medium text-cream">Market candles are unavailable</p>
+            <p className="max-w-md text-xs leading-relaxed text-faint">
+              {feedNote}. No synthetic prices are shown as a substitute.
+            </p>
           </div>
-        </div>
+        )}
       </Card>
 
-      {/* Dual Column: Real-time Time & Sales (Left) and Bot Decisions Feed (Right) */}
-      <div className="grid gap-5 lg:grid-cols-2">
-        {/* Left Column: Real-Time Time & Sales Stream */}
-        <Card className="flex flex-col">
+      <section className="grid gap-5 lg:grid-cols-2">
+        <Card className="flex min-w-0 flex-col gap-3">
           <div className="flex items-center justify-between border-b border-line pb-3">
             <div className="flex items-center gap-2">
-              <Activity className="size-4 text-brass" />
-              <Label>Real-Time Time & Sales Tape</Label>
+              <Activity className="size-4 text-brass" aria-hidden="true" />
+              <Label>Open paper positions</Label>
             </div>
-            <span className="font-mono text-[11px] text-faint">Live Orderbook Stream</span>
+            <span className={cn("text-xs", power ? "text-gain" : "text-faint")}>
+              {power ? "Bot armed" : "Held on standby"}
+            </span>
           </div>
+          <p className="text-xs leading-relaxed text-faint">
+            {power
+              ? "Paper brackets are active while armed."
+              : "Standby pauses automated entries and exits. Positions stay open; close them individually when ready."}
+          </p>
+          {positions.length ? (
+            <div className="space-y-3">
+              {positions.map((position) => (
+                <PositionCard key={position.id} position={position} onClose={flatten} />
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed border-line px-4 py-8 text-center text-sm text-faint">
+              No open paper positions.
+            </p>
+          )}
+        </Card>
 
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full text-left font-mono text-xs">
-              <thead className="text-[10px] tracking-wider text-faint uppercase">
-                <tr>
-                  <th className="pb-2 font-normal">Time</th>
-                  <th className="pb-2 font-normal">Tx Hash</th>
-                  <th className="pb-2 font-normal">Pair & Venue</th>
-                  <th className="pb-2 font-normal">Side</th>
-                  <th className="pb-2 text-right font-normal">Price</th>
-                  <th className="pb-2 text-right font-normal">Speed</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line/40">
-                {executions.slice(0, 16).map((exec) => {
-                  const isBuy = exec.side === "BUY";
-                  return (
-                    <tr key={exec.id} className="hover:bg-panel-2/50">
-                      <td className="py-2 text-[11px] text-faint">
-                        {new Date(exec.ts).toLocaleTimeString([], {
+        <Card className="flex min-w-0 flex-col gap-3">
+          <div className="flex items-center justify-between border-b border-line pb-3">
+            <div className="flex items-center gap-2">
+              <Radio className="size-4 text-brass" aria-hidden="true" />
+              <Label>Paper fill ledger</Label>
+            </div>
+            <span className="text-xs text-faint">{closedExecutions.length} session fills</span>
+          </div>
+          <div className="overflow-x-auto">
+            {closedExecutions.length ? (
+              <table className="w-full min-w-[440px] text-left text-xs">
+                <thead className="border-b border-line text-faint uppercase">
+                  <tr>
+                    <th className="pb-2 font-normal">Time</th>
+                    <th className="pb-2 font-normal">Pair</th>
+                    <th className="pb-2 font-normal">Side</th>
+                    <th className="pb-2 text-right font-normal">Price</th>
+                    <th className="pb-2 text-right font-normal">Notional</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line/60">
+                  {closedExecutions.slice(0, 20).map((execution) => (
+                    <tr key={execution.id}>
+                      <td className="py-2 font-mono text-faint">
+                        {new Date(execution.ts).toLocaleTimeString([], {
                           hour: "2-digit",
                           minute: "2-digit",
                           second: "2-digit",
                         })}
                       </td>
-                      <td className="py-2 text-[11px] text-brass/80" title={exec.hash}>
-                        {exec.hash}
-                      </td>
-                      <td className="py-2">
-                        <span className="font-medium text-cream">{exec.symbol}</span>
-                        <span className="ml-1 text-[10px] text-faint">· {exec.venue.split(" ")[0]}</span>
-                      </td>
-                      <td className="py-2">
-                        <span
-                          className={cn(
-                            "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
-                            isBuy ? "bg-gain/20 text-gain" : "bg-loss/20 text-loss",
-                          )}
-                        >
-                          {exec.side}
-                        </span>
-                      </td>
-                      <td className="py-2 text-right font-medium text-cream">
-                        ${exec.price >= 1 ? exec.price.toFixed(2) : exec.price.toPrecision(4)}
-                      </td>
-                      <td className="py-2 text-right text-[11px] text-faint">{exec.latencyMs}ms</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        {/* Right Column: Algorithmic Bot Decision Telemetry */}
-        <Card className="flex flex-col">
-          <div className="flex items-center justify-between border-b border-line pb-3">
-            <div className="flex items-center gap-2">
-              <Cpu className="size-4 text-brass" />
-              <Label>Sniper Algorithm Decision Stream</Label>
-            </div>
-            <span className="font-mono text-[11px] text-gain">Active Engine</span>
-          </div>
-
-          <div className="mt-3 flex max-h-[380px] flex-1 flex-col gap-2 overflow-y-auto font-mono text-xs scrollbar-thin">
-            {/* Structured Telemetry items */}
-            <div className="rounded-lg border border-line bg-panel-2 p-2.5">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="font-semibold text-gain">✓ OPPORTUNITY SCAN</span>
-                <span className="text-faint">{new Date().toLocaleTimeString()}</span>
-              </div>
-              <p className="mt-1 text-cream/90">
-                Probed Binance CEX ticker and Raydium CLMM liquidity pools. Identified volume expansion on SOL/USDT (+240% 24h volume).
-              </p>
-            </div>
-
-            <div className="rounded-lg border border-line bg-panel-2 p-2.5">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="font-semibold text-brass">⚡ QUANTITATIVE SCORE</span>
-                <span className="text-faint">{new Date().toLocaleTimeString()}</span>
-              </div>
-              <p className="mt-1 text-cream/90">
-                Multi-source agreement: Invo (84%), Finviz (78%), Binance Orderflow (88%). Composite Score: 84/100 (clears brain floor).
-              </p>
-            </div>
-
-            <div className="rounded-lg border border-line bg-panel-2 p-2.5">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="font-semibold text-cream">🛡 RISK AUDIT & KELLY SIZING</span>
-                <span className="text-faint">{new Date().toLocaleTimeString()}</span>
-              </div>
-              <p className="mt-1 text-cream/90">
-                Kelly fraction sizing: Allocated $20.00 ticket. Stop Loss bracket set at -8.0%, Take Profit bracket set at +6.0%.
-              </p>
-            </div>
-
-            <div className="rounded-lg border border-line bg-panel-2 p-2.5">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="font-semibold text-gain">🚀 ORDER ROUTED & FILLED</span>
-                <span className="text-faint">{new Date().toLocaleTimeString()}</span>
-              </div>
-              <p className="mt-1 text-cream/90">
-                Direct IOC crossing to Binance Spot. Fill price: $184.25. Execution latency: 38ms. Zero adverse slippage.
-              </p>
-            </div>
-
-            {/* Custom logs */}
-            {log.slice(0, 8).map((line, idx) => (
-              <div key={`${line}-${idx}`} className="flex items-start gap-1.5 text-[11px] text-faint">
-                <span className="text-brass">›</span>
-                <span className="text-cream/80">{line}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      {/* Institutional Closed Trades Audit Table */}
-      <Card>
-        <div className="flex items-center justify-between border-b border-line pb-3">
-          <div>
-            <Label>Session Closed Trades Ledger ({trades.length} fills)</Label>
-            <p className="text-xs text-faint">
-              Audit log of completed round-trip trades with entry, exit, reason, and net P&L.
-            </p>
-          </div>
-        </div>
-
-        {trades.length === 0 ? (
-          <p className="mt-3 text-xs text-faint">No round-trip trades completed yet this session.</p>
-        ) : (
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="border-b border-line text-faint uppercase">
-                <tr>
-                  <th className="pb-2 font-normal">Closed At</th>
-                  <th className="pb-2 font-normal">Symbol</th>
-                  <th className="pb-2 font-normal">Exit Reason</th>
-                  <th className="pb-2 text-right font-normal">Realized P&L</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line/60">
-                {trades.map((t) => (
-                  <tr key={t.id} className="hover:bg-panel-2/50">
-                    <td className="py-2.5 font-mono text-faint">
-                      {new Date(t.closedAt).toLocaleTimeString()}
-                    </td>
-                    <td className="py-2.5 font-semibold text-cream">{t.symbol}</td>
-                    <td className="py-2.5">
-                      <span
+                      <td className="py-2 font-semibold text-cream">{execution.symbol}</td>
+                      <td
                         className={cn(
-                          "rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                          t.reason === "TARGET"
-                            ? "bg-gain/20 text-gain"
-                            : t.reason === "STOP"
-                              ? "bg-loss/20 text-loss"
-                              : "bg-panel text-faint",
+                          "py-2 font-semibold",
+                          execution.side === "BUY" ? "text-gain" : "text-loss",
                         )}
                       >
-                        {t.reason === "TARGET" ? "Take Profit" : t.reason === "STOP" ? "Stop Loss" : t.reason}
-                      </span>
-                    </td>
-                    <td
-                      className={cn(
-                        "py-2.5 text-right font-mono font-semibold",
-                        t.pnl >= 0 ? "text-gain" : "text-loss",
-                      )}
-                    >
-                      {t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        {execution.side}
+                      </td>
+                      <td className="py-2 text-right font-mono">{formatPrice(execution.price)}</td>
+                      <td className="py-2 text-right font-mono">
+                        ${execution.notional.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="py-8 text-center text-sm text-faint">
+                No paper fills have been recorded this session.
+              </p>
+            )}
           </div>
+        </Card>
+      </section>
+
+      <Card className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 border-b border-line pb-3">
+          <Activity className="size-4 text-brass" aria-hidden="true" />
+          <Label>Bot activity</Label>
+          <span className="ml-auto text-xs text-faint">
+            {power ? "Running in paper mode" : "Paused"}
+          </span>
+        </div>
+        {log.length ? (
+          <ul className="space-y-2 font-mono text-xs">
+            {log.slice(0, 8).map((line, index) => (
+              <li key={`${line}-${index}`} className="flex gap-2 text-faint">
+                <span className="text-brass" aria-hidden="true">
+                  ›
+                </span>
+                <span className="text-cream/80">{line}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-faint">No bot activity yet.</p>
         )}
       </Card>
     </div>

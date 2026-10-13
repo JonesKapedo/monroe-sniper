@@ -5,6 +5,7 @@ import { clip } from "./format";
 import { SOURCE_ORDER, SOURCE_SPECS, emptySourceSettings } from "./mesh-types";
 import type { MeshSourceId, MeshSourceSetting } from "./mesh-types";
 import { defaultSettings, type Book, type OrderType, type Settings, type SourceId, type TimeInForce } from "./types";
+import type { ThemeId } from "./types";
 import { applyDeposit, applyWithdraw } from "./wallet";
 
 type Patch = Partial<Omit<Settings, "sources">>;
@@ -35,6 +36,7 @@ const memoryStorage: Pick<Storage, "getItem" | "setItem" | "removeItem"> = {
 
 const ORDER_TYPES: OrderType[] = ["MARKET", "LIMIT", "STOP", "STOP_LIMIT", "BRACKET"];
 const TIFS: TimeInForce[] = ["DAY", "GTC", "IOC", "FOK"];
+const THEMES: ThemeId[] = ["MONROE", "PAPER", "MIDNIGHT"];
 
 /** Clamp every knob a persisted book could have been saved with. */
 export function sanitizeSettings(input: Settings): Settings {
@@ -57,6 +59,7 @@ export function sanitizeSettings(input: Settings): Settings {
   }
   const orders = input.orders ?? defaultSettings.orders;
   const v = input.v ?? defaultSettings.v;
+  const appearance = input.appearance ?? defaultSettings.appearance;
   return {
     autoTrade: Boolean(input.autoTrade),
     riskPerTrade: n(input.riskPerTrade, 0.005, 0.05),
@@ -69,6 +72,13 @@ export function sanitizeSettings(input: Settings): Settings {
     timeStop: Math.round(n(input.timeStop, 8, 120)),
     scanSeconds: Math.round(n(input.scanSeconds, 1, 20)),
     dailyWithdrawCap: Math.round(n(input.dailyWithdrawCap, 100, 100000)),
+    appearance: {
+      theme: THEMES.includes(appearance.theme) ? appearance.theme : defaultSettings.appearance.theme,
+      showMascot:
+        appearance.showMascot === undefined
+          ? defaultSettings.appearance.showMascot
+          : Boolean(appearance.showMascot),
+    },
     sources: {
       INVO: source("INVO"),
       FINVIZ: source("FINVIZ"),

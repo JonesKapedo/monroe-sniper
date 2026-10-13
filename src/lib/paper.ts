@@ -40,6 +40,11 @@ export type Position = {
   openedAt: number;
   notional: number;
   venue?: "binance" | "dex";
+  entryScore?: number;
+  entryChange24h?: number;
+  entryLiquidityUsd?: number;
+  entryVolume24h?: number;
+  pairAgeHours?: number | null;
 };
 
 export type ClosedTrade = {
@@ -48,6 +53,17 @@ export type ClosedTrade = {
   pnl: number;
   reason: string;
   closedAt: number;
+  chain?: string;
+  venue?: "binance" | "dex";
+  entryPrice?: number;
+  exitPrice?: number;
+  qty?: number;
+  openedAt?: number;
+  entryScore?: number;
+  entryChange24h?: number;
+  entryLiquidityUsd?: number;
+  entryVolume24h?: number;
+  pairAgeHours?: number | null;
 };
 
 export type Book = {
@@ -306,6 +322,11 @@ export function enter(
     openedAt: now,
     notional: notionalToUse,
     venue: c.venue,
+    entryScore: c.score,
+    entryChange24h: c.change24h,
+    entryLiquidityUsd: c.liquidityUsd,
+    entryVolume24h: c.volume24h,
+    pairAgeHours: c.pairAgeHours,
   };
   const next: Book = {
     ...book,
@@ -316,7 +337,12 @@ export function enter(
   return { book: armIfNeeded(next), ok: true, note: `Paper fill ${c.symbol}` };
 }
 
-export function markBook(book: Book, prices: Record<string, number>, now = Date.now()): Book {
+export function markBook(
+  book: Book,
+  prices: Record<string, number>,
+  now = Date.now(),
+  manageExits = true,
+): Book {
   let next = book;
   const kept: Position[] = [];
   const extraTrades: ClosedTrade[] = [];
@@ -327,6 +353,10 @@ export function markBook(book: Book, prices: Record<string, number>, now = Date.
 
   for (const p of book.positions) {
     const px = prices[p.tokenId] && prices[p.tokenId] > 0 ? prices[p.tokenId] : p.mark;
+    if (!manageExits) {
+      kept.push({ ...p, mark: px });
+      continue;
+    }
     const aged = now - p.openedAt > 6 * 60 * 60 * 1000;
     
     // Outperformance & Capital Preservation: Trailing Breakeven Ratchet
@@ -350,6 +380,17 @@ export function markBook(book: Book, prices: Record<string, number>, now = Date.
         pnl,
         reason: targetHit ? "TARGET" : stopped ? (px > p.entryPrice ? "BREAKEVEN" : "STOP") : "TIME",
         closedAt: now,
+        chain: p.chain,
+        venue: p.venue,
+        entryPrice: p.entryPrice,
+        exitPrice: px,
+        qty: p.qty,
+        openedAt: p.openedAt,
+        entryScore: p.entryScore,
+        entryChange24h: p.entryChange24h,
+        entryLiquidityUsd: p.entryLiquidityUsd,
+        entryVolume24h: p.entryVolume24h,
+        pairAgeHours: p.pairAgeHours,
       });
     } else {
       kept.push({ ...p, mark: px, stop: activeStop });
@@ -380,7 +421,24 @@ export function closeOne(book: Book, id: string, now = Date.now()): Book {
     cash: book.cash + p.qty * p.mark,
     positions: book.positions.filter((x) => x.id !== id),
     trades: [
-      { id: stamp("tr"), symbol: p.symbol, pnl, reason: "MANUAL", closedAt: now },
+      {
+        id: stamp("tr"),
+        symbol: p.symbol,
+        pnl,
+        reason: "MANUAL",
+        closedAt: now,
+        chain: p.chain,
+        venue: p.venue,
+        entryPrice: p.entryPrice,
+        exitPrice: p.mark,
+        qty: p.qty,
+        openedAt: p.openedAt,
+        entryScore: p.entryScore,
+        entryChange24h: p.entryChange24h,
+        entryLiquidityUsd: p.entryLiquidityUsd,
+        entryVolume24h: p.entryVolume24h,
+        pairAgeHours: p.pairAgeHours,
+      },
       ...book.trades,
     ].slice(0, 40),
     dayPnl: book.dayPnl + pnl,
@@ -489,4 +547,3 @@ export function withdraw(book: Book, amount: number): { book: Book; ok: boolean;
   if (amount > book.cash + 0.0001) return { book, ok: false, note: "Not enough free cash" };
   return { book: { ...book, cash: book.cash - amount }, ok: true, note: "Withdrawal posted to the ledger" };
 }
-

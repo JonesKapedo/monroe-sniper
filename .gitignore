@@ -7,3 +7,4 @@ node_modules/
 # Ignoring `.vercel/` makes Vercel drop `.vercel/output/config.json` after `vite build`.
 .vercel/*
 !.vercel/output/
+.neon

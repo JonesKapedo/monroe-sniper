@@ -1,10 +1,14 @@
 #!/bin/sh
-# Revive the preview dev server. Idempotent.
+# Revive the preview dev server. Idempotent and repo-local.
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
 if curl -sf -o /dev/null --max-time 1 http://127.0.0.1:8080/; then
   exit 0
 fi
-cd /workspace
+
+cd "$ROOT_DIR"
 npm run dev > /tmp/monroe-dev.log 2>&1 &
+
 i=0
 while [ "$i" -lt 40 ]; do
   if curl -sf -o /dev/null --max-time 1 http://127.0.0.1:8080/; then

@@ -8,7 +8,7 @@ No live orders, no background service, no on-chain event stream.
 ## Phase 1 — Finish the paper-trading foundation
 
 | Item | Status |
-|------|--------|
+| ------ | -------- |
 | Market discovery (DexScreener) + dual security providers | Done |
 | Fail-closed risk gate (score, security, liquidity, slots, exposure) | Done |
 | Paper position lifecycle (stop, scale-out, trailing, time, liquidity-drop) | Done |

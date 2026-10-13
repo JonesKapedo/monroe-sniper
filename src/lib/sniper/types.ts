@@ -7,6 +7,7 @@ export type Side = "BUY" | "SELL" | "FLAT";
 export type BookSide = "LONG" | "SHORT";
 export type ExitReason = "TARGET" | "STOP" | "TIME" | "SIGNAL" | "MANUAL" | "EXPIRY";
 export type SourceId = "INVO" | "FINVIZ" | "SIMUL8OR";
+export type ThemeId = "MONROE" | "PAPER" | "MIDNIGHT";
 
 /** The desk's own route to the venue is expressed in `Settings["orders"]`. */
 export type { SourceReadout, MeshSourceStatus } from "./mesh-types.ts";
@@ -44,6 +45,7 @@ export type Settings = {
   timeStop: number;
   scanSeconds: number;
   dailyWithdrawCap: number;
+  appearance: { theme: ThemeId; showMascot: boolean };
   sources: Record<SourceId, SourceSetting>;
   /**
    * The mesh registry — one setting per source in `mesh-types`. Nested here so
@@ -257,6 +259,7 @@ export const defaultSettings: Settings = {
   timeStop: 28,
   scanSeconds: 2,
   dailyWithdrawCap: 10000,
+  appearance: { theme: "MONROE", showMascot: true },
   sources: {
     INVO: { enabled: true, weight: 1 },
     FINVIZ: { enabled: true, weight: 1.1 },
@@ -288,5 +291,11 @@ export const defaultSettings: Settings = {
 export const DEFENSIVE_DEFAULT = "off" as const;
 
 export function freshSettings(): Settings {
-  return { ...defaultSettings, mesh: emptySourceSettings(), v: { ...defaultSettings.v }, orders: { ...defaultSettings.orders } };
+  return {
+    ...defaultSettings,
+    appearance: { ...defaultSettings.appearance },
+    mesh: emptySourceSettings(),
+    v: { ...defaultSettings.v },
+    orders: { ...defaultSettings.orders },
+  };
 }

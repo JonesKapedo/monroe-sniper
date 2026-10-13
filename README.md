@@ -2,7 +2,7 @@
 
 Paper trading desk. It simulates a market minute on a cadence, sizes risk, and updates a small model after every close.
 
-This is not a broker. Deposits and withdrawals are play money kept in the browser. Nothing here promises a daily profit.
+This is not a broker. The wallet and executions are paper simulations; no real deposits, withdrawals, or orders are possible. Nothing here promises a daily profit.
 
 ## How a minute works
 
@@ -40,9 +40,9 @@ back behind the saved timestamp.
 
 The pure math carries the risk: `risk.ts` sizes and brackets, `exit.ts` picks the
 barrier, `model.ts` trains, and `catchup.ts` decides how many minutes are due. Each
-has a matching `*.test.ts` next to it. The TypeScript suites run under
-`npm test` on a Node build with type stripping; run them directly with
-`node --experimental-strip-types --test src/lib/sniper/*.test.ts`.
+has a matching `*.test.ts` next to it. The TypeScript suites run under `npm test`
+with `tsx` because the environment's built-in Node type-stripping is unavailable.
+Run the direct suite with `npx tsx --test src/lib/sniper/*.test.ts`.
 
 
 ## Live market intelligence prototype
@@ -72,3 +72,17 @@ The Scanner now routes every candidate through an auditable, paper-only risk ver
 Paper sizing is capped at 5% of current equity per idea, three simultaneous positions, and 15% aggregate exposure. Open positions use the guide's hard stop at -8%, half-position scale-out at +20%, a 10% trailing stop after the scale-out, a six-hour time stop, and a liquidity-drop guard when observed pool liquidity falls more than 30% from its peak. Decisions, simulated fills, and exit history persist in this browser.
 
 The Scanner refreshes held-token quotes roughly every 30 seconds while the page is open. If it is closed, the browser does not run a background trading process; time-based exits are checked again when the Scanner is opened. This remains a simulation and never sends live orders.
+
+## Persisted paper learning
+
+Each simulated position close is recorded in `trade_learning_events`, with the entry/exit prices, size, outcome, and market conditions used at entry. The server updates the aggregate learning threshold in the same database operation and restores that state when the desk opens. Production uses Neon through `DATABASE_URL`; local preview uses the existing PGLite fallback. The database is enabled for deployment in `.grok/app-env.json`.
+
+## Live trading status
+
+Live execution is intentionally unavailable. The app has no broker integration, signing keys, funding address, or real order rail. The live-status UI explains this explicitly; it does not accept real funds or activate live trading.
+
+## Appearance
+
+Settings offers Monroe, Paper, and Midnight color themes and a toggle for the
+human-skull desk mascot. It reacts briefly to page interactions and wallet
+simulator actions.

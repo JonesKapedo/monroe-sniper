@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import {
   type Book,
   type Candidate,
+  type ClosedTrade,
   type Memory,
   chooseEntry,
   closeOne,
@@ -23,12 +24,12 @@ import {
   type RiskEngineSettings,
   type SizingVerdict,
 } from "./sniper/risk-engine";
-import { saveWinningTrade } from "./trade-memory.functions";
-import type { AvenueCategory, DisciplineRules, RealMoneyReadiness } from "./avenues/types";
+import { saveTradeLearning } from "./trade-memory.functions";
+import type { AvenueCategory, DisciplineRules, PaperReadiness } from "./avenues/types";
 import {
   defaultDisciplineRules,
   scanAllAvenues,
-  calculateRealMoneyReadiness,
+  calculatePaperReadiness,
 } from "./avenues/engine";
 import { assessEdge } from "./intel/emh";
 
@@ -78,12 +79,13 @@ type DeskState = {
   walletHistory: WalletTx[];
   riskSettings: RiskEngineSettings;
   disciplineRules: DisciplineRules;
-  winningTradeDbCount: number;
+  tradeLearningDbCount: number;
   botStartedAt: number;
+  restoreLearningState: (memory: Memory, storedTradeCount: number) => void;
   setPower: (on: boolean) => void;
   setMode: (mode: Mode) => void;
   setTape: (rows: Candidate[], note: string) => void;
-  tick: (prices: Record<string, number>) => void;
+  tick: (prices: Record<string, number>, monitorOnly?: boolean) => void;
   autoStep: () => void;
   manualEnter: (c: Candidate) => { ok: boolean; note: string; verdict?: SizingVerdict };
   flatten: (id: string) => void;
@@ -100,7 +102,7 @@ type DeskState = {
   simulateBatchTicks: (count?: number) => void;
   updateRiskSettings: (patch: Partial<RiskEngineSettings>) => void;
   updateDisciplineRules: (patch: Partial<DisciplineRules>) => void;
-  getReadiness: () => RealMoneyReadiness;
+  getReadiness: () => PaperReadiness;
 };
 
 function pushLog(log: string[], line: string): string[] {
@@ -132,49 +134,60 @@ function venueFor(c: Candidate): "Binance Spot" | "Raydium CLMM" | "Uniswap v3" 
   return "Uniswap v3";
 }
 
-function initialExecutions(): TapeExecution[] {
-  const now = Date.now();
-  const presets: Array<{ sym: string; v: "Binance Spot" | "Raydium CLMM" | "Uniswap v3"; px: number; not: number }> = [
-    { sym: "SOL/USDT", v: "Binance Spot", px: 184.25, not: 420 },
-    { sym: "PEPE/USDT", v: "Uniswap v3", px: 0.0000108, not: 185 },
-    { sym: "WIF/SOL", v: "Raydium CLMM", px: 2.45, not: 310 },
-    { sym: "BTC/USDT", v: "Binance Spot", px: 87450.0, not: 1250 },
-    { sym: "ETH/USDT", v: "Binance Spot", px: 3120.4, not: 890 },
-    { sym: "BONK/SOL", v: "Raydium CLMM", px: 0.0000224, not: 140 },
-    { sym: "SUI/USDT", v: "Binance Spot", px: 2.84, not: 260 },
-  ];
-
-  return presets.map((p, idx) => ({
-    id: `exec-${now - idx * 14000}`,
-    hash: p.v === "Raydium CLMM" ? makeSolHash() : makeHash(),
-    ts: now - idx * 14000,
-    symbol: p.sym,
-    venue: p.v,
-    side: idx % 3 === 0 ? "SELL" : "BUY",
-    price: p.px,
-    qty: p.not / p.px,
-    notional: p.not,
-    latencyMs: 38 + (idx * 9) % 45,
-    slippageBps: Math.round(((idx % 5) * 0.3 - 0.2) * 10) / 10,
-    type: "MARKET_FLOW",
-    note: "Institutional smart router fill",
-  }));
-}
-
 function absorb(
   book: Book,
   prices: Record<string, number>,
   memory: Memory,
+  monitorOnly = false,
 ): { book: Book; memory: Memory; newTrades: typeof book.trades } {
-  const before = book.trades.length;
-  const next = markBook(book, prices);
+  const priorIds = new Set(book.trades.map((trade) => trade.id));
+  const next = markBook(book, prices, Date.now(), !monitorOnly);
   let mem = memory;
-  const born = next.trades.length - before;
-  const newTrades = next.trades.slice(0, Math.max(0, born));
+  const newTrades = next.trades.filter((trade) => !priorIds.has(trade.id));
   for (const trade of newTrades) {
     mem = learn(mem, trade.pnl);
   }
   return { book: next, memory: mem, newTrades };
+}
+
+function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>): void {
+  for (const { trade, mode } of records) {
+    void saveTradeLearning({
+      data: {
+        id: trade.id,
+        symbol: trade.symbol,
+        chain: trade.chain ?? "unknown",
+        venue: trade.venue ?? "unknown",
+        entryPrice: trade.entryPrice ?? 0,
+        exitPrice: trade.exitPrice ?? 0,
+        qty: trade.qty ?? 0,
+        pnl: trade.pnl,
+        score: trade.entryScore ?? 0,
+        change24h: trade.entryChange24h ?? 0,
+        liquidityUsd: trade.entryLiquidityUsd ?? 0,
+        volume24h: trade.entryVolume24h ?? 0,
+        pairAgeHours: trade.pairAgeHours ?? null,
+        mode,
+        reason: trade.reason,
+        openedAt: trade.openedAt ?? trade.closedAt,
+        closedAt: trade.closedAt,
+      },
+    })
+      .then(({ inserted }) => {
+        if (inserted) {
+          useDesk.setState((state) => ({
+            tradeLearningDbCount: state.tradeLearningDbCount + 1,
+          }));
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("[trade-learning] Failed to persist a closed trade:", error);
+        useDesk.setState((state) => ({
+          note: "Trade closed, but its learning record could not be saved.",
+          log: pushLog(state.log, `Trade learning save failed: ${trade.symbol}`),
+        }));
+      });
+  }
 }
 
 export const useDesk = create<DeskState>()(
@@ -188,10 +201,10 @@ export const useDesk = create<DeskState>()(
       tape: [],
       note: `Paper trading sandbox active ($${DEMO_START}). Arm power to auto-snipe.`,
       log: [`System initialized. Demo balance: $${DEMO_START}.00`, "Risk engine active: Volatility-adjusted ATR sizing"],
-      executions: initialExecutions(),
+      executions: [],
       riskSettings: defaultRiskSettings,
       disciplineRules: defaultDisciplineRules,
-      winningTradeDbCount: 0,
+      tradeLearningDbCount: 0,
       botStartedAt: Date.now() - 3600000,
       walletHistory: [
         {
@@ -205,25 +218,43 @@ export const useDesk = create<DeskState>()(
         },
       ],
 
+      restoreLearningState: (memory, storedTradeCount) =>
+        set({
+          memory,
+          tradeLearningDbCount: storedTradeCount,
+        }),
+
       setPower: (on) =>
         set((s) => ({
-          power: on,
+          power: s.mode === "live" ? false : on,
           note: on
-            ? `Armed. Sniper is actively combing global markets (${s.mode === "live" ? "LIVE" : "DEMO"}).`
-            : "Disarmed. Standing by.",
-          log: pushLog(s.log, on ? `Sniper ARMED [${s.mode.toUpperCase()}]` : "Sniper DISARMED"),
+            ? s.mode === "live"
+              ? "Live execution is unavailable. The desk only supports paper simulation."
+              : "Armed. Sniper is actively scanning simulated markets."
+            : s.demo.positions.length
+              ? "Standby. Automated entries and exits are paused; open paper positions remain held."
+              : "Standby. Automated trading is paused.",
+          log: pushLog(
+            s.log,
+            on && s.mode !== "live" ? "Sniper ARMED [DEMO]" : on ? "Live execution blocked" : "Sniper DISARMED",
+          ),
         })),
 
       setMode: (mode) =>
         set((s) => {
-          const activeBook = mode === "live" ? s.live : s.demo;
+          if (mode === "live") {
+            return {
+              mode: "demo",
+              power: false,
+              note: "Live execution is unavailable. No broker is connected; this desk is simulation-only.",
+              log: pushLog(s.log, "Live mode blocked: no broker execution integration"),
+            };
+          }
           return {
             mode,
-            note:
-              mode === "live"
-                ? `Switched to LIVE mode. Balance: $${activeBook.cash.toFixed(2)}. Real ledger active.`
-                : `Switched to DEMO mode. Paper balance: $${activeBook.cash.toFixed(2)}. Safe sandbox.`,
-            log: pushLog(s.log, `Mode switched to ${mode.toUpperCase()}`),
+            power: mode === "demo" ? s.power : false,
+            note: `Switched to paper simulation. Balance: $${s.demo.cash.toFixed(2)}.`,
+            log: pushLog(s.log, "Mode switched to DEMO"),
           };
         }),
 
@@ -256,80 +287,58 @@ export const useDesk = create<DeskState>()(
 
       getReadiness: () => {
         const s = get();
-        return calculateRealMoneyReadiness(s[s.mode]);
+        return calculatePaperReadiness(s[s.mode]);
       },
 
-      tick: (prices) =>
-        set((s) => {
-          const demoAbs = absorb(s.demo, prices, s.memory);
-          const liveAbs = absorb(s.live, prices, demoAbs.memory);
+      tick: (prices, monitorOnly = false) => {
+        const s = get();
+        const demoAbs = absorb(s.demo, prices, s.memory, monitorOnly);
+        const liveAbs = absorb(s.live, prices, demoAbs.memory, monitorOnly);
+        const closedTrades = [
+          ...demoAbs.newTrades.map((trade) => ({ trade, mode: "demo" as const })),
+          ...liveAbs.newTrades.map((trade) => ({ trade, mode: "live" as const })),
+        ];
+        let nextExecs = s.executions;
+        let nextLog = s.log;
 
-          let nextExecs = s.executions;
-          let nextLog = s.log;
-          const allNewTrades = [...demoAbs.newTrades, ...liveAbs.newTrades];
-          let extraWins = 0;
+        for (const { trade, mode } of closedTrades) {
+          const isProfit = trade.pnl > 0;
+          const verb =
+            trade.reason === "TARGET" ? "TAKE PROFIT" : trade.reason === "STOP" ? "STOP LOSS" : "CLOSED";
+          const noteLine = `${verb}: ${trade.symbol} ${isProfit ? "+" : ""}$${trade.pnl.toFixed(2)} (${trade.reason})`;
+          nextLog = pushLog(nextLog, noteLine);
 
-          for (const tr of allNewTrades) {
-            const isProfit = tr.pnl > 0;
-            const verb = tr.reason === "TARGET" ? "TAKE PROFIT" : tr.reason === "STOP" ? "STOP LOSS" : "CLOSED";
-            const noteLine = `${verb}: ${tr.symbol} ${isProfit ? "+" : ""}$${tr.pnl.toFixed(2)} (${tr.reason})`;
-            nextLog = pushLog(nextLog, noteLine);
-
-            const exec: TapeExecution = {
-              id: `exit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              hash: tr.symbol.includes("SOL") || tr.symbol.includes("WIF") ? makeSolHash() : makeHash(),
-              ts: Date.now(),
-              symbol: tr.symbol,
-              venue: tr.symbol.includes("USDT") ? "Binance Spot" : "Raydium CLMM",
-              side: "SELL",
-              price: tr.pnl,
-              qty: 1,
-              notional: Math.abs(tr.pnl),
-              latencyMs: 38 + Math.floor(Math.random() * 25),
-              slippageBps: 0.3,
-              type: isProfit ? "BOT_TAKE_PROFIT" : "BOT_STOP",
-              note: noteLine,
-            };
-            nextExecs = [exec, ...nextExecs].slice(0, 100);
-
-            // Automatically archive winning trades in the database as reference memories!
-            if (isProfit) {
-              extraWins++;
-              void saveWinningTrade({
-                data: {
-                  id: tr.id,
-                  symbol: tr.symbol,
-                  chain: tr.symbol.includes("SOL") ? "solana" : "ethereum",
-                  venue: tr.symbol.includes("USDT") ? "Binance Spot" : "Raydium CLMM",
-                  entryPrice: 1,
-                  exitPrice: 1 + tr.pnl / 20,
-                  qty: 1,
-                  pnl: tr.pnl,
-                  volatility: 0.045,
-                  score: s.memory.minScore,
-                  mode: s.mode,
-                  reason: tr.reason,
-                  closedAt: tr.closedAt,
-                },
-              }).catch(() => {
-                // Ignore DB logging failure in isolated environments
-              });
-            }
-          }
-
-          return {
-            demo: demoAbs.book,
-            live: liveAbs.book,
-            memory: liveAbs.memory,
-            executions: nextExecs,
-            log: nextLog,
-            winningTradeDbCount: s.winningTradeDbCount + extraWins,
+          const exec: TapeExecution = {
+            id: `exit-${trade.closedAt}-${Math.random().toString(36).slice(2, 6)}`,
+            hash: trade.symbol.includes("SOL") || trade.symbol.includes("WIF") ? makeSolHash() : makeHash(),
+            ts: trade.closedAt,
+            symbol: trade.symbol,
+            venue: trade.symbol.includes("USDT") ? "Binance Spot" : "Raydium CLMM",
+            side: "SELL",
+            price: trade.exitPrice ?? 0,
+            qty: trade.qty ?? 0,
+            notional: Math.abs(trade.pnl),
+            latencyMs: 38 + Math.floor(Math.random() * 25),
+            slippageBps: 0.3,
+            type: isProfit ? "BOT_TAKE_PROFIT" : "BOT_STOP",
+            note: `[${mode.toUpperCase()}] ${noteLine}`,
           };
-        }),
+          nextExecs = [exec, ...nextExecs].slice(0, 100);
+        }
+
+        set({
+          demo: demoAbs.book,
+          live: liveAbs.book,
+          memory: liveAbs.memory,
+          executions: nextExecs,
+          log: nextLog,
+        });
+        archiveClosedTrades(closedTrades);
+      },
 
       autoStep: () => {
         const s = get();
-        if (!s.power) return;
+        if (!s.power || s.mode !== "demo") return;
         const targetKey = s.mode;
         const currentBook = s[targetKey];
         if (currentBook.positions.length >= s.riskSettings.maxPositions) return;
@@ -483,6 +492,9 @@ export const useDesk = create<DeskState>()(
 
       manualEnter: (c: Candidate) => {
         const s = get();
+        if (s.mode !== "demo") {
+          return { ok: false, note: "Live execution is unavailable; this desk only supports paper simulation." };
+        }
         const targetKey = s.mode;
         const currentBook = s[targetKey];
 
@@ -535,40 +547,49 @@ export const useDesk = create<DeskState>()(
         return { ok: true, note, verdict };
       },
 
-      flatten: (id: string) =>
-        set((s) => {
-          const key = s.mode;
-          const book = closeOne(s[key], id);
-          const closed = book.trades[0];
-          const memory =
-            closed && book.trades.length !== s[key].trades.length
-              ? learn(s.memory, closed.pnl)
-              : s.memory;
-          return {
-            [key]: book,
-            memory,
-            note: closed ? `Flattened ${closed.symbol}: PnL $${closed.pnl.toFixed(2)}` : "Position closed",
-            log: pushLog(s.log, closed ? `Flattened ${closed.symbol} (${closed.pnl >= 0 ? "+" : ""}$${closed.pnl.toFixed(2)})` : "Flattened"),
-          };
-        }),
+      flatten: (id: string) => {
+        const s = get();
+        const mode = s.mode;
+        const book = closeOne(s[mode], id);
+        const didClose = book.positions.length < s[mode].positions.length;
+        const closed = didClose ? book.trades[0] : undefined;
+        const memory = didClose && closed ? learn(s.memory, closed.pnl) : s.memory;
+        set({
+          [mode]: book,
+          memory,
+          note: didClose && closed ? `Flattened ${closed.symbol}: PnL $${closed.pnl.toFixed(2)}` : "Position closed",
+          log: pushLog(
+            s.log,
+            didClose && closed
+              ? `Flattened ${closed.symbol} (${closed.pnl >= 0 ? "+" : ""}$${closed.pnl.toFixed(2)})`
+              : "Flattened",
+          ),
+        });
+        if (didClose && closed) archiveClosedTrades([{ trade: closed, mode }]);
+      },
 
-      flattenAll: () =>
-        set((s) => {
-          const key = s.mode;
-          let book = s[key];
-          let mem = s.memory;
-          for (const pos of book.positions) {
-            book = closeOne(book, pos.id);
-            const closed = book.trades[0];
-            if (closed) mem = learn(mem, closed.pnl);
+      flattenAll: () => {
+        const s = get();
+        const mode = s.mode;
+        let book = s[mode];
+        let memory = s.memory;
+        const closedTrades: ClosedTrade[] = [];
+        for (const position of [...book.positions]) {
+          book = closeOne(book, position.id);
+          const closed = book.trades[0];
+          if (closed) {
+            closedTrades.push(closed);
+            memory = learn(memory, closed.pnl);
           }
-          return {
-            [key]: book,
-            memory: mem,
-            note: "All open positions flattened.",
-            log: pushLog(s.log, `Flattened all [${s.mode.toUpperCase()}]`),
-          };
-        }),
+        }
+        set({
+          [mode]: book,
+          memory,
+          note: "All open paper positions flattened.",
+          log: pushLog(s.log, `Flattened all [${mode.toUpperCase()}]`),
+        });
+        archiveClosedTrades(closedTrades.map((trade) => ({ trade, mode })));
+      },
 
       halt: (on: boolean) =>
         set((s) => ({
@@ -578,15 +599,20 @@ export const useDesk = create<DeskState>()(
           log: pushLog(s.log, on ? "Kill switch ON" : "Kill switch cleared"),
         })),
 
-      fund: (side, amount, address = "", network = "Ethereum (ERC-20)") => {
+      fund: (side, amount) => {
         const s = get();
-        const mode = s.mode;
+        if (s.mode === "live") {
+          return {
+            ok: false,
+            note: "External deposits and withdrawals are unavailable; this app has no connected broker or funds rail.",
+          };
+        }
         if (!(amount > 0)) {
           return { ok: false, note: "Amount must be greater than zero." };
         }
 
         const now = Date.now();
-        const targetBook = mode === "live" ? s.live : s.demo;
+        const targetBook = s.demo;
 
         if (side === "in") {
           const updatedBook = deposit(targetBook, amount);
@@ -595,27 +621,20 @@ export const useDesk = create<DeskState>()(
             ts: now,
             type: "DEPOSIT",
             amount,
-            mode,
-            network,
+            mode: "demo",
+            network: "Paper simulation",
             status: "CONFIRMED",
-            note: `Deposit of $${amount.toFixed(2)} into ${mode.toUpperCase()} wallet`,
+            note: `Paper balance increased by $${amount.toFixed(2)}.`,
           };
           set({
-            [mode === "live" ? "live" : "demo"]: updatedBook,
+            demo: updatedBook,
             walletHistory: [tx, ...s.walletHistory],
-            note: `Deposited $${amount.toFixed(2)} into ${mode} wallet.`,
-            log: pushLog(s.log, `${mode.toUpperCase()} Deposit +$${amount.toFixed(2)}`),
+            note: `Added $${amount.toFixed(2)} to the paper balance.`,
+            log: pushLog(s.log, `Paper balance +$${amount.toFixed(2)}`),
           });
-          return { ok: true, note: `Successfully deposited $${amount.toFixed(2)}.` };
+          return { ok: true, note: `Added $${amount.toFixed(2)} to the paper balance.` };
         }
 
-        const cleanAddr = address.trim();
-        if (!cleanAddr) {
-          return { ok: false, note: "Destination withdrawal address is required." };
-        }
-        if (cleanAddr.length < 10) {
-          return { ok: false, note: "Destination address appears invalid (too short)." };
-        }
         if (amount > targetBook.cash + 0.0001) {
           return { ok: false, note: `Insufficient free cash. Available: $${targetBook.cash.toFixed(2)}` };
         }
@@ -625,33 +644,30 @@ export const useDesk = create<DeskState>()(
           return wResult;
         }
 
-        const shortAddr = cleanAddr.length > 14 ? `${cleanAddr.slice(0, 7)}…${cleanAddr.slice(-5)}` : cleanAddr;
         const tx: WalletTx = {
           id: `tx-wth-${now}`,
           ts: now,
           type: "WITHDRAWAL",
           amount,
-          address: cleanAddr,
-          network,
-          mode,
+          mode: "demo",
+          network: "Paper simulation",
           status: "CONFIRMED",
-          note: `Withdrawal of $${amount.toFixed(2)} to ${shortAddr} on ${network}`,
+          note: `Paper balance decreased by $${amount.toFixed(2)}.`,
         };
 
         set({
-          [mode === "live" ? "live" : "demo"]: wResult.book,
+          demo: wResult.book,
           walletHistory: [tx, ...s.walletHistory],
-          note: `Withdrew $${amount.toFixed(2)} to ${shortAddr}.`,
-          log: pushLog(s.log, `${mode.toUpperCase()} Withdraw -$${amount.toFixed(2)} to ${shortAddr}`),
+          note: `Removed $${amount.toFixed(2)} from the paper balance.`,
+          log: pushLog(s.log, `Paper balance -$${amount.toFixed(2)}`),
         });
-        return { ok: true, note: `Withdrawal of $${amount.toFixed(2)} confirmed.` };
+        return { ok: true, note: `Removed $${amount.toFixed(2)} from the paper balance.` };
       },
 
       resetDemo: () =>
         set((s) => ({
           demo: emptyBook(DEMO_START),
-          memory: emptyMemory(),
-          note: `Demo desk reset to $${DEMO_START}.00. Self-learning memory reset.`,
+          note: `Paper ledger reset to $${DEMO_START}.00. Archived trade learning remains intact.`,
           log: pushLog(s.log, `Demo reset to $${DEMO_START}.00`),
         })),
 
@@ -666,6 +682,7 @@ export const useDesk = create<DeskState>()(
         }),
 
       simulateBatchTicks: (count = 5) => {
+        if (!get().power || get().mode !== "demo") return;
         for (let i = 0; i < count; i++) {
           const s = get();
           const targetKey = s.mode;
@@ -704,14 +721,18 @@ export const useDesk = create<DeskState>()(
         walletHistory: s.walletHistory,
         riskSettings: s.riskSettings,
         disciplineRules: s.disciplineRules,
-        winningTradeDbCount: s.winningTradeDbCount,
+        tradeLearningDbCount: s.tradeLearningDbCount,
         botStartedAt: s.botStartedAt,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
-        if (state && state.demo && state.demo.cash === 100 && state.demo.trades.length === 0) {
-          state.demo.cash = 500;
-          state.demo.peakEquity = 500;
+        if (state) {
+          state.mode = "demo";
+          state.power = false;
+          if (state.demo && state.demo.cash === 100 && state.demo.trades.length === 0) {
+            state.demo.cash = DEMO_START;
+            state.demo.peakEquity = DEMO_START;
+          }
         }
       },
     },

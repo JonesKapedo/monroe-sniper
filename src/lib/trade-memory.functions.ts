@@ -1,7 +1,16 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getSql } from "./db";
+import { dbSource, getSql } from "./db";
 
-export type StoredWinningTrade = {
+export type TradeLearningState = {
+  seen: number;
+  wins: number;
+  losses: number;
+  realized: number;
+  minScore: number;
+  dbSource: "neon" | "pglite";
+};
+
+export type TradeLearningInput = {
   id: string;
   symbol: string;
   chain: string;
@@ -10,233 +19,159 @@ export type StoredWinningTrade = {
   exitPrice: number;
   qty: number;
   pnl: number;
-  roiPct: number;
-  volatility: number;
-  atr: number;
   score: number;
-  features: number[];
-  mode: string;
+  change24h: number;
+  liquidityUsd: number;
+  volume24h: number;
+  pairAgeHours: number | null;
+  mode: "demo" | "live";
   reason: string;
+  openedAt: number;
   closedAt: number;
 };
 
-let tableInitialized = false;
-async function ensureTable(sql: Awaited<ReturnType<typeof getSql>>) {
-  if (tableInitialized) return;
-  await sql`
-    CREATE TABLE IF NOT EXISTS winning_trades (
-      id TEXT PRIMARY KEY,
-      symbol TEXT NOT NULL,
-      chain TEXT NOT NULL,
-      venue TEXT NOT NULL,
-      entry_price NUMERIC NOT NULL,
-      exit_price NUMERIC NOT NULL,
-      qty NUMERIC NOT NULL,
-      pnl NUMERIC NOT NULL,
-      roi_pct NUMERIC NOT NULL,
-      volatility NUMERIC NOT NULL,
-      atr NUMERIC NOT NULL,
-      score NUMERIC NOT NULL,
-      features JSONB NOT NULL DEFAULT '[]'::jsonb,
-      mode TEXT NOT NULL DEFAULT 'demo',
-      reason TEXT NOT NULL,
-      closed_at BIGINT NOT NULL
-    );
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS idx_winning_trades_symbol ON winning_trades(symbol);`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_winning_trades_pnl ON winning_trades(pnl);`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_winning_trades_closed_at ON winning_trades(closed_at DESC);`;
-  tableInitialized = true;
+function normalizeTrade(input: TradeLearningInput): TradeLearningInput {
+  const strings = [input.id, input.symbol, input.chain, input.venue, input.reason];
+  if (strings.some((value) => typeof value !== "string" || value.trim() === "")) {
+    throw new Error("Trade learning records require non-empty identity fields.");
+  }
+  if (input.id.length > 128 || input.symbol.length > 32 || input.chain.length > 32 ||
+      input.venue.length > 64 || input.reason.length > 32) {
+    throw new Error("Trade learning record contains an overlong identity field.");
+  }
+  if (input.mode !== "demo" && input.mode !== "live") {
+    throw new Error("Trade learning record mode is invalid.");
+  }
+
+  const finiteValues = [
+    input.entryPrice,
+    input.exitPrice,
+    input.qty,
+    input.pnl,
+    input.score,
+    input.change24h,
+    input.liquidityUsd,
+    input.volume24h,
+    input.openedAt,
+    input.closedAt,
+  ];
+  if (finiteValues.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+    throw new Error("Trade learning records require finite numeric values.");
+  }
+  if (input.pairAgeHours !== null &&
+      (typeof input.pairAgeHours !== "number" || !Number.isFinite(input.pairAgeHours))) {
+    throw new Error("Trade learning record pair age must be finite or null.");
+  }
+  if (input.entryPrice < 0 || input.exitPrice < 0 || input.qty < 0 ||
+      input.liquidityUsd < 0 || input.volume24h < 0 || input.score < 0 || input.score > 100) {
+    throw new Error("Trade learning record contains an out-of-range value.");
+  }
+  return {
+    ...input,
+    id: input.id.trim(),
+    symbol: input.symbol.trim().slice(0, 32),
+    chain: input.chain.trim().slice(0, 32),
+    venue: input.venue.trim().slice(0, 64),
+    reason: input.reason.trim().slice(0, 32),
+  };
 }
 
-export const saveWinningTrade = createServerFn({ method: "POST" })
-  .validator(
-    (input: {
-      id: string;
-      symbol: string;
-      chain?: string;
-      venue?: string;
-      entryPrice: number;
-      exitPrice: number;
-      qty: number;
-      pnl: number;
-      volatility?: number;
-      atr?: number;
-      score?: number;
-      features?: number[];
-      mode?: string;
-      reason?: string;
-      closedAt?: number;
-    }) => ({
-      id: String(input.id || `tr-${Date.now()}`),
-      symbol: String(input.symbol || "UNKNOWN").slice(0, 32),
-      chain: String(input.chain || "solana").slice(0, 32),
-      venue: String(input.venue || "Raydium CLMM").slice(0, 32),
-      entryPrice: Number(input.entryPrice) || 0,
-      exitPrice: Number(input.exitPrice) || 0,
-      qty: Number(input.qty) || 0,
-      pnl: Number(input.pnl) || 0,
-      volatility: Number(input.volatility) || 0.02,
-      atr: Number(input.atr) || 0,
-      score: Number(input.score) || 75,
-      features: Array.isArray(input.features) ? input.features.map(Number) : [],
-      mode: String(input.mode || "demo"),
-      reason: String(input.reason || "TARGET"),
-      closedAt: Number(input.closedAt) || Date.now(),
-    }),
-  )
-  .handler(async ({ data }) => {
-    try {
-      const sql = await getSql();
-      await ensureTable(sql);
-      const roiPct =
-        data.entryPrice > 0
-          ? ((data.exitPrice - data.entryPrice) / data.entryPrice) * 100
-          : 0;
+function learningState(row: {
+  seen: number | string;
+  wins: number | string;
+  losses: number | string;
+  realized: number | string;
+  min_score: number | string;
+}): TradeLearningState {
+  return {
+    seen: Number(row.seen),
+    wins: Number(row.wins),
+    losses: Number(row.losses),
+    realized: Number(row.realized),
+    minScore: Number(row.min_score),
+    dbSource,
+  };
+}
 
-      await sql`
-        INSERT INTO winning_trades (
-          id, symbol, chain, venue, entry_price, exit_price, qty,
-          pnl, roi_pct, volatility, atr, score, features, mode, reason, closed_at
+export const saveTradeLearning = createServerFn({ method: "POST" })
+  .validator(normalizeTrade)
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    const rows = await sql<{
+      inserted: boolean;
+      seen: number | string;
+      wins: number | string;
+      losses: number | string;
+      realized: number | string;
+      min_score: number | string;
+    }>`
+      WITH inserted AS (
+        INSERT INTO trade_learning_events (
+          id, symbol, chain, venue, entry_price, exit_price, qty, pnl, score,
+          change_24h, liquidity_usd, volume_24h, pair_age_hours, mode, reason,
+          opened_at, closed_at
         ) VALUES (
           ${data.id}, ${data.symbol}, ${data.chain}, ${data.venue},
-          ${data.entryPrice}, ${data.exitPrice}, ${data.qty},
-          ${data.pnl}, ${roiPct}, ${data.volatility}, ${data.atr},
-          ${data.score}, ${JSON.stringify(data.features)}, ${data.mode},
-          ${data.reason}, ${data.closedAt}
+          ${data.entryPrice}, ${data.exitPrice}, ${data.qty}, ${data.pnl},
+          ${data.score}, ${data.change24h}, ${data.liquidityUsd},
+          ${data.volume24h}, ${data.pairAgeHours}, ${data.mode}, ${data.reason},
+          ${data.openedAt}, ${data.closedAt}
         )
         ON CONFLICT (id) DO NOTHING
-      `;
-      return { ok: true, id: data.id };
-    } catch (err) {
-      console.error("[trade-memory] Failed to store winning trade:", err);
-      return { ok: false, error: err instanceof Error ? err.message : "DB error" };
-    }
-  });
-
-export const getWinningTradeMemories = createServerFn({ method: "POST" })
-  .validator((input: { limit?: number }) => ({
-    limit: Math.max(1, Math.min(100, Number(input?.limit || 20))),
-  }))
-  .handler(async ({ data }): Promise<{ memories: StoredWinningTrade[]; totalStored: number }> => {
-    try {
-      const sql = await getSql();
-      await ensureTable(sql);
-      const rows = await sql<{
-        id: string;
-        symbol: string;
-        chain: string;
-        venue: string;
-        entry_price: string | number;
-        exit_price: string | number;
-        qty: string | number;
-        pnl: string | number;
-        roi_pct: string | number;
-        volatility: string | number;
-        atr: string | number;
-        score: string | number;
-        features: number[] | string;
-        mode: string;
-        reason: string;
-        closed_at: string | number;
-      }>`
-        SELECT * FROM winning_trades
-        ORDER BY closed_at DESC
-        LIMIT ${data.limit}
-      `;
-
-      const countResult = await sql<{ count: string | number }>`
-        SELECT COUNT(*) as count FROM winning_trades
-      `;
-      const totalStored = Number(countResult[0]?.count ?? 0);
-
-      const memories: StoredWinningTrade[] = rows.map((r) => ({
-        id: String(r.id),
-        symbol: String(r.symbol),
-        chain: String(r.chain),
-        venue: String(r.venue),
-        entryPrice: Number(r.entry_price),
-        exitPrice: Number(r.exit_price),
-        qty: Number(r.qty),
-        pnl: Number(r.pnl),
-        roiPct: Number(r.roi_pct),
-        volatility: Number(r.volatility),
-        atr: Number(r.atr),
-        score: Number(r.score),
-        features: typeof r.features === "string" ? JSON.parse(r.features) : (r.features ?? []),
-        mode: String(r.mode),
-        reason: String(r.reason),
-        closedAt: Number(r.closed_at),
-      }));
-
-      return { memories, totalStored };
-    } catch (err) {
-      console.error("[trade-memory] Failed to load winning memories:", err);
-      return { memories: [], totalStored: 0 };
-    }
-  });
-
-export const getTradeAnalytics = createServerFn({ method: "POST" })
-  .handler(async (): Promise<{
-    totalWins: number;
-    totalProfit: number;
-    avgWin: number;
-    highestRoi: number;
-    topSymbols: Array<{ symbol: string; count: number; totalPnl: number }>;
-  }> => {
-    try {
-      const sql = await getSql();
-      await ensureTable(sql);
-      const summary = await sql<{
-        total_wins: string | number;
-        total_profit: string | number;
-        avg_win: string | number;
-        highest_roi: string | number;
-      }>`
+        RETURNING pnl
+      ),
+      updated AS (
+        INSERT INTO trade_learning_state (
+          singleton, seen, wins, losses, realized, min_score
+        )
         SELECT
-          COUNT(*) as total_wins,
-          COALESCE(SUM(pnl), 0) as total_profit,
-          COALESCE(AVG(pnl), 0) as avg_win,
-          COALESCE(MAX(roi_pct), 0) as highest_roi
-        FROM winning_trades
-        WHERE pnl > 0
-      `;
-
-      const topSyms = await sql<{
-        symbol: string;
-        count: string | number;
-        total_pnl: string | number;
-      }>`
-        SELECT
-          symbol,
-          COUNT(*) as count,
-          SUM(pnl) as total_pnl
-        FROM winning_trades
-        GROUP BY symbol
-        ORDER BY total_pnl DESC
-        LIMIT 5
-      `;
-
-      const row = summary[0];
-      return {
-        totalWins: Number(row?.total_wins ?? 0),
-        totalProfit: Number(row?.total_profit ?? 0),
-        avgWin: Number(row?.avg_win ?? 0),
-        highestRoi: Number(row?.highest_roi ?? 0),
-        topSymbols: topSyms.map((s) => ({
-          symbol: String(s.symbol),
-          count: Number(s.count),
-          totalPnl: Number(s.total_pnl),
-        })),
-      };
-    } catch (err) {
-      console.error("[trade-memory] Analytics query failed:", err);
-      return {
-        totalWins: 0,
-        totalProfit: 0,
-        avgWin: 0,
-        highestRoi: 0,
-        topSymbols: [],
-      };
-    }
+          TRUE, 1, (pnl > 0)::INTEGER, (pnl < 0)::INTEGER, pnl, 62
+        FROM inserted
+        ON CONFLICT (singleton) DO UPDATE SET
+          seen = trade_learning_state.seen + 1,
+          wins = trade_learning_state.wins + EXCLUDED.wins,
+          losses = trade_learning_state.losses + EXCLUDED.losses,
+          realized = trade_learning_state.realized + EXCLUDED.realized,
+          min_score = CASE
+            WHEN trade_learning_state.seen + 1 < 4 THEN trade_learning_state.min_score
+            WHEN (trade_learning_state.wins + EXCLUDED.wins)::DOUBLE PRECISION /
+              (trade_learning_state.seen + 1) < 0.4
+              OR trade_learning_state.realized + EXCLUDED.realized < 0
+              THEN LEAST(85, 62 + 2 * (trade_learning_state.seen + 1 - 3))
+            WHEN (trade_learning_state.wins + EXCLUDED.wins)::DOUBLE PRECISION /
+              (trade_learning_state.seen + 1) > 0.55
+              AND trade_learning_state.realized + EXCLUDED.realized > 0
+              THEN GREATEST(55, 62 - (trade_learning_state.seen + 1 - 3))
+            ELSE 62
+          END
+        RETURNING seen, wins, losses, realized, min_score
+      )
+      SELECT TRUE AS inserted, seen, wins, losses, realized, min_score
+      FROM updated
+      UNION ALL
+      SELECT FALSE AS inserted, seen, wins, losses, realized, min_score
+      FROM trade_learning_state
+      WHERE singleton = TRUE AND NOT EXISTS (SELECT 1 FROM inserted)
+    `;
+    const row = rows[0];
+    if (!row) throw new Error("Trade learning write completed without a state result.");
+    return { inserted: row.inserted, state: learningState(row) };
   });
+
+export const getTradeLearningState = createServerFn({ method: "GET" }).handler(async () => {
+  const sql = await getSql();
+  const rows = await sql<{
+    seen: number | string;
+    wins: number | string;
+    losses: number | string;
+    realized: number | string;
+    min_score: number | string;
+  }>`
+    SELECT seen, wins, losses, realized, min_score
+    FROM trade_learning_state
+    WHERE singleton = TRUE
+  `;
+  const row = rows[0];
+  if (!row) throw new Error("Trade learning state has not been initialized by the database migration.");
+  return learningState(row);
+});

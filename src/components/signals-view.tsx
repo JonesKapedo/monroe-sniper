@@ -243,7 +243,7 @@ export function SignalsView() {
       {/* Page Header */}
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-2xl font-bold tracking-tight md:text-3xl text-cream">
               Signal Intelligence & Trade Reports
             </h1>

@@ -21,7 +21,11 @@ import { useDesk } from "@/lib/desk-store";
 import { useDyorStore } from "@/lib/dyor/store";
 import { equity } from "@/lib/paper";
 import { Button } from "@/components/ui";
+import { Mascot } from "@/components/mascot";
+import { defaultSettings } from "@/lib/sniper/types";
 import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
+import { StandbyPositionsModal } from "@/components/standby-positions-modal";
+import { getTradeLearningState } from "@/lib/trade-memory.functions";
 
 import { loadFeeds } from "@/lib/market.functions";
 
@@ -44,26 +48,32 @@ export function Frame({ children }: { children: ReactNode }) {
     let tickCount = 0;
     const loop = async () => {
       if (cancel) return;
-      const book = useSniper.getState().book;
-      const interval = Math.max(1, book.settings.scanSeconds) * 1000;
-      const due = catchUpTicks(Date.now(), book.lastWall, book.settings.scanSeconds);
-      if (due > 0) useSniper.getState().runTicks(due);
-
+      const sniperBook = useSniper.getState().book;
+      const interval = Math.max(1, sniperBook.settings.scanSeconds) * 1000;
       const desk = useDesk.getState();
       tickCount++;
 
-      // Continuous background market fetching & simulation training on real prices
-      if (desk.power && tickCount % 3 === 0) {
+      if (desk.power) {
+        const due = catchUpTicks(Date.now(), sniperBook.lastWall, sniperBook.settings.scanSeconds);
+        if (due > 0) useSniper.getState().runTicks(due);
+      } else {
+        useSniper.getState().runTicks(0);
+      }
+
+      // Standby refreshes held-position marks without applying automatic exits.
+      if ((desk.power || desk.demo.positions.length > 0) && tickCount % 3 === 0) {
         try {
           const feeds = await loadFeeds({ data: {} });
           const combined = [...feeds.binance, ...feeds.dex];
           if (combined.length) {
-            desk.setTape(combined, feeds.note);
+            const current = useDesk.getState();
+            current.setTape(combined, feeds.note);
             const prices: Record<string, number> = {};
             for (const c of combined) {
               prices[c.id] = c.priceUsd;
             }
-            desk.tick(prices);
+            if (current.power) current.tick(prices);
+            else if (current.demo.positions.length > 0) current.tick(prices, true);
           }
         } catch {
           // Graceful fallback during momentary rate limit
@@ -71,9 +81,7 @@ export function Frame({ children }: { children: ReactNode }) {
       }
 
       // Auto-step desk sniper if power is on
-      if (desk.power) {
-        desk.autoStep();
-      }
+      if (useDesk.getState().power) useDesk.getState().autoStep();
 
       timer = window.setTimeout(loop, interval);
     };
@@ -85,6 +93,29 @@ export function Frame({ children }: { children: ReactNode }) {
       ]);
       if (cancel) return;
       setReady(true);
+      void getTradeLearningState()
+        .then((state) => {
+          useDesk.getState().restoreLearningState(
+            {
+              seen: state.seen,
+              wins: state.wins,
+              losses: state.losses,
+              realized: state.realized,
+              minScore: state.minScore,
+            },
+            state.seen,
+          );
+        })
+        .catch((error: unknown) => {
+          console.error("[trade-learning] Failed to restore database learning state:", error);
+          useDesk.setState((desk) => ({
+            note: "Database learning state is unavailable; local paper learning remains active.",
+            log: ["Trade learning state could not be loaded from the database.", ...desk.log].slice(
+              0,
+              50,
+            ),
+          }));
+        });
       loop();
     })();
     return () => {
@@ -109,6 +140,18 @@ function Shell({ children }: { children: ReactNode }) {
   const book = useSniper((s) => s.book);
   const unlocked = useSniper((s) => s.unlocked);
   const locked = Boolean(book.pinHash) && !unlocked;
+  const appearance = book.settings.appearance ?? defaultSettings.appearance;
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = appearance.theme.toLowerCase();
+    const themeColor =
+      appearance.theme === "PAPER"
+        ? "#f4f1e8"
+        : appearance.theme === "MIDNIGHT"
+          ? "#000000"
+          : "#10120e";
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themeColor);
+  }, [appearance.theme]);
 
   // Real-time ticking clock for Nairobi EAT (UTC+3) timezone
   const [nowTs, setNowTs] = useState(Date.now());
@@ -132,14 +175,26 @@ function Shell({ children }: { children: ReactNode }) {
   const nairobi = formatNairobiTime(botStartedAt, nowTs);
   const readiness = getReadiness ? getReadiness() : null;
   const [showLiveModal, setShowLiveModal] = useState(false);
-  const [justActivatedLive, setJustActivatedLive] = useState(false);
+  const [showStandbyModal, setShowStandbyModal] = useState(false);
+  const requestStandby = () => {
+    if (!power) {
+      setPower(true);
+      return;
+    }
+    setPower(false);
+    const openPositions = useDesk.getState().demo.positions;
+    if (openPositions.length) setShowStandbyModal(true);
+  };
 
   return (
-    <div className={cn("min-h-screen bg-ink text-cream md:pl-56 transition-colors duration-700", justActivatedLive && "live-flash-screen")}>
+    <div className="min-h-screen bg-ink text-cream md:pl-56">
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-56 flex-col border-r border-line bg-panel md:flex">
         <div className="border-b border-line px-5 py-5">
           <div className="flex items-center justify-between">
-            <p className="text-xs tracking-widest text-brass uppercase">Monroe</p>
+            <p className="flex items-center gap-1.5 text-xs tracking-widest text-brass uppercase">
+              {appearance.showMascot ? <Mascot className="size-8 shrink-0" /> : null}
+              Monroe
+            </p>
             <span
               className={cn(
                 "rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wider uppercase",
@@ -148,13 +203,16 @@ function Shell({ children }: { children: ReactNode }) {
                   : "border border-emerald-500/40 bg-emerald-500/20 text-emerald-300",
               )}
             >
-              {mode.toUpperCase()}
+              {mode === "live" ? "LOCKED" : "PAPER"}
             </span>
           </div>
           <p className="mt-1 text-lg font-medium">Sniper Bot</p>
 
           {/* Nairobi Timezone Badge in Sidebar */}
-          <div className="mt-2.5 flex flex-col gap-0.5 rounded-lg border border-line/60 bg-panel-2 px-2.5 py-1.5 text-[11px]" suppressHydrationWarning>
+          <div
+            className="mt-2.5 flex flex-col gap-0.5 rounded-lg border border-line/60 bg-panel-2 px-2.5 py-1.5 text-[11px]"
+            suppressHydrationWarning
+          >
             <div className="flex items-center justify-between text-brass">
               <span className="font-medium">Nairobi EAT</span>
               <span className="rounded bg-emerald-500/20 px-1 py-0.2 text-[10px] font-bold text-emerald-300">
@@ -173,11 +231,11 @@ function Shell({ children }: { children: ReactNode }) {
           ))}
         </nav>
 
-        {/* Readiness progress in sidebar */}
+        {/* Paper discipline progress */}
         {readiness && (
           <div className="border-t border-line px-4 py-3" suppressHydrationWarning>
             <div className="flex items-center justify-between text-[11px]">
-              <span className="text-faint">Real Money Readiness</span>
+              <span className="text-faint">Paper Discipline</span>
               <span className="font-semibold text-emerald-400">{readiness.readinessScore}%</span>
             </div>
             <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-line">
@@ -187,7 +245,7 @@ function Shell({ children }: { children: ReactNode }) {
               />
             </div>
             <p className="mt-1 text-[10px] text-faint">
-              {readiness.completedDemoTrades}/{readiness.targetDemoTrades} demo trades trained
+              {readiness.completedDemoTrades}/{readiness.targetDemoTrades} paper trades recorded
             </p>
           </div>
         )}
@@ -196,18 +254,22 @@ function Shell({ children }: { children: ReactNode }) {
           <div className="rounded-lg border border-line bg-panel-2 p-2.5" suppressHydrationWarning>
             <div className="flex items-center justify-between text-xs text-faint">
               <span>Active Mode</span>
-              <span className={mode === "live" ? "text-amber-400 font-medium" : "text-gain font-medium"}>
-                {mode === "live" ? "Live Rail" : "Demo Sandbox"}
+              <span
+                className={mode === "live" ? "text-amber-400 font-medium" : "text-gain font-medium"}
+              >
+                {mode === "live" ? "Legacy state locked" : "Paper simulation"}
               </span>
             </div>
             <p className="num mt-1 text-base font-semibold text-cream">${activeEq.toFixed(2)}</p>
           </div>
         </div>
-        <p className="px-5 py-3 text-[11px] text-faint">Global sniper desk. Automated risk & execution.</p>
+        <p className="px-5 py-3 text-[11px] text-faint">
+          Paper-only trading simulator with automated risk controls.
+        </p>
       </aside>
 
-      <div className="flex min-h-screen flex-col pb-20 md:pb-0">
-        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-line bg-ink/95 px-4 py-3 backdrop-blur md:px-8">
+      <div className="flex min-h-screen flex-col pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-0">
+        <header className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-line bg-ink/95 px-4 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 backdrop-blur sm:gap-3 md:px-8">
           {/* Nairobi EAT (UTC+3) Clock & Active Day Header */}
           <div className="flex min-w-0 items-center gap-2.5">
             <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-panel-2 text-brass">
@@ -215,11 +277,13 @@ function Shell({ children }: { children: ReactNode }) {
             </div>
             <div className="min-w-0" suppressHydrationWarning>
               <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-semibold tracking-wider text-brass uppercase">
-                  Nairobi EAT (UTC+3)
+                <span className="whitespace-nowrap text-[11px] font-semibold tracking-wider text-brass uppercase">
+                  <span className="sm:hidden">Nairobi EAT</span>
+                  <span className="hidden sm:inline">Nairobi EAT (UTC+3)</span>
                 </span>
-                <span className="rounded bg-emerald-500/20 px-1.5 py-0.2 text-[10px] font-bold text-emerald-300">
-                  {nairobi.dayLabel}
+                <span className="max-[359px]:hidden rounded bg-emerald-500/20 px-1.5 py-0.2 text-[10px] font-bold text-emerald-300">
+                  <span className="sm:hidden">{nairobi.dayLabel.replace(" Active", "")}</span>
+                  <span className="hidden sm:inline">{nairobi.dayLabel}</span>
                 </span>
               </div>
               <p className="truncate font-mono text-xs font-medium text-cream md:text-sm">
@@ -228,24 +292,24 @@ function Shell({ children }: { children: ReactNode }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Demo Training & Live Readiness Badge */}
+          <div className="flex items-center gap-1.5 sm:gap-3">
+            {/* Paper discipline summary */}
             {readiness && (
               <div
-                title={readiness.statusMessage}
+                title={`${readiness.completedDemoTrades} paper trades recorded`}
                 className="hidden items-center gap-2 rounded-full border border-line bg-panel-2 px-3 py-1 lg:flex"
                 suppressHydrationWarning
               >
                 <ShieldCheck className="size-3.5 text-brass" />
                 <div className="flex items-center gap-1.5 text-xs">
-                  <span className="text-faint">Demo Training:</span>
+                  <span className="text-faint">Paper discipline:</span>
                   <span
                     className={cn(
                       "font-semibold",
                       readiness.readinessScore >= 85 ? "text-gain" : "text-amber-400",
                     )}
                   >
-                    {readiness.readinessScore}% Ready
+                    {readiness.readinessScore}%
                   </span>
                 </div>
               </div>
@@ -255,52 +319,48 @@ function Shell({ children }: { children: ReactNode }) {
             <div className="flex items-center rounded-full border border-line bg-panel-2 p-0.5">
               <button
                 type="button"
+                aria-label="Paper simulation mode"
                 onClick={() => setMode("demo")}
                 className={cn(
-                  "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                  "min-h-11 rounded-full px-2 py-1 text-[11px] font-medium transition-colors sm:px-2.5 sm:text-xs",
                   mode === "demo"
                     ? "bg-brass text-ink font-semibold shadow-xs"
                     : "text-faint hover:text-cream",
                 )}
               >
-                Demo ($500)
+                <span className="sm:hidden" aria-hidden="true">
+                  Demo
+                </span>
+                <span className="hidden sm:inline">Paper</span>
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (mode !== "live") {
-                    setShowLiveModal(true);
-                  } else {
-                    setShowLiveModal(true);
-                  }
-                }}
-                className={cn(
-                  "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-                  mode === "live"
-                    ? "bg-amber-500 text-ink font-semibold shadow-xs"
-                    : "text-faint hover:text-cream",
-                )}
+                aria-label="Live trading unavailable. View connection status."
+                onClick={() => setShowLiveModal(true)}
+                className="min-h-11 rounded-full px-2 py-1 text-[11px] font-medium text-faint transition-colors hover:text-cream sm:px-2.5 sm:text-xs"
               >
-                Live (${live.cash.toFixed(0)})
+                <span className="sm:hidden" aria-hidden="true">
+                  Live off
+                </span>
+                <span className="hidden sm:inline">Live unavailable</span>
               </button>
             </div>
 
             {/* Active Equity Display */}
             <div className="hidden text-right font-mono sm:block" suppressHydrationWarning>
               <span className="text-[10px] tracking-wider text-faint uppercase">
-                {mode === "live" ? "Live Bal" : "Demo Bal"}:
+                Paper balance:
               </span>{" "}
-              <span className={cn("text-sm font-semibold", mode === "live" ? "text-amber-300" : "text-cream")}>
-                ${activeEq.toFixed(2)}
-              </span>
+              <span className="text-sm font-semibold text-cream">${activeEq.toFixed(2)}</span>
             </div>
 
             {/* Power / Armed Button */}
             <button
               type="button"
-              onClick={() => setPower(!power)}
+              aria-label={power ? "Disarm paper bot" : "Arm paper bot"}
+              onClick={requestStandby}
               className={cn(
-                "inline-flex min-h-10 items-center gap-2 rounded-full border px-3 text-xs font-medium transition-colors",
+                "inline-flex min-h-11 items-center gap-1.5 rounded-full border px-2 text-xs font-medium transition-colors sm:gap-2 sm:px-3",
                 power
                   ? mode === "live"
                     ? "border-amber-500/60 bg-amber-500/15 text-amber-300"
@@ -311,51 +371,53 @@ function Shell({ children }: { children: ReactNode }) {
               <span
                 className={cn(
                   "size-2 rounded-full",
-                  power ? (mode === "live" ? "bg-amber-400 pulse-dot" : "bg-gain pulse-dot") : "bg-faint",
+                  power
+                    ? mode === "live"
+                      ? "bg-amber-400 pulse-dot"
+                      : "bg-gain pulse-dot"
+                    : "bg-faint",
                 )}
               />
-              {power ? (mode === "live" ? "Live Armed" : "Sniper Armed") : "Standby"}
+              {power ? (
+                <>
+                  <span className="sm:hidden">Armed</span>
+                  <span className="hidden sm:inline">Paper bot armed</span>
+                </>
+              ) : (
+                "Standby"
+              )}
             </button>
           </div>
         </header>
 
-        {/* Live Mode High-Stakes Banner */}
+        {/* Keep restored legacy live state visibly identified as simulation-only. */}
         {mode === "live" && (
-          <div className="flex items-center justify-between border-b border-amber-500/40 bg-gradient-to-r from-amber-950/60 via-panel-2 to-amber-950/60 px-4 py-2 text-xs backdrop-blur md:px-8">
-            <div className="flex items-center gap-2">
-              <span className="size-2 rounded-full bg-amber-400 animate-ping" />
-              <span className="font-bold tracking-wider text-amber-300 uppercase">
-                ⚡ Live Capital Execution Rail Active
-              </span>
-              <span className="hidden text-faint md:inline">
-                · Non-custodial DEX/CEX execution routing with strict 1.5% ATR sizing
-              </span>
-            </div>
+          <div className="flex items-center justify-between border-b border-amber-500/40 bg-panel-2 px-4 py-2 text-xs md:px-8">
+            <span className="font-semibold text-amber-300">
+              Live execution is unavailable. This session is simulation-only.
+            </span>
             <button
               type="button"
-              onClick={() => setShowLiveModal(true)}
-              className="flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-300 hover:bg-amber-500/30 transition-colors"
+              onClick={() => setMode("demo")}
+              className="min-h-11 rounded bg-panel px-3 text-[11px] font-semibold text-cream hover:bg-panel-2"
             >
-              Deposit Address & Rail Status
+              Return to paper mode
             </button>
           </div>
         )}
 
-        <main className="flex-1 px-4 py-4 md:px-8 md:py-6">{locked ? <LockScreen /> : children}</main>
+        <main className="flex-1 px-4 py-4 md:px-8 md:py-6">
+          {locked ? <LockScreen /> : children}
+        </main>
 
-        <LiveModeTransitionModal
-          isOpen={showLiveModal}
-          onClose={() => setShowLiveModal(false)}
-          onConfirm={() => {
-            setMode("live");
-            setShowLiveModal(false);
-            setJustActivatedLive(true);
-            setTimeout(() => setJustActivatedLive(false), 2000);
-          }}
+        <LiveModeTransitionModal isOpen={showLiveModal} onClose={() => setShowLiveModal(false)} />
+        <StandbyPositionsModal
+          isOpen={showStandbyModal}
+          onClose={() => setShowStandbyModal(false)}
         />
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-panel md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-panel pb-[env(safe-area-inset-bottom)] md:hidden">
         {NAV.map((item) => (
           <NavLink key={item.to} {...item} compact />
         ))}
@@ -414,7 +476,8 @@ function LockScreen() {
       <p className="text-xs tracking-widest text-brass uppercase">Desk locked</p>
       <h1 className="text-3xl font-medium">Enter the PIN</h1>
       <p className="text-sm text-faint">
-        The simulator keeps stepping behind this lock. The PIN only guards this browser. It is not a bank login.
+        The simulator keeps stepping behind this lock. The PIN only guards this browser. It is not a
+        bank login.
       </p>
       <form
         className="flex flex-col gap-3"

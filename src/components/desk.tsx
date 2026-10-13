@@ -27,13 +27,15 @@ import {
   equity,
   exposure,
   portfolioLines,
-  sampleTape,
+  DEMO_START,
   type Candidate,
 } from "@/lib/paper";
 import { useDesk } from "@/lib/desk-store";
+import { loadFeeds } from "@/lib/market.functions";
 import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
+import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 
 const money = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -54,8 +56,6 @@ export function Desk() {
   const tape = useDesk((s) => s.tape);
   const log = useDesk((s) => s.log);
   const setTape = useDesk((s) => s.setTape);
-  const tick = useDesk((s) => s.tick);
-  const autoStep = useDesk((s) => s.autoStep);
   const manualEnter = useDesk((s) => s.manualEnter);
   const flatten = useDesk((s) => s.flatten);
   const flattenAll = useDesk((s) => s.flattenAll);
@@ -72,6 +72,7 @@ export function Desk() {
   const [avenueFilter, setAvenueFilter] = useState<"ALL" | AvenueCategory>("ALL");
   const [showReadinessModal, setShowReadinessModal] = useState(false);
   const [showLiveModal, setShowLiveModal] = useState(false);
+  const [showStandbyModal, setShowStandbyModal] = useState(false);
 
   // Live ticking clock for Nairobi EAT
   const [nowTs, setNowTs] = useState(Date.now());
@@ -97,10 +98,10 @@ export function Desk() {
       if (combined.length) {
         setTape(combined, res.note);
       } else {
-        setTape(sampleTape(), "Loaded built-in baseline pairs.");
+        setTape([], res.note || "No public market data is currently available.");
       }
     } catch {
-      setTape(sampleTape(), "Offline feed fallback. Using built-in global universe.");
+      setTape([], "Public market data unavailable. No fallback prices are used.");
     } finally {
       setBusy(false);
     }
@@ -135,27 +136,14 @@ export function Desk() {
     void scan("");
   }, [scan]);
 
-  // Live market price mark loop
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      const prices: Record<string, number> = {};
-      const positions = useDesk.getState()[useDesk.getState().mode].positions;
-      for (const p of positions) {
-        // Drift or live price update
-        const drift = 1 + (Math.random() - 0.48) * 0.015;
-        prices[p.tokenId] = p.mark * drift;
-      }
-      if (Object.keys(prices).length) {
-        tick(prices);
-      }
-
-      // Step sniper engine if armed
-      if (useDesk.getState().power) {
-        autoStep();
-      }
-    }, 3000);
-    return () => window.clearInterval(id);
-  }, [tick, autoStep]);
+  const toggleBotPower = () => {
+    if (!power) {
+      setPower(true);
+      return;
+    }
+    setPower(false);
+    if (useDesk.getState().demo.positions.length) setShowStandbyModal(true);
+  };
 
   const filteredTape = tape.filter((c) => {
     if (filterVenue === "all") return true;
@@ -177,13 +165,13 @@ export function Desk() {
                   : "border border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
               )}
             >
-              {mode === "live" ? "Live Trading Active" : "Demo Mode ($500)"}
+              {mode === "live" ? "Legacy state locked" : `Paper simulation ($${DEMO_START})`}
             </span>
           </div>
           <p className="mt-1 text-xs text-faint md:text-sm">
             {mode === "live"
-              ? "Live execution rail. Real cash ledger active. Connect signing keys or manage funds in the Wallet."
-              : "Safe simulated paper environment. Starts at $500. Bot combs global markets, analyzes risk, and learns from every fill."}
+              ? "Live execution is unavailable. This app has no broker connection and cannot move real funds."
+              : `Paper environment. Starts at $${DEMO_START}. Simulated closes train the paper risk threshold.`}
           </p>
         </div>
 
@@ -201,32 +189,21 @@ export function Desk() {
                   : "text-faint hover:text-cream",
               )}
             >
-              🟢 Paper Trading ($500)
+              Paper trading
             </button>
             <button
               type="button"
-              onClick={() => {
-                if (mode !== "live") {
-                  setShowLiveModal(true);
-                } else {
-                  setShowLiveModal(true);
-                }
-              }}
-              className={cn(
-                "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
-                mode === "live"
-                  ? "bg-amber-500 text-ink shadow-sm"
-                  : "text-faint hover:text-cream",
-              )}
+              onClick={() => setShowLiveModal(true)}
+              className="rounded-lg px-3 py-1.5 text-xs font-semibold text-faint transition-colors hover:text-cream"
             >
-              🔴 Live Trading (${live.cash.toFixed(0)})
+              Live unavailable
             </button>
           </div>
 
           {/* Arm / Disarm Bot */}
           <Button
             variant={power ? "solid" : "ghost"}
-            onClick={() => setPower(!power)}
+            onClick={toggleBotPower}
             className={cn(
               "font-semibold",
               power
@@ -288,12 +265,12 @@ export function Desk() {
           </div>
         </div>
 
-        {/* Real-Money Readiness & Demo Training HUD */}
+        {/* Paper risk history */}
         {readiness && (
           <div className="flex items-center gap-3 border-t border-line/60 pt-2 sm:border-t-0 sm:pt-0">
             <div className="text-left sm:text-right">
               <div className="flex items-center gap-1.5 text-xs">
-                <span className="text-faint">Live Capital Readiness:</span>
+                <span className="text-faint">Paper discipline:</span>
                 <span
                   className={cn(
                     "font-bold",
@@ -304,7 +281,7 @@ export function Desk() {
                 </span>
               </div>
               <p className="text-[11px] text-faint">
-                {readiness.completedDemoTrades}/{readiness.targetDemoTrades} demo trades trained · {readiness.currentWinRatePct}% win rate
+                {readiness.completedDemoTrades}/{readiness.targetDemoTrades} paper closes · {readiness.currentWinRatePct}% win rate
               </p>
             </div>
             <Button
@@ -312,7 +289,7 @@ export function Desk() {
               onClick={() => setShowReadinessModal(true)}
               className="h-8 border border-line px-2.5 text-xs text-brass hover:border-brass"
             >
-              <ShieldCheck className="mr-1 size-3.5" /> Audit Readiness
+              <ShieldCheck className="mr-1 size-3.5" />               Review paper history
             </Button>
           </div>
         )}
@@ -321,7 +298,7 @@ export function Desk() {
         <StatCard
           label={`${mode.toUpperCase()} EQUITY`}
           value={money(eq)}
-          sub={mode === "demo" ? "Sandbox Balance" : "Live Ledger"}
+          sub="Paper balance"
         />
         <StatCard
           label="DAY P&L"
@@ -585,14 +562,14 @@ export function Desk() {
 
       {/* Global Opportunities Scanner / Ticker Strip */}
       <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <Globe2 className="size-4 text-brass" />
-            <h2 className="text-sm font-semibold tracking-wider text-faint uppercase">
+            <h2 className="min-w-0 text-sm font-semibold tracking-wider text-faint uppercase">
               Global Market Intelligence ({tape.length} pairs live)
             </h2>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <div className="flex rounded-lg border border-line bg-panel p-0.5 text-xs">
               <button
                 type="button"
@@ -630,15 +607,15 @@ export function Desk() {
                 e.preventDefault();
                 void scan(query);
               }}
-              className="flex items-center"
+              className="flex w-full min-w-0 items-center sm:w-auto"
             >
-              <div className="relative">
+              <div className="relative w-full min-w-0 sm:w-auto">
                 <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint" />
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Filter ticker / address…"
-                  className="h-8 rounded-lg border border-line bg-panel pl-8 pr-3 text-xs text-cream outline-none focus:border-brass"
+                  className="h-8 w-full min-w-0 rounded-lg border border-line bg-panel pl-8 pr-3 text-xs text-cream outline-none focus:border-brass sm:w-auto"
                 />
               </div>
             </form>
@@ -931,7 +908,7 @@ export function Desk() {
         </div>
       </div>
 
-      {/* Real-Money Readiness Audit Modal */}
+      {/* Paper-performance audit modal */}
       {showReadinessModal && readiness && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 p-4 backdrop-blur-sm">
           <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-y-auto rounded-2xl border border-line bg-panel p-6 shadow-2xl">
@@ -941,7 +918,7 @@ export function Desk() {
                   <ShieldCheck className="size-5" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-cream">Real-Money Readiness Audit</h3>
+                  <h3 className="text-lg font-bold text-cream">Paper Performance Review</h3>
                   <p className="text-xs text-faint">
                     Quantitative scorecard for transitioning from Demo Sandbox to Live Funds
                   </p>
@@ -958,7 +935,7 @@ export function Desk() {
 
             {/* Overall Gauge */}
             <div className="my-5 rounded-xl border border-line bg-panel-2 p-4 text-center">
-              <div className="text-xs text-faint">Overall Readiness Score</div>
+              <div className="text-xs text-faint">Paper discipline score</div>
               <div className="mt-1 font-mono text-4xl font-extrabold text-brass">
                 {readiness.readinessScore}%
               </div>
@@ -1032,10 +1009,10 @@ export function Desk() {
       <LiveModeTransitionModal
         isOpen={showLiveModal}
         onClose={() => setShowLiveModal(false)}
-        onConfirm={() => {
-          setMode("live");
-          setShowLiveModal(false);
-        }}
+      />
+      <StandbyPositionsModal
+        isOpen={showStandbyModal}
+        onClose={() => setShowStandbyModal(false)}
       />
     </div>
   );

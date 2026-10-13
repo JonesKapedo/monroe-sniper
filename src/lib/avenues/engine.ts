@@ -2,7 +2,7 @@ import type {
   AvenueCategory,
   AvenueOpportunity,
   DisciplineRules,
-  RealMoneyReadiness,
+  PaperReadiness,
 } from "./types";
 import type { Book } from "../paper";
 import { equity, DEMO_START } from "../paper";
@@ -262,10 +262,10 @@ export function scanAllAvenues(
 }
 
 /**
- * Calculates the Real-Money Readiness Scorecard based on current demo performance.
+ * Calculates a paper-performance scorecard; it does not assess live-trading readiness.
  * Demonstrates discipline and statistical edge before handling real funds.
  */
-export function calculateRealMoneyReadiness(book: Book): RealMoneyReadiness {
+export function calculatePaperReadiness(book: Book): PaperReadiness {
   const trades = book.trades;
   const completedDemoTrades = trades.length;
   const targetDemoTrades = 30;
@@ -332,19 +332,19 @@ export function calculateRealMoneyReadiness(book: Book): RealMoneyReadiness {
     readinessScore = Math.min(84, Math.round(readinessScore * 0.75 + sampleProgressBonus));
   }
 
-  let status: "TRAINING" | "QUALIFYING" | "LIVE_READY" = "TRAINING";
-  let statusMessage = "Training Active: Running continuous demo simulations to establish statistical edge.";
+  let status: "TRAINING" | "QUALIFYING" | "PAPER_PROVEN" = "TRAINING";
+  let   statusMessage = "Paper training is active; simulated closes are used to estimate the strategy's edge.";
   let recommendation =
-    "Let the bot train in Demo Sandbox mode. As it gathers winning reference memories, your statistical edge improves.";
+  "Keep the bot in paper mode while it collects a representative sample of simulated outcomes.";
 
   if (readinessScore >= 85 && completedDemoTrades >= targetDemoTrades) {
-    status = "LIVE_READY";
-    statusMessage = "Bot Qualified for Live Capital: Sustained win-rate and disciplined risk-reward achieved.";
+  status = "PAPER_PROVEN";
+  statusMessage = "Paper thresholds met. This is not approval or readiness for real-money trading.";
     recommendation =
-      "The bot has passed all discipline thresholds and risk gates. You may safely switch to Live Trading or continue paper compounding.";
+    "The simulated sample meets the configured paper thresholds. Live execution remains unavailable.";
   } else if (readinessScore >= 60) {
     status = "QUALIFYING";
-    statusMessage = "Qualifying Stage: Strong risk-reward metrics observed. Gathering final trade sample size.";
+  statusMessage = "Paper review in progress; collecting more simulated outcomes.";
     recommendation =
       "Bot is performing well in simulated market flow. Allow it to finish remaining sample trades to confirm drawdown stability.";
   }

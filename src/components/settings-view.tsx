@@ -2,10 +2,16 @@ import { useState } from "react";
 import { money, pct } from "@/lib/sniper/format";
 import { kellyFraction } from "@/lib/sniper/risk";
 import { useSniper } from "@/lib/sniper/store";
-import { SOURCE_META, type SourceId } from "@/lib/sniper/types";
+import { defaultSettings, SOURCE_META, type SourceId, type ThemeId } from "@/lib/sniper/types";
 import { useDesk } from "@/lib/desk-store";
 import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
+
+const THEMES: { id: ThemeId; label: string; detail: string }[] = [
+  { id: "MONROE", label: "Monroe", detail: "Olive & brass" },
+  { id: "PAPER", label: "Paper", detail: "Warm light" },
+  { id: "MIDNIGHT", label: "Pitch Black", detail: "True black backgrounds" },
+];
 
 export function SettingsView() {
   const resetDemo = useDesk((s) => s.resetDemo);
@@ -23,13 +29,14 @@ export function SettingsView() {
   const newSession = useSniper((s) => s.newSession);
   const restore = useSniper((s) => s.restoreOpeningBalance);
   const settings = book.settings;
+  const appearance = settings.appearance ?? defaultSettings.appearance;
   const [phrase, setPhrase] = useState("");
   const kelly = kellyFraction(book.trades, settings.kellyCap);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
       <div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-2xl font-bold md:text-3xl">Professional Trader Settings</h1>
           <span className="rounded-full bg-brass/20 px-2.5 py-0.5 text-xs font-semibold text-brass">
             EAT GMT(+3) Nairobi Desk
@@ -302,6 +309,54 @@ export function SettingsView() {
             Restore opening balance
           </Button>
         </div>
+      </Card>
+
+      <Card>
+        <Label>Appearance</Label>
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label="Color theme">
+          {THEMES.map((theme) => (
+            <button
+              key={theme.id}
+              type="button"
+              aria-pressed={appearance.theme === theme.id}
+              className={cn(
+                "flex min-h-11 items-center gap-2 rounded-xl border px-3 text-left",
+                appearance.theme === theme.id ? "border-brass text-cream" : "border-line text-faint",
+              )}
+              onClick={() => update({ appearance: { ...appearance, theme: theme.id } })}
+            >
+              <span
+                aria-hidden="true"
+                className="theme-swatch size-5 shrink-0 rounded-full border border-line"
+                data-theme-swatch={theme.id.toLowerCase()}
+              />
+              <span>
+                <span className="block text-sm font-medium">{theme.label}</span>
+                <span className="block text-xs text-faint">{theme.detail}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-line pt-3">
+          <div>
+            <p className="text-sm font-medium">Skull emblem</p>
+            <p className="text-xs text-faint">Show the reactive Monroe skull beside the desk name</p>
+          </div>
+          <button
+            type="button"
+            aria-pressed={appearance.showMascot}
+            className={cn(
+              "min-h-11 rounded-full border px-3 text-sm",
+              appearance.showMascot ? "border-brass text-brass" : "border-line text-faint",
+            )}
+            onClick={() =>
+              update({ appearance: { ...appearance, showMascot: !appearance.showMascot } })
+            }
+          >
+            {appearance.showMascot ? "On" : "Off"}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-faint">Saved with this browser’s paper desk.</p>
       </Card>
     </div>
   );

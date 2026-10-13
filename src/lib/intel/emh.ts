@@ -41,10 +41,20 @@ export function assessEdge(input: EdgeInput): Edge {
   const notes: string[] = [];
 
   if (typeof sentiment === "number" && Number.isFinite(sentiment)) {
-    if (Math.sign(sentiment) !== 0 && Math.sign(change) !== 0 && Math.sign(sentiment) !== Math.sign(change)) {
+    const sentimentDir = Math.sign(sentiment);
+    const changeDir = Math.sign(change);
+    if (sentimentDir !== 0 && changeDir !== 0 && sentimentDir !== changeDir) {
+      if (Math.abs(sentiment) >= 0.35) {
+        return {
+          act: false,
+          edge: Math.max(0, edge - 18),
+          stance: "SKIP",
+          why: "Social tone fights the tape. Stand aside.",
+        };
+      }
       edge -= 18;
       notes.push("Social tone fights the tape");
-    } else if (Math.abs(sentiment) >= 0.35 && Math.sign(sentiment) === Math.sign(change)) {
+    } else if (Math.abs(sentiment) >= 0.35 && sentimentDir === changeDir) {
       edge += 6;
       notes.push("Social tone agrees");
     }

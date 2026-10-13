@@ -54,9 +54,9 @@ export interface DisciplineRules {
   blacklistedTokenCheck: boolean;
 }
 
-export interface RealMoneyReadiness {
+export interface PaperReadiness {
   readinessScore: number; // 0 to 100%
-  status: "TRAINING" | "QUALIFYING" | "LIVE_READY";
+  status: "TRAINING" | "QUALIFYING" | "PAPER_PROVEN";
   statusMessage: string;
   completedDemoTrades: number;
   targetDemoTrades: number; // e.g. 30
