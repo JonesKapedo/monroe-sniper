@@ -1,11 +1,11 @@
 import { o as __toESM } from "../_runtime.mjs";
 import { J as require_react, Y as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
 import { i as cn, n as Card, r as Label, t as Button } from "./ui-9RT2T2XE.mjs";
-import { c as equity, f as portfolioLines, l as exposure, p as sampleTape } from "./paper-MZacH4KP.mjs";
+import { c as equity, f as portfolioLines, l as exposure } from "./paper-DKIhRqAY.mjs";
 import { r as create } from "../_libs/zustand.mjs";
-import { F as Coins, I as Clock, M as Crosshair, T as Pause, _ as Scale, b as RefreshCw, c as Sparkles, f as ShieldCheck, h as Search, j as Earth, o as TriangleAlert, p as ShieldAlert, s as TrendingUp, t as Zap, u as Shield, w as Play, y as Rocket, z as CircleCheck } from "../_libs/lucide-react.mjs";
-import { c as formatNairobiTime, d as scanAllAvenues, f as useDesk, n as LiveModeTransitionModal } from "./router-BNCp43VR.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-B2w1xlmw.js
+import { C as Play, L as CircleCheck, M as Crosshair, N as Coins, P as Clock, _ as Scale, b as RefreshCw, c as Sparkles, f as ShieldCheck, h as Search, j as Earth, o as TriangleAlert, p as ShieldAlert, s as TrendingUp, t as Zap, u as Shield, w as Pause, y as Rocket } from "../_libs/lucide-react.mjs";
+import { a as LiveModeTransitionModal, g as useDesk, h as scanAllAvenues, i as StandbyPositionsModal, n as loadFeeds, p as formatNairobiTime } from "./router-DMlX_g4f.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-B2A4r-0j.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var useFeedHealth = create((set) => ({
@@ -32,8 +32,6 @@ function Desk() {
 	const tape = useDesk((s) => s.tape);
 	const log = useDesk((s) => s.log);
 	const setTape = useDesk((s) => s.setTape);
-	const tick = useDesk((s) => s.tick);
-	const autoStep = useDesk((s) => s.autoStep);
 	const manualEnter = useDesk((s) => s.manualEnter);
 	const flatten = useDesk((s) => s.flatten);
 	const flattenAll = useDesk((s) => s.flattenAll);
@@ -48,6 +46,7 @@ function Desk() {
 	const [avenueFilter, setAvenueFilter] = (0, import_react.useState)("ALL");
 	const [showReadinessModal, setShowReadinessModal] = (0, import_react.useState)(false);
 	const [showLiveModal, setShowLiveModal] = (0, import_react.useState)(false);
+	const [showStandbyModal, setShowStandbyModal] = (0, import_react.useState)(false);
 	const [nowTs, setNowTs] = (0, import_react.useState)(Date.now());
 	(0, import_react.useEffect)(() => {
 		const timer = window.setInterval(() => setNowTs(Date.now()), 1e3);
@@ -71,9 +70,9 @@ function Desk() {
 			];
 			useFeedHealth.getState().setRows(res.health);
 			if (combined.length) setTape(combined, res.note);
-			else setTape(sampleTape(), "Loaded built-in baseline pairs.");
+			else setTape([], res.note || "No public market data is currently available.");
 		} catch {
-			setTape(sampleTape(), "Offline feed fallback. Using built-in global universe.");
+			setTape([], "Public market data unavailable. No fallback prices are used.");
 		} finally {
 			setBusy(false);
 		}
@@ -101,19 +100,14 @@ function Desk() {
 	(0, import_react.useEffect)(() => {
 		scan("");
 	}, [scan]);
-	(0, import_react.useEffect)(() => {
-		const id = window.setInterval(() => {
-			const prices = {};
-			const positions = useDesk.getState()[useDesk.getState().mode].positions;
-			for (const p of positions) {
-				const drift = 1 + (Math.random() - .48) * .015;
-				prices[p.tokenId] = p.mark * drift;
-			}
-			if (Object.keys(prices).length) tick(prices);
-			if (useDesk.getState().power) autoStep();
-		}, 3e3);
-		return () => window.clearInterval(id);
-	}, [tick, autoStep]);
+	const toggleBotPower = () => {
+		if (!power) {
+			setPower(true);
+			return;
+		}
+		setPower(false);
+		if (useDesk.getState().demo.positions.length) setShowStandbyModal(true);
+	};
 	const filteredTape = tape.filter((c) => {
 		if (filterVenue === "all") return true;
 		return c.venue === filterVenue;
@@ -130,11 +124,11 @@ function Desk() {
 						children: "Global Sniper Desk"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: cn("rounded-full px-2.5 py-0.5 text-xs font-semibold tracking-wider uppercase", mode === "live" ? "border border-amber-500/40 bg-amber-500/15 text-amber-300" : "border border-emerald-500/40 bg-emerald-500/15 text-emerald-300"),
-						children: mode === "live" ? "Live Trading Active" : "Demo Mode ($500)"
+						children: mode === "live" ? "Legacy state locked" : `Paper simulation ($500)`
 					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "mt-1 text-xs text-faint md:text-sm",
-					children: mode === "live" ? "Live execution rail. Real cash ledger active. Connect signing keys or manage funds in the Wallet." : "Safe simulated paper environment. Starts at $500. Bot combs global markets, analyzes risk, and learns from every fill."
+					children: mode === "live" ? "Live execution is unavailable. This app has no broker connection and cannot move real funds." : `Paper environment. Starts at $500. Simulated closes train the paper risk threshold.`
 				})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "flex flex-wrap items-center gap-2 sm:gap-3",
 					children: [
@@ -144,24 +138,17 @@ function Desk() {
 								type: "button",
 								onClick: () => setMode("demo"),
 								className: cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition-all", mode === "demo" ? "bg-brass text-ink shadow-sm" : "text-faint hover:text-cream"),
-								children: "🟢 Paper Trading ($500)"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								children: "Paper trading"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								onClick: () => {
-									if (mode !== "live") setShowLiveModal(true);
-									else setShowLiveModal(true);
-								},
-								className: cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition-all", mode === "live" ? "bg-amber-500 text-ink shadow-sm" : "text-faint hover:text-cream"),
-								children: [
-									"🔴 Live Trading ($",
-									live.cash.toFixed(0),
-									")"
-								]
+								onClick: () => setShowLiveModal(true),
+								className: "rounded-lg px-3 py-1.5 text-xs font-semibold text-faint transition-colors hover:text-cream",
+								children: "Live unavailable"
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 							variant: power ? "solid" : "ghost",
-							onClick: () => setPower(!power),
+							onClick: toggleBotPower,
 							className: cn("font-semibold", power ? "bg-gain text-ink hover:bg-gain/90" : "border-line text-faint hover:text-cream"),
 							children: power ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pause, { className: "mr-1.5 size-4" }), " Armed & Hunting"] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Play, { className: "mr-1.5 size-4" }), " Arm Sniper Bot"] })
 						}),
@@ -221,7 +208,7 @@ function Desk() {
 							className: "flex items-center gap-1.5 text-xs",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "text-faint",
-								children: "Live Capital Readiness:"
+								children: "Paper discipline:"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: cn("font-bold", readiness.readinessScore >= 85 ? "text-gain" : "text-amber-400"),
 								children: [
@@ -237,7 +224,7 @@ function Desk() {
 								readiness.completedDemoTrades,
 								"/",
 								readiness.targetDemoTrades,
-								" demo trades trained · ",
+								" paper closes · ",
 								readiness.currentWinRatePct,
 								"% win rate"
 							]
@@ -246,7 +233,7 @@ function Desk() {
 						variant: "ghost",
 						onClick: () => setShowReadinessModal(true),
 						className: "h-8 border border-line px-2.5 text-xs text-brass hover:border-brass",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "mr-1 size-3.5" }), " Audit Readiness"]
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "mr-1 size-3.5" }), "               Review paper history"]
 					})]
 				})]
 			}),
@@ -256,7 +243,7 @@ function Desk() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatCard, {
 						label: `${mode.toUpperCase()} EQUITY`,
 						value: money(eq),
-						sub: mode === "demo" ? "Sandbox Balance" : "Live Ledger"
+						sub: "Paper balance"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatCard, {
 						label: "DAY P&L",
@@ -515,11 +502,11 @@ function Desk() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "flex flex-col gap-2",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "flex flex-wrap items-center justify-between gap-2",
+					className: "flex min-w-0 flex-wrap items-center justify-between gap-2",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2",
+						className: "flex min-w-0 items-center gap-2",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Earth, { className: "size-4 text-brass" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", {
-							className: "text-sm font-semibold tracking-wider text-faint uppercase",
+							className: "min-w-0 text-sm font-semibold tracking-wider text-faint uppercase",
 							children: [
 								"Global Market Intelligence (",
 								tape.length,
@@ -527,7 +514,7 @@ function Desk() {
 							]
 						})]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2",
+						className: "flex min-w-0 flex-wrap items-center gap-2",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex rounded-lg border border-line bg-panel p-0.5 text-xs",
 							children: [
@@ -555,14 +542,14 @@ function Desk() {
 								e.preventDefault();
 								scan(query);
 							},
-							className: "flex items-center",
+							className: "flex w-full min-w-0 items-center sm:w-auto",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "relative",
+								className: "relative w-full min-w-0 sm:w-auto",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Search, { className: "absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 									value: query,
 									onChange: (e) => setQuery(e.target.value),
 									placeholder: "Filter ticker / address…",
-									className: "h-8 rounded-lg border border-line bg-panel pl-8 pr-3 text-xs text-cream outline-none focus:border-brass"
+									className: "h-8 w-full min-w-0 rounded-lg border border-line bg-panel pl-8 pr-3 text-xs text-cream outline-none focus:border-brass sm:w-auto"
 								})]
 							})
 						})]
@@ -873,7 +860,7 @@ function Desk() {
 									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "size-5" })
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 									className: "text-lg font-bold text-cream",
-									children: "Real-Money Readiness Audit"
+									children: "Paper Performance Review"
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 									className: "text-xs text-faint",
 									children: "Quantitative scorecard for transitioning from Demo Sandbox to Live Funds"
@@ -890,7 +877,7 @@ function Desk() {
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 									className: "text-xs text-faint",
-									children: "Overall Readiness Score"
+									children: "Paper discipline score"
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "mt-1 font-mono text-4xl font-extrabold text-brass",
@@ -954,11 +941,11 @@ function Desk() {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LiveModeTransitionModal, {
 				isOpen: showLiveModal,
-				onClose: () => setShowLiveModal(false),
-				onConfirm: () => {
-					setMode("live");
-					setShowLiveModal(false);
-				}
+				onClose: () => setShowLiveModal(false)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StandbyPositionsModal, {
+				isOpen: showStandbyModal,
+				onClose: () => setShowStandbyModal(false)
 			})
 		]
 	});

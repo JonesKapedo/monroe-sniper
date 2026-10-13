@@ -1,9 +1,9 @@
 import { o as __toESM } from "../_runtime.mjs";
 import { J as require_react, Y as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
 import { i as cn, n as Card, r as Label } from "./ui-9RT2T2XE.mjs";
-import { G as ArrowDownRight, O as History, U as ArrowUpRight, h as Search } from "../_libs/lucide-react.mjs";
-import { c as formatNairobiTime, f as useDesk, r as useSniper, s as pct } from "./router-BNCp43VR.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/signals-mL_kjGvO.js
+import { H as ArrowUpRight, O as History, U as ArrowDownRight, h as Search } from "../_libs/lucide-react.mjs";
+import { f as pct, g as useDesk, p as formatNairobiTime, s as useSniper } from "./router-DMlX_g4f.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/signals-BWyze7eC.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 function SignalsView() {
@@ -181,7 +181,7 @@ function SignalsView() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "flex flex-col gap-2 md:flex-row md:items-center md:justify-between",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "flex items-center gap-2.5",
+					className: "flex flex-wrap items-center gap-2.5",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
 						className: "text-2xl font-bold tracking-tight md:text-3xl text-cream",
 						children: "Signal Intelligence & Trade Reports"

@@ -1,10 +1,27 @@
 import { o as __toESM } from "../_runtime.mjs";
 import { J as require_react, Y as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
 import { i as cn, n as Card, r as Label, t as Button } from "./ui-9RT2T2XE.mjs";
-import { a as kellyFraction, f as useDesk, i as SOURCE_META, o as money, r as useSniper, s as pct } from "./router-BNCp43VR.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/settings-CMkw-kAz.js
+import { c as SOURCE_META, d as money, f as pct, g as useDesk, l as defaultSettings, s as useSniper, u as kellyFraction } from "./router-DMlX_g4f.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/settings-DB7L_38c.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
+var THEMES = [
+	{
+		id: "MONROE",
+		label: "Monroe",
+		detail: "Olive & brass"
+	},
+	{
+		id: "PAPER",
+		label: "Paper",
+		detail: "Warm light"
+	},
+	{
+		id: "MIDNIGHT",
+		label: "Pitch Black",
+		detail: "True black backgrounds"
+	}
+];
 function SettingsView() {
 	const resetDemo = useDesk((s) => s.resetDemo);
 	const riskSettings = useDesk((s) => s.riskSettings);
@@ -20,13 +37,14 @@ function SettingsView() {
 	const newSession = useSniper((s) => s.newSession);
 	const restore = useSniper((s) => s.restoreOpeningBalance);
 	const settings = book.settings;
+	const appearance = settings.appearance ?? defaultSettings.appearance;
 	const [phrase, setPhrase] = (0, import_react.useState)("");
 	const kelly = kellyFraction(book.trades, settings.kellyCap);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "mx-auto flex max-w-3xl flex-col gap-5",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "flex items-center gap-2",
+				className: "flex flex-wrap items-center gap-2",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
 					className: "text-2xl font-bold md:text-3xl",
 					children: "Professional Trader Settings"
@@ -447,6 +465,57 @@ function SettingsView() {
 							children: "Restore opening balance"
 						})
 					]
+				})
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Label, { children: "Appearance" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3",
+					role: "group",
+					"aria-label": "Color theme",
+					children: THEMES.map((theme) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						"aria-pressed": appearance.theme === theme.id,
+						className: cn("flex min-h-11 items-center gap-2 rounded-xl border px-3 text-left", appearance.theme === theme.id ? "border-brass text-cream" : "border-line text-faint"),
+						onClick: () => update({ appearance: {
+							...appearance,
+							theme: theme.id
+						} }),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							"aria-hidden": "true",
+							className: "theme-swatch size-5 shrink-0 rounded-full border border-line",
+							"data-theme-swatch": theme.id.toLowerCase()
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "block text-sm font-medium",
+							children: theme.label
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "block text-xs text-faint",
+							children: theme.detail
+						})] })]
+					}, theme.id))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mt-3 flex items-center justify-between gap-3 border-t border-line pt-3",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-sm font-medium",
+						children: "Skull emblem"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-xs text-faint",
+						children: "Show the reactive Monroe skull beside the desk name"
+					})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						"aria-pressed": appearance.showMascot,
+						className: cn("min-h-11 rounded-full border px-3 text-sm", appearance.showMascot ? "border-brass text-brass" : "border-line text-faint"),
+						onClick: () => update({ appearance: {
+							...appearance,
+							showMascot: !appearance.showMascot
+						} }),
+						children: appearance.showMascot ? "On" : "Off"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "mt-2 text-xs text-faint",
+					children: "Saved with this browser’s paper desk."
 				})
 			] })
 		]

@@ -1,7 +1,7 @@
 import { t as createServerFn } from "./ssr.mjs";
-import { m as scoreCandidate } from "./paper-MZacH4KP.mjs";
+import { p as scoreCandidate } from "./paper-DKIhRqAY.mjs";
 import { t as createServerRpc } from "./createServerRpc-A6pJPYTF.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/market.functions-CYmWxsoP.js
+//#region node_modules/.nitro/vite/services/ssr/assets/market.functions-Q-lRfaPg.js
 function binanceExecutionStatus() {
 	const key = process.env.BINANCE_API_KEY?.trim();
 	const secret = process.env.BINANCE_API_SECRET?.trim();

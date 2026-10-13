@@ -1,4 +1,4 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/paper-MZacH4KP.js
+//#region node_modules/.nitro/vite/services/ssr/assets/paper-DKIhRqAY.js
 var HARD = [
 	"HONEYPOT",
 	"LP-UNLOCKED",
@@ -25,10 +25,18 @@ function assessEdge(input) {
 	let edge = input.score;
 	const notes = [];
 	if (typeof sentiment === "number" && Number.isFinite(sentiment)) {
-		if (Math.sign(sentiment) !== 0 && Math.sign(change) !== 0 && Math.sign(sentiment) !== Math.sign(change)) {
+		const sentimentDir = Math.sign(sentiment);
+		const changeDir = Math.sign(change);
+		if (sentimentDir !== 0 && changeDir !== 0 && sentimentDir !== changeDir) {
+			if (Math.abs(sentiment) >= .35) return {
+				act: false,
+				edge: Math.max(0, edge - 18),
+				stance: "SKIP",
+				why: "Social tone fights the tape. Stand aside."
+			};
 			edge -= 18;
 			notes.push("Social tone fights the tape");
-		} else if (Math.abs(sentiment) >= .35 && Math.sign(sentiment) === Math.sign(change)) {
+		} else if (Math.abs(sentiment) >= .35 && sentimentDir === changeDir) {
 			edge += 6;
 			notes.push("Social tone agrees");
 		}
@@ -277,7 +285,12 @@ function enter(book, c, now = Date.now(), minScore = 62, customSizing) {
 		target: targetToUse,
 		openedAt: now,
 		notional: notionalToUse,
-		venue: c.venue
+		venue: c.venue,
+		entryScore: c.score,
+		entryChange24h: c.change24h,
+		entryLiquidityUsd: c.liquidityUsd,
+		entryVolume24h: c.volume24h,
+		pairAgeHours: c.pairAgeHours
 	};
 	return {
 		book: armIfNeeded({
@@ -294,7 +307,7 @@ function enter(book, c, now = Date.now(), minScore = 62, customSizing) {
 		note: `Paper fill ${c.symbol}`
 	};
 }
-function markBook(book, prices, now = Date.now()) {
+function markBook(book, prices, now = Date.now(), manageExits = true) {
 	let next = book;
 	const kept = [];
 	const extraTrades = [];
@@ -304,6 +317,13 @@ function markBook(book, prices, now = Date.now()) {
 	let cool = book.cooldownUntil;
 	for (const p of book.positions) {
 		const px = prices[p.tokenId] && prices[p.tokenId] > 0 ? prices[p.tokenId] : p.mark;
+		if (!manageExits) {
+			kept.push({
+				...p,
+				mark: px
+			});
+			continue;
+		}
 		const aged = now - p.openedAt > 216e5;
 		let activeStop = p.stop;
 		if (px >= p.entryPrice * 1.03 && activeStop < p.entryPrice * 1.008) activeStop = p.entryPrice * 1.008;
@@ -320,7 +340,18 @@ function markBook(book, prices, now = Date.now()) {
 				symbol: p.symbol,
 				pnl,
 				reason: targetHit ? "TARGET" : stopped ? px > p.entryPrice ? "BREAKEVEN" : "STOP" : "TIME",
-				closedAt: now
+				closedAt: now,
+				chain: p.chain,
+				venue: p.venue,
+				entryPrice: p.entryPrice,
+				exitPrice: px,
+				qty: p.qty,
+				openedAt: p.openedAt,
+				entryScore: p.entryScore,
+				entryChange24h: p.entryChange24h,
+				entryLiquidityUsd: p.entryLiquidityUsd,
+				entryVolume24h: p.entryVolume24h,
+				pairAgeHours: p.pairAgeHours
 			});
 		} else kept.push({
 			...p,
@@ -355,7 +386,18 @@ function closeOne(book, id, now = Date.now()) {
 			symbol: p.symbol,
 			pnl,
 			reason: "MANUAL",
-			closedAt: now
+			closedAt: now,
+			chain: p.chain,
+			venue: p.venue,
+			entryPrice: p.entryPrice,
+			exitPrice: p.mark,
+			qty: p.qty,
+			openedAt: p.openedAt,
+			entryScore: p.entryScore,
+			entryChange24h: p.entryChange24h,
+			entryLiquidityUsd: p.entryLiquidityUsd,
+			entryVolume24h: p.entryVolume24h,
+			pairAgeHours: p.pairAgeHours
 		}, ...book.trades].slice(0, 40),
 		dayPnl: book.dayPnl + pnl,
 		consecutiveLosses: streak,
@@ -386,78 +428,6 @@ function setKill(book, on) {
 		kill: on,
 		killReason: on ? "Operator halt" : null
 	};
-}
-/** Sample tape so the desk is usable when public APIs are quiet. */
-function sampleTape(now = Date.now()) {
-	return [
-		[
-			"WETH",
-			"Wrapped Ether",
-			"ethereum",
-			"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-			3200,
-			18e7,
-			9e8,
-			1.2,
-			4e4
-		],
-		[
-			"PEPE",
-			"Pepe",
-			"ethereum",
-			"0x6982508145454Ce325dDbE47a25d4ec3d2311933",
-			9e-6,
-			42e6,
-			8e7,
-			6.4,
-			8e3
-		],
-		[
-			"AERO",
-			"Aerodrome",
-			"base",
-			"0x940181a94A35A4569E4529A3CDfB74e38FD98631",
-			1.15,
-			28e6,
-			12e6,
-			3.1,
-			2e3
-		],
-		[
-			"BONK",
-			"Bonk",
-			"solana",
-			"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-			21e-6,
-			95e5,
-			22e6,
-			-4.2,
-			12e3
-		],
-		[
-			"NEW",
-			"Fresh Pool",
-			"base",
-			"0x1111111111111111111111111111111111111111",
-			.04,
-			6200,
-			4e4,
-			80,
-			2
-		]
-	].map((r) => scoreCandidate({
-		symbol: r[0],
-		name: r[1],
-		chain: r[2],
-		address: r[3],
-		priceUsd: r[4],
-		liquidityUsd: r[5],
-		volume24h: r[6],
-		change24h: r[7],
-		pairCreatedAt: now - r[8] * 36e5,
-		url: null,
-		venue: "dex"
-	})).filter((x) => x !== null);
 }
 function emptyMemory() {
 	return {
@@ -526,4 +496,4 @@ function withdraw(book, amount) {
 	};
 }
 //#endregion
-export { emptyBook as a, equity as c, markBook as d, portfolioLines as f, withdraw as g, setKill as h, deposit as i, exposure as l, scoreCandidate as m, chooseEntry as n, emptyMemory as o, sampleTape as p, closeOne as r, enter as s, assessEdge as t, learn as u };
+export { emptyBook as a, equity as c, markBook as d, portfolioLines as f, withdraw as h, deposit as i, exposure as l, setKill as m, chooseEntry as n, emptyMemory as o, scoreCandidate as p, closeOne as r, enter as s, assessEdge as t, learn as u };

@@ -103,7 +103,7 @@ var HEADERS = { TSS_SHELL: "X-TSS_SHELL" };
 * the dev styles URL for route-scoped CSS collection.
 */
 async function getStartManifest(matchedRoutes) {
-	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-d-snBQft.mjs");
+	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-BN5XOjQn.mjs");
 	const startManifest = tsrStartManifest();
 	let routes = startManifest.routes;
 	routes[rootRouteId];
@@ -123,29 +123,25 @@ async function getStartManifest(matchedRoutes) {
 	};
 }
 var manifest = {
-	"031a57b1681ed27142c8bb51c37b8aabd349975df451a6d9576849dc879c1664": {
-		functionName: "saveWinningTrade_createServerFn_handler",
-		importer: () => import("./trade-memory.functions-D5t2cLuk.mjs")
-	},
-	"1a8da7c17aa40737e3886e1b418b8a9974c57f30513801c36db0d4a4859c0471": {
-		functionName: "getTradeAnalytics_createServerFn_handler",
-		importer: () => import("./trade-memory.functions-D5t2cLuk.mjs")
-	},
 	"1a9bcaa0793bac6c3a3871a95fc0b1abeeae825d1fd8b95e86d620bcadd9db5e": {
 		functionName: "loadKlines_createServerFn_handler",
-		importer: () => import("./market.functions-CYmWxsoP.mjs")
+		importer: () => import("./market.functions-Q-lRfaPg.mjs")
+	},
+	"3c55afbe456a51eaeaa8677774bae3c9c711aa301f02f6f07db34b45ff15aebb": {
+		functionName: "getTradeLearningState_createServerFn_handler",
+		importer: () => import("./trade-memory.functions-BfWlhgpo.mjs")
 	},
 	"86c96e3586dc571f9577b337738d31d4cbbfedb294e013618acad662f8aaff29": {
 		functionName: "loadFeeds_createServerFn_handler",
-		importer: () => import("./market.functions-CYmWxsoP.mjs")
-	},
-	"ae848c9fdb352500567383efa86c7719bbc7756d7c3fe72892bdf65641d33dd3": {
-		functionName: "getWinningTradeMemories_createServerFn_handler",
-		importer: () => import("./trade-memory.functions-D5t2cLuk.mjs")
+		importer: () => import("./market.functions-Q-lRfaPg.mjs")
 	},
 	"b50b27850b6938f67a83fb0f0bbd29df2b9c6e58e4e61262560434ed87e6c4f9": {
 		functionName: "scanMarket_createServerFn_handler",
-		importer: () => import("./market.functions-CYmWxsoP.mjs")
+		importer: () => import("./market.functions-Q-lRfaPg.mjs")
+	},
+	"df931aaa15b0ca2a670f99e20b9f4cf68d6405d79b2c0ac23f2004cfbe72e665": {
+		functionName: "saveTradeLearning_createServerFn_handler",
+		importer: () => import("./trade-memory.functions-BfWlhgpo.mjs")
 	}
 };
 async function getServerFnById(id, access) {
@@ -1550,7 +1546,7 @@ var getBaseManifest = getProdBaseManifest;
 var createEarlyHintsForRequest = createEarlyHintsCollector;
 async function loadEntries() {
 	const [routerEntry, startEntry, pluginAdapters] = await Promise.all([
-		import("./router-BNCp43VR.mjs").then((n) => n.t),
+		import("./router-DMlX_g4f.mjs").then((n) => n.t),
 		import("./start-5Z2QO8AU.mjs"),
 		import("./empty-plugin-adapters-D9UWiqvJ.mjs")
 	]);

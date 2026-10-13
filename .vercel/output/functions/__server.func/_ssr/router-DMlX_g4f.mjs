@@ -2,11 +2,11 @@ import { o as __toESM } from "../_runtime.mjs";
 import { J as require_react, Y as require_jsx_runtime, _ as lazyRouteComponent, b as Link, d as Scripts, f as HeadContent, g as Outlet, h as createRouter, p as useRouterState, v as createFileRoute, x as useRouter, y as createRootRoute } from "../_libs/@tanstack/react-router+[...].mjs";
 import { i as cn, t as Button } from "./ui-9RT2T2XE.mjs";
 import { n as TSS_SERVER_FUNCTION, r as getServerFnById, t as createServerFn } from "./ssr.mjs";
-import { a as emptyBook, c as equity, d as markBook, g as withdraw, h as setKill, i as deposit, l as exposure, n as chooseEntry, o as emptyMemory, r as closeOne, s as enter, t as assessEdge, u as learn } from "./paper-MZacH4KP.mjs";
+import { a as emptyBook, c as equity, d as markBook, h as withdraw, i as deposit, l as exposure, m as setKill, n as chooseEntry, o as emptyMemory, r as closeOne, s as enter, t as assessEdge, u as learn } from "./paper-DKIhRqAY.mjs";
 import { n as persist, r as create, t as createJSONStorage } from "../_libs/zustand.mjs";
-import { A as ExternalLink, B as Check, C as QrCode, D as LayoutDashboard, I as Clock, P as Copy, S as Radar, W as ArrowRight, c as Sparkles, f as ShieldCheck, g as ScanSearch, h as Search, l as SlidersHorizontal, n as X, o as TriangleAlert, q as Activity, r as Wallet, t as Zap, z as CircleCheck } from "../_libs/lucide-react.mjs";
+import { D as LayoutDashboard, G as Activity, P as Clock, S as Radar, T as LockKeyhole, f as ShieldCheck, g as ScanSearch, h as Search, l as SlidersHorizontal, n as X, o as TriangleAlert, r as Wallet } from "../_libs/lucide-react.mjs";
 import { a as union, i as string, n as number, r as object, t as literal } from "../_libs/zod.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/desk-store-D9ceZOZX.js
+//#region node_modules/.nitro/vite/services/ssr/assets/desk-store-dgPqayYt.js
 /**
 * Audits a candidate asset against the 7 research pillars before any entry is permitted.
 */
@@ -293,25 +293,41 @@ var createSsrRpc = (functionId) => {
 		[TSS_SERVER_FUNCTION]: true
 	});
 };
-var saveWinningTrade = createServerFn({ method: "POST" }).validator((input) => ({
-	id: String(input.id || `tr-${Date.now()}`),
-	symbol: String(input.symbol || "UNKNOWN").slice(0, 32),
-	chain: String(input.chain || "solana").slice(0, 32),
-	venue: String(input.venue || "Raydium CLMM").slice(0, 32),
-	entryPrice: Number(input.entryPrice) || 0,
-	exitPrice: Number(input.exitPrice) || 0,
-	qty: Number(input.qty) || 0,
-	pnl: Number(input.pnl) || 0,
-	volatility: Number(input.volatility) || .02,
-	atr: Number(input.atr) || 0,
-	score: Number(input.score) || 75,
-	features: Array.isArray(input.features) ? input.features.map(Number) : [],
-	mode: String(input.mode || "demo"),
-	reason: String(input.reason || "TARGET"),
-	closedAt: Number(input.closedAt) || Date.now()
-})).handler(createSsrRpc("031a57b1681ed27142c8bb51c37b8aabd349975df451a6d9576849dc879c1664"));
-createServerFn({ method: "POST" }).validator((input) => ({ limit: Math.max(1, Math.min(100, Number(input?.limit || 20))) })).handler(createSsrRpc("ae848c9fdb352500567383efa86c7719bbc7756d7c3fe72892bdf65641d33dd3"));
-createServerFn({ method: "POST" }).handler(createSsrRpc("1a8da7c17aa40737e3886e1b418b8a9974c57f30513801c36db0d4a4859c0471"));
+function normalizeTrade(input) {
+	if ([
+		input.id,
+		input.symbol,
+		input.chain,
+		input.venue,
+		input.reason
+	].some((value) => typeof value !== "string" || value.trim() === "")) throw new Error("Trade learning records require non-empty identity fields.");
+	if (input.id.length > 128 || input.symbol.length > 32 || input.chain.length > 32 || input.venue.length > 64 || input.reason.length > 32) throw new Error("Trade learning record contains an overlong identity field.");
+	if (input.mode !== "demo" && input.mode !== "live") throw new Error("Trade learning record mode is invalid.");
+	if ([
+		input.entryPrice,
+		input.exitPrice,
+		input.qty,
+		input.pnl,
+		input.score,
+		input.change24h,
+		input.liquidityUsd,
+		input.volume24h,
+		input.openedAt,
+		input.closedAt
+	].some((value) => typeof value !== "number" || !Number.isFinite(value))) throw new Error("Trade learning records require finite numeric values.");
+	if (input.pairAgeHours !== null && (typeof input.pairAgeHours !== "number" || !Number.isFinite(input.pairAgeHours))) throw new Error("Trade learning record pair age must be finite or null.");
+	if (input.entryPrice < 0 || input.exitPrice < 0 || input.qty < 0 || input.liquidityUsd < 0 || input.volume24h < 0 || input.score < 0 || input.score > 100) throw new Error("Trade learning record contains an out-of-range value.");
+	return {
+		...input,
+		id: input.id.trim(),
+		symbol: input.symbol.trim().slice(0, 32),
+		chain: input.chain.trim().slice(0, 32),
+		venue: input.venue.trim().slice(0, 64),
+		reason: input.reason.trim().slice(0, 32)
+	};
+}
+var saveTradeLearning = createServerFn({ method: "POST" }).validator(normalizeTrade).handler(createSsrRpc("df931aaa15b0ca2a670f99e20b9f4cf68d6405d79b2c0ac23f2004cfbe72e665"));
+var getTradeLearningState = createServerFn({ method: "GET" }).handler(createSsrRpc("3c55afbe456a51eaeaa8677774bae3c9c711aa301f02f6f07db34b45ff15aebb"));
 var defaultDisciplineRules = {
 	maxDailyDrawdownPct: .03,
 	minRiskRewardRatio: 2.5,
@@ -547,10 +563,10 @@ function scanAllAvenues(book, rules = defaultDisciplineRules, now = Date.now()) 
 	].sort((a, b) => b.confidenceScore - a.confidenceScore);
 }
 /**
-* Calculates the Real-Money Readiness Scorecard based on current demo performance.
+* Calculates a paper-performance scorecard; it does not assess live-trading readiness.
 * Demonstrates discipline and statistical edge before handling real funds.
 */
-function calculateRealMoneyReadiness(book) {
+function calculatePaperReadiness(book) {
 	const trades = book.trades;
 	const completedDemoTrades = trades.length;
 	const targetDemoTrades = 30;
@@ -607,15 +623,15 @@ function calculateRealMoneyReadiness(book) {
 		readinessScore = Math.min(84, Math.round(readinessScore * .75 + sampleProgressBonus));
 	}
 	let status = "TRAINING";
-	let statusMessage = "Training Active: Running continuous demo simulations to establish statistical edge.";
-	let recommendation = "Let the bot train in Demo Sandbox mode. As it gathers winning reference memories, your statistical edge improves.";
+	let statusMessage = "Paper training is active; simulated closes are used to estimate the strategy's edge.";
+	let recommendation = "Keep the bot in paper mode while it collects a representative sample of simulated outcomes.";
 	if (readinessScore >= 85 && completedDemoTrades >= targetDemoTrades) {
-		status = "LIVE_READY";
-		statusMessage = "Bot Qualified for Live Capital: Sustained win-rate and disciplined risk-reward achieved.";
-		recommendation = "The bot has passed all discipline thresholds and risk gates. You may safely switch to Live Trading or continue paper compounding.";
+		status = "PAPER_PROVEN";
+		statusMessage = "Paper thresholds met. This is not approval or readiness for real-money trading.";
+		recommendation = "The simulated sample meets the configured paper thresholds. Live execution remains unavailable.";
 	} else if (readinessScore >= 60) {
 		status = "QUALIFYING";
-		statusMessage = "Qualifying Stage: Strong risk-reward metrics observed. Gathering final trade sample size.";
+		statusMessage = "Paper review in progress; collecting more simulated outcomes.";
 		recommendation = "Bot is performing well in simulated market flow. Allow it to finish remaining sample trades to confirm drawdown stability.";
 	}
 	let consecutiveWins = 0;
@@ -665,79 +681,46 @@ function venueFor(c) {
 	if (c.chain === "bsc") return "PancakeSwap";
 	return "Uniswap v3";
 }
-function initialExecutions() {
-	const now = Date.now();
-	return [
-		{
-			sym: "SOL/USDT",
-			v: "Binance Spot",
-			px: 184.25,
-			not: 420
-		},
-		{
-			sym: "PEPE/USDT",
-			v: "Uniswap v3",
-			px: 108e-7,
-			not: 185
-		},
-		{
-			sym: "WIF/SOL",
-			v: "Raydium CLMM",
-			px: 2.45,
-			not: 310
-		},
-		{
-			sym: "BTC/USDT",
-			v: "Binance Spot",
-			px: 87450,
-			not: 1250
-		},
-		{
-			sym: "ETH/USDT",
-			v: "Binance Spot",
-			px: 3120.4,
-			not: 890
-		},
-		{
-			sym: "BONK/SOL",
-			v: "Raydium CLMM",
-			px: 224e-7,
-			not: 140
-		},
-		{
-			sym: "SUI/USDT",
-			v: "Binance Spot",
-			px: 2.84,
-			not: 260
-		}
-	].map((p, idx) => ({
-		id: `exec-${now - idx * 14e3}`,
-		hash: p.v === "Raydium CLMM" ? makeSolHash() : makeHash(),
-		ts: now - idx * 14e3,
-		symbol: p.sym,
-		venue: p.v,
-		side: idx % 3 === 0 ? "SELL" : "BUY",
-		price: p.px,
-		qty: p.not / p.px,
-		notional: p.not,
-		latencyMs: 38 + idx * 9 % 45,
-		slippageBps: Math.round((idx % 5 * .3 - .2) * 10) / 10,
-		type: "MARKET_FLOW",
-		note: "Institutional smart router fill"
-	}));
-}
-function absorb(book, prices, memory) {
-	const before = book.trades.length;
-	const next = markBook(book, prices);
+function absorb(book, prices, memory, monitorOnly = false) {
+	const priorIds = new Set(book.trades.map((trade) => trade.id));
+	const next = markBook(book, prices, Date.now(), !monitorOnly);
 	let mem = memory;
-	const born = next.trades.length - before;
-	const newTrades = next.trades.slice(0, Math.max(0, born));
+	const newTrades = next.trades.filter((trade) => !priorIds.has(trade.id));
 	for (const trade of newTrades) mem = learn(mem, trade.pnl);
 	return {
 		book: next,
 		memory: mem,
 		newTrades
 	};
+}
+function archiveClosedTrades(records) {
+	for (const { trade, mode } of records) saveTradeLearning({ data: {
+		id: trade.id,
+		symbol: trade.symbol,
+		chain: trade.chain ?? "unknown",
+		venue: trade.venue ?? "unknown",
+		entryPrice: trade.entryPrice ?? 0,
+		exitPrice: trade.exitPrice ?? 0,
+		qty: trade.qty ?? 0,
+		pnl: trade.pnl,
+		score: trade.entryScore ?? 0,
+		change24h: trade.entryChange24h ?? 0,
+		liquidityUsd: trade.entryLiquidityUsd ?? 0,
+		volume24h: trade.entryVolume24h ?? 0,
+		pairAgeHours: trade.pairAgeHours ?? null,
+		mode,
+		reason: trade.reason,
+		openedAt: trade.openedAt ?? trade.closedAt,
+		closedAt: trade.closedAt
+	} }).then(({ inserted }) => {
+		if (inserted) useDesk.setState((state) => ({ tradeLearningDbCount: state.tradeLearningDbCount + 1 }));
+	}).catch((error) => {
+		console.error("[trade-learning] Failed to persist a closed trade:", error);
+		useDesk.setState((state) => ({
+			note: "Trade closed, but its learning record could not be saved.",
+			log: pushLog(state.log, `Trade learning save failed: ${trade.symbol}`)
+		}));
+	});
 }
 var useDesk = create()(persist((set, get) => ({
 	power: false,
@@ -748,10 +731,10 @@ var useDesk = create()(persist((set, get) => ({
 	tape: [],
 	note: `Paper trading sandbox active ($500). Arm power to auto-snipe.`,
 	log: [`System initialized. Demo balance: $500.00`, "Risk engine active: Volatility-adjusted ATR sizing"],
-	executions: initialExecutions(),
+	executions: [],
 	riskSettings: defaultRiskSettings,
 	disciplineRules: defaultDisciplineRules,
-	winningTradeDbCount: 0,
+	tradeLearningDbCount: 0,
 	botStartedAt: Date.now() - 36e5,
 	walletHistory: [{
 		id: "tx-init-demo",
@@ -762,17 +745,27 @@ var useDesk = create()(persist((set, get) => ({
 		status: "CONFIRMED",
 		note: `Demo desk opening grant: $500.00 USD`
 	}],
+	restoreLearningState: (memory, storedTradeCount) => set({
+		memory,
+		tradeLearningDbCount: storedTradeCount
+	}),
 	setPower: (on) => set((s) => ({
-		power: on,
-		note: on ? `Armed. Sniper is actively combing global markets (${s.mode === "live" ? "LIVE" : "DEMO"}).` : "Disarmed. Standing by.",
-		log: pushLog(s.log, on ? `Sniper ARMED [${s.mode.toUpperCase()}]` : "Sniper DISARMED")
+		power: s.mode === "live" ? false : on,
+		note: on ? s.mode === "live" ? "Live execution is unavailable. The desk only supports paper simulation." : "Armed. Sniper is actively scanning simulated markets." : s.demo.positions.length ? "Standby. Automated entries and exits are paused; open paper positions remain held." : "Standby. Automated trading is paused.",
+		log: pushLog(s.log, on && s.mode !== "live" ? "Sniper ARMED [DEMO]" : on ? "Live execution blocked" : "Sniper DISARMED")
 	})),
 	setMode: (mode) => set((s) => {
-		const activeBook = mode === "live" ? s.live : s.demo;
+		if (mode === "live") return {
+			mode: "demo",
+			power: false,
+			note: "Live execution is unavailable. No broker is connected; this desk is simulation-only.",
+			log: pushLog(s.log, "Live mode blocked: no broker execution integration")
+		};
 		return {
 			mode,
-			note: mode === "live" ? `Switched to LIVE mode. Balance: $${activeBook.cash.toFixed(2)}. Real ledger active.` : `Switched to DEMO mode. Paper balance: $${activeBook.cash.toFixed(2)}. Safe sandbox.`,
-			log: pushLog(s.log, `Mode switched to ${mode.toUpperCase()}`)
+			power: mode === "demo" ? s.power : false,
+			note: `Switched to paper simulation. Balance: $${s.demo.cash.toFixed(2)}.`,
+			log: pushLog(s.log, "Mode switched to DEMO")
 		};
 	}),
 	setTape: (rows, note) => {
@@ -781,7 +774,7 @@ var useDesk = create()(persist((set, get) => ({
 			note
 		});
 		if (typeof window !== "undefined" && rows.length > 0) try {
-			import("./store-CbuS4Mow.mjs").then(({ useDyorStore }) => {
+			import("./store-Dqb1Vn2q.mjs").then(({ useDyorStore }) => {
 				const ingest = useDyorStore.getState().ingestCandidate;
 				rows.slice(0, 5).forEach((cand) => ingest(cand));
 			});
@@ -803,65 +796,53 @@ var useDesk = create()(persist((set, get) => ({
 	})),
 	getReadiness: () => {
 		const s = get();
-		return calculateRealMoneyReadiness(s[s.mode]);
+		return calculatePaperReadiness(s[s.mode]);
 	},
-	tick: (prices) => set((s) => {
-		const demoAbs = absorb(s.demo, prices, s.memory);
-		const liveAbs = absorb(s.live, prices, demoAbs.memory);
+	tick: (prices, monitorOnly = false) => {
+		const s = get();
+		const demoAbs = absorb(s.demo, prices, s.memory, monitorOnly);
+		const liveAbs = absorb(s.live, prices, demoAbs.memory, monitorOnly);
+		const closedTrades = [...demoAbs.newTrades.map((trade) => ({
+			trade,
+			mode: "demo"
+		})), ...liveAbs.newTrades.map((trade) => ({
+			trade,
+			mode: "live"
+		}))];
 		let nextExecs = s.executions;
 		let nextLog = s.log;
-		const allNewTrades = [...demoAbs.newTrades, ...liveAbs.newTrades];
-		let extraWins = 0;
-		for (const tr of allNewTrades) {
-			const isProfit = tr.pnl > 0;
-			const noteLine = `${tr.reason === "TARGET" ? "TAKE PROFIT" : tr.reason === "STOP" ? "STOP LOSS" : "CLOSED"}: ${tr.symbol} ${isProfit ? "+" : ""}$${tr.pnl.toFixed(2)} (${tr.reason})`;
+		for (const { trade, mode } of closedTrades) {
+			const isProfit = trade.pnl > 0;
+			const noteLine = `${trade.reason === "TARGET" ? "TAKE PROFIT" : trade.reason === "STOP" ? "STOP LOSS" : "CLOSED"}: ${trade.symbol} ${isProfit ? "+" : ""}$${trade.pnl.toFixed(2)} (${trade.reason})`;
 			nextLog = pushLog(nextLog, noteLine);
 			nextExecs = [{
-				id: `exit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-				hash: tr.symbol.includes("SOL") || tr.symbol.includes("WIF") ? makeSolHash() : makeHash(),
-				ts: Date.now(),
-				symbol: tr.symbol,
-				venue: tr.symbol.includes("USDT") ? "Binance Spot" : "Raydium CLMM",
+				id: `exit-${trade.closedAt}-${Math.random().toString(36).slice(2, 6)}`,
+				hash: trade.symbol.includes("SOL") || trade.symbol.includes("WIF") ? makeSolHash() : makeHash(),
+				ts: trade.closedAt,
+				symbol: trade.symbol,
+				venue: trade.symbol.includes("USDT") ? "Binance Spot" : "Raydium CLMM",
 				side: "SELL",
-				price: tr.pnl,
-				qty: 1,
-				notional: Math.abs(tr.pnl),
+				price: trade.exitPrice ?? 0,
+				qty: trade.qty ?? 0,
+				notional: Math.abs(trade.pnl),
 				latencyMs: 38 + Math.floor(Math.random() * 25),
 				slippageBps: .3,
 				type: isProfit ? "BOT_TAKE_PROFIT" : "BOT_STOP",
-				note: noteLine
+				note: `[${mode.toUpperCase()}] ${noteLine}`
 			}, ...nextExecs].slice(0, 100);
-			if (isProfit) {
-				extraWins++;
-				saveWinningTrade({ data: {
-					id: tr.id,
-					symbol: tr.symbol,
-					chain: tr.symbol.includes("SOL") ? "solana" : "ethereum",
-					venue: tr.symbol.includes("USDT") ? "Binance Spot" : "Raydium CLMM",
-					entryPrice: 1,
-					exitPrice: 1 + tr.pnl / 20,
-					qty: 1,
-					pnl: tr.pnl,
-					volatility: .045,
-					score: s.memory.minScore,
-					mode: s.mode,
-					reason: tr.reason,
-					closedAt: tr.closedAt
-				} }).catch(() => {});
-			}
 		}
-		return {
+		set({
 			demo: demoAbs.book,
 			live: liveAbs.book,
 			memory: liveAbs.memory,
 			executions: nextExecs,
-			log: nextLog,
-			winningTradeDbCount: s.winningTradeDbCount + extraWins
-		};
-	}),
+			log: nextLog
+		});
+		archiveClosedTrades(closedTrades);
+	},
 	autoStep: () => {
 		const s = get();
-		if (!s.power) return;
+		if (!s.power || s.mode !== "demo") return;
 		const targetKey = s.mode;
 		const currentBook = s[targetKey];
 		if (currentBook.positions.length >= s.riskSettings.maxPositions) return;
@@ -968,6 +949,10 @@ var useDesk = create()(persist((set, get) => ({
 	},
 	manualEnter: (c) => {
 		const s = get();
+		if (s.mode !== "demo") return {
+			ok: false,
+			note: "Live execution is unavailable; this desk only supports paper simulation."
+		};
 		const targetKey = s.mode;
 		const currentBook = s[targetKey];
 		const verdict = evaluateRiskAndSize(currentBook, c, s.riskSettings, Math.min(s.memory.minScore, c.score), Date.now());
@@ -1013,114 +998,118 @@ var useDesk = create()(persist((set, get) => ({
 			verdict
 		};
 	},
-	flatten: (id) => set((s) => {
-		const key = s.mode;
-		const book = closeOne(s[key], id);
-		const closed = book.trades[0];
-		const memory = closed && book.trades.length !== s[key].trades.length ? learn(s.memory, closed.pnl) : s.memory;
-		return {
-			[key]: book,
+	flatten: (id) => {
+		const s = get();
+		const mode = s.mode;
+		const book = closeOne(s[mode], id);
+		const didClose = book.positions.length < s[mode].positions.length;
+		const closed = didClose ? book.trades[0] : void 0;
+		const memory = didClose && closed ? learn(s.memory, closed.pnl) : s.memory;
+		set({
+			[mode]: book,
 			memory,
-			note: closed ? `Flattened ${closed.symbol}: PnL $${closed.pnl.toFixed(2)}` : "Position closed",
-			log: pushLog(s.log, closed ? `Flattened ${closed.symbol} (${closed.pnl >= 0 ? "+" : ""}$${closed.pnl.toFixed(2)})` : "Flattened")
-		};
-	}),
-	flattenAll: () => set((s) => {
-		const key = s.mode;
-		let book = s[key];
-		let mem = s.memory;
-		for (const pos of book.positions) {
-			book = closeOne(book, pos.id);
+			note: didClose && closed ? `Flattened ${closed.symbol}: PnL $${closed.pnl.toFixed(2)}` : "Position closed",
+			log: pushLog(s.log, didClose && closed ? `Flattened ${closed.symbol} (${closed.pnl >= 0 ? "+" : ""}$${closed.pnl.toFixed(2)})` : "Flattened")
+		});
+		if (didClose && closed) archiveClosedTrades([{
+			trade: closed,
+			mode
+		}]);
+	},
+	flattenAll: () => {
+		const s = get();
+		const mode = s.mode;
+		let book = s[mode];
+		let memory = s.memory;
+		const closedTrades = [];
+		for (const position of [...book.positions]) {
+			book = closeOne(book, position.id);
 			const closed = book.trades[0];
-			if (closed) mem = learn(mem, closed.pnl);
+			if (closed) {
+				closedTrades.push(closed);
+				memory = learn(memory, closed.pnl);
+			}
 		}
-		return {
-			[key]: book,
-			memory: mem,
-			note: "All open positions flattened.",
-			log: pushLog(s.log, `Flattened all [${s.mode.toUpperCase()}]`)
-		};
-	}),
+		set({
+			[mode]: book,
+			memory,
+			note: "All open paper positions flattened.",
+			log: pushLog(s.log, `Flattened all [${mode.toUpperCase()}]`)
+		});
+		archiveClosedTrades(closedTrades.map((trade) => ({
+			trade,
+			mode
+		})));
+	},
 	halt: (on) => set((s) => ({
 		demo: setKill(s.demo, on),
 		live: setKill(s.live, on),
 		note: on ? "Kill switch activated. All new entries blocked." : "Kill switch cleared.",
 		log: pushLog(s.log, on ? "Kill switch ON" : "Kill switch cleared")
 	})),
-	fund: (side, amount, address = "", network = "Ethereum (ERC-20)") => {
+	fund: (side, amount) => {
 		const s = get();
-		const mode = s.mode;
+		if (s.mode === "live") return {
+			ok: false,
+			note: "External deposits and withdrawals are unavailable; this app has no connected broker or funds rail."
+		};
 		if (!(amount > 0)) return {
 			ok: false,
 			note: "Amount must be greater than zero."
 		};
 		const now = Date.now();
-		const targetBook = mode === "live" ? s.live : s.demo;
+		const targetBook = s.demo;
 		if (side === "in") {
-			const updatedBook = deposit(targetBook, amount);
-			const tx = {
-				id: `tx-dep-${now}`,
-				ts: now,
-				type: "DEPOSIT",
-				amount,
-				mode,
-				network,
-				status: "CONFIRMED",
-				note: `Deposit of $${amount.toFixed(2)} into ${mode.toUpperCase()} wallet`
-			};
 			set({
-				[mode === "live" ? "live" : "demo"]: updatedBook,
-				walletHistory: [tx, ...s.walletHistory],
-				note: `Deposited $${amount.toFixed(2)} into ${mode} wallet.`,
-				log: pushLog(s.log, `${mode.toUpperCase()} Deposit +$${amount.toFixed(2)}`)
+				demo: deposit(targetBook, amount),
+				walletHistory: [{
+					id: `tx-dep-${now}`,
+					ts: now,
+					type: "DEPOSIT",
+					amount,
+					mode: "demo",
+					network: "Paper simulation",
+					status: "CONFIRMED",
+					note: `Paper balance increased by $${amount.toFixed(2)}.`
+				}, ...s.walletHistory],
+				note: `Added $${amount.toFixed(2)} to the paper balance.`,
+				log: pushLog(s.log, `Paper balance +$${amount.toFixed(2)}`)
 			});
 			return {
 				ok: true,
-				note: `Successfully deposited $${amount.toFixed(2)}.`
+				note: `Added $${amount.toFixed(2)} to the paper balance.`
 			};
 		}
-		const cleanAddr = address.trim();
-		if (!cleanAddr) return {
-			ok: false,
-			note: "Destination withdrawal address is required."
-		};
-		if (cleanAddr.length < 10) return {
-			ok: false,
-			note: "Destination address appears invalid (too short)."
-		};
 		if (amount > targetBook.cash + 1e-4) return {
 			ok: false,
 			note: `Insufficient free cash. Available: $${targetBook.cash.toFixed(2)}`
 		};
 		const wResult = withdraw(targetBook, amount);
 		if (!wResult.ok) return wResult;
-		const shortAddr = cleanAddr.length > 14 ? `${cleanAddr.slice(0, 7)}…${cleanAddr.slice(-5)}` : cleanAddr;
 		const tx = {
 			id: `tx-wth-${now}`,
 			ts: now,
 			type: "WITHDRAWAL",
 			amount,
-			address: cleanAddr,
-			network,
-			mode,
+			mode: "demo",
+			network: "Paper simulation",
 			status: "CONFIRMED",
-			note: `Withdrawal of $${amount.toFixed(2)} to ${shortAddr} on ${network}`
+			note: `Paper balance decreased by $${amount.toFixed(2)}.`
 		};
 		set({
-			[mode === "live" ? "live" : "demo"]: wResult.book,
+			demo: wResult.book,
 			walletHistory: [tx, ...s.walletHistory],
-			note: `Withdrew $${amount.toFixed(2)} to ${shortAddr}.`,
-			log: pushLog(s.log, `${mode.toUpperCase()} Withdraw -$${amount.toFixed(2)} to ${shortAddr}`)
+			note: `Removed $${amount.toFixed(2)} from the paper balance.`,
+			log: pushLog(s.log, `Paper balance -$${amount.toFixed(2)}`)
 		});
 		return {
 			ok: true,
-			note: `Withdrawal of $${amount.toFixed(2)} confirmed.`
+			note: `Removed $${amount.toFixed(2)} from the paper balance.`
 		};
 	},
 	resetDemo: () => set((s) => ({
 		demo: emptyBook(500),
-		memory: emptyMemory(),
-		note: `Demo desk reset to $500.00. Self-learning memory reset.`,
+		note: `Paper ledger reset to $500.00. Archived trade learning remains intact.`,
 		log: pushLog(s.log, `Demo reset to $500.00`)
 	})),
 	setDemoBalance: (amount) => set((s) => {
@@ -1132,6 +1121,7 @@ var useDesk = create()(persist((set, get) => ({
 		};
 	}),
 	simulateBatchTicks: (count = 5) => {
+		if (!get().power || get().mode !== "demo") return;
 		for (let i = 0; i < count; i++) {
 			const s = get();
 			const currentBook = s[s.mode];
@@ -1165,93 +1155,23 @@ var useDesk = create()(persist((set, get) => ({
 		walletHistory: s.walletHistory,
 		riskSettings: s.riskSettings,
 		disciplineRules: s.disciplineRules,
-		winningTradeDbCount: s.winningTradeDbCount,
+		tradeLearningDbCount: s.tradeLearningDbCount,
 		botStartedAt: s.botStartedAt
 	}),
 	skipHydration: true,
 	onRehydrateStorage: () => (state) => {
-		if (state && state.demo && state.demo.cash === 100 && state.demo.trades.length === 0) {
-			state.demo.cash = 500;
-			state.demo.peakEquity = 500;
+		if (state) {
+			state.mode = "demo";
+			state.power = false;
+			if (state.demo && state.demo.cash === 100 && state.demo.trades.length === 0) {
+				state.demo.cash = 500;
+				state.demo.peakEquity = 500;
+			}
 		}
 	}
 }));
 //#endregion
-//#region node_modules/.nitro/vite/services/ssr/assets/deposit-networks-Dt-B-i-e.js
-var DEPOSIT_NETWORKS = [
-	{
-		id: "SOL",
-		name: "Solana",
-		symbol: "USDC / USDT / SOL",
-		address: "Monr9qZ7YfX2mK8eL1uP4tW5vS3rN6bA8cD0eF2j4U9",
-		standard: "SPL Token",
-		confirmations: "32 Finalized Blocks",
-		estimatedArrival: "~15 seconds",
-		minDepositUsd: 20,
-		qrSvgPattern: "M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 4h2v2h-2v-2zm4-4h2v6h-2v-6zm-4 0h2v2h-2v-2zm2 2h2v2h-2v-2z",
-		explorerUrl: "https://solscan.io/account/",
-		feeUsd: .05,
-		note: "Fastest settlement. Send only USDC, USDT, or native SOL on Solana SPL."
-	},
-	{
-		id: "ETH",
-		name: "Ethereum",
-		symbol: "USDT / USDC / ETH",
-		address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-		standard: "ERC-20",
-		confirmations: "12 Network Confirmations",
-		estimatedArrival: "~2.5 minutes",
-		minDepositUsd: 50,
-		qrSvgPattern: "M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm12 2h2v2h-2v-2zm2-2h2v2h-2v-2zm-4 4h6v2h-6v-2zm0-4h2v2h-2v-2z",
-		explorerUrl: "https://etherscan.io/address/",
-		feeUsd: 1.5,
-		note: "Send only ERC-20 stablecoins or ETH. Deposits below $50 cannot be recovered."
-	},
-	{
-		id: "ARB",
-		name: "Arbitrum One",
-		symbol: "USDC / USDT",
-		address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-		standard: "Arbitrum L2",
-		confirmations: "20 L2 Batches",
-		estimatedArrival: "~25 seconds",
-		minDepositUsd: 10,
-		qrSvgPattern: "M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 2h4v2h-4v-2zm2 4h4v2h-4v-2zm-2-2h2v2h-2v-2zm4 0h2v2h-2v-2z",
-		explorerUrl: "https://arbiscan.io/address/",
-		feeUsd: .15,
-		note: "Lowest gas EVM rail. Send USDC (native) or USDT on Arbitrum One."
-	},
-	{
-		id: "BSC",
-		name: "BNB Smart Chain",
-		symbol: "USDT / USDC / BNB",
-		address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-		standard: "BEP-20",
-		confirmations: "15 BSC Blocks",
-		estimatedArrival: "~45 seconds",
-		minDepositUsd: 20,
-		qrSvgPattern: "M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h2v4h-2v-4zm4 0h2v6h-2v-6zm-2 4h2v2h-2v-2z",
-		explorerUrl: "https://bscscan.com/address/",
-		feeUsd: .2,
-		note: "Send BEP-20 stablecoins. Do not send cross-chain bridges without BEP-20 wrap."
-	},
-	{
-		id: "BTC",
-		name: "Bitcoin Native",
-		symbol: "BTC",
-		address: "bc1qm0nr0e5n1p3r8d35kc6634c0532925a3b844bc454e",
-		standard: "Native SegWit (Bech32)",
-		confirmations: "2 Confirmations",
-		estimatedArrival: "~15-20 minutes",
-		minDepositUsd: 50,
-		qrSvgPattern: "M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm12 0h2v2h-2v-2zm-2 2h2v2h-2v-2zm4 2h2v2h-2v-2zm-4 2h6v2h-6v-2z",
-		explorerUrl: "https://mempool.space/address/",
-		feeUsd: 2.2,
-		note: "Native Bitcoin SegWit address. Only send native BTC."
-	}
-];
-//#endregion
-//#region node_modules/.nitro/vite/services/ssr/assets/router-BNCp43VR.js
+//#region node_modules/.nitro/vite/services/ssr/assets/router-DMlX_g4f.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var __defProp = Object.defineProperty;
@@ -3604,6 +3524,10 @@ var defaultSettings = {
 	timeStop: 28,
 	scanSeconds: 2,
 	dailyWithdrawCap: 1e4,
+	appearance: {
+		theme: "MONROE",
+		showMascot: true
+	},
 	sources: {
 		INVO: {
 			enabled: true,
@@ -4165,6 +4089,11 @@ var TIFS = [
 	"IOC",
 	"FOK"
 ];
+var THEMES = [
+	"MONROE",
+	"PAPER",
+	"MIDNIGHT"
+];
 /** Clamp every knob a persisted book could have been saved with. */
 function sanitizeSettings(input) {
 	const n = (v, a, b) => clip(v, a, b);
@@ -4186,6 +4115,7 @@ function sanitizeSettings(input) {
 	}
 	const orders = input.orders ?? defaultSettings.orders;
 	const v = input.v ?? defaultSettings.v;
+	const appearance = input.appearance ?? defaultSettings.appearance;
 	return {
 		autoTrade: Boolean(input.autoTrade),
 		riskPerTrade: n(input.riskPerTrade, .005, .05),
@@ -4198,6 +4128,10 @@ function sanitizeSettings(input) {
 		timeStop: Math.round(n(input.timeStop, 8, 120)),
 		scanSeconds: Math.round(n(input.scanSeconds, 1, 20)),
 		dailyWithdrawCap: Math.round(n(input.dailyWithdrawCap, 100, 1e5)),
+		appearance: {
+			theme: THEMES.includes(appearance.theme) ? appearance.theme : defaultSettings.appearance.theme,
+			showMascot: appearance.showMascot === void 0 ? defaultSettings.appearance.showMascot : Boolean(appearance.showMascot)
+		},
 		sources: {
 			INVO: source("INVO"),
 			FINVIZ: source("FINVIZ"),
@@ -4286,377 +4220,291 @@ var useSniper = create()(persist((set) => ({
 	partialize: (state) => ({ book: state.book }),
 	storage: createJSONStorage(() => typeof window === "undefined" ? memoryStorage : localStorage)
 }));
-function LiveModeTransitionModal({ isOpen, onClose, onConfirm }) {
-	const [selectedNetwork, setSelectedNetwork] = (0, import_react.useState)(DEPOSIT_NETWORKS[0]);
-	const [copied, setCopied] = (0, import_react.useState)(false);
-	const [showQr, setShowQr] = (0, import_react.useState)(false);
-	const [step, setStep] = (0, import_react.useState)("briefing");
-	const [simulating, setSimulating] = (0, import_react.useState)(false);
-	const [isActivating, setIsActivating] = (0, import_react.useState)(false);
-	const live = useDesk((s) => s.live);
-	const fund = useDesk((s) => s.fund);
+var useMascot = create((set) => ({
+	mood: null,
+	sequence: 0,
+	ping: (mood) => set((state) => ({
+		mood,
+		sequence: state.sequence + 1
+	})),
+	reset: () => set({ mood: null })
+}));
+function Mascot({ className }) {
+	const mood = useMascot((state) => state.mood);
+	const sequence = useMascot((state) => state.sequence);
+	const lastReactedAt = (0, import_react.useRef)(0);
+	(0, import_react.useEffect)(() => {
+		const reactToInteraction = () => {
+			const now = Date.now();
+			if (now - lastReactedAt.current < 700) return;
+			lastReactedAt.current = now;
+			useMascot.getState().ping("alert");
+		};
+		window.addEventListener("pointerdown", reactToInteraction);
+		window.addEventListener("keydown", reactToInteraction);
+		return () => {
+			window.removeEventListener("pointerdown", reactToInteraction);
+			window.removeEventListener("keydown", reactToInteraction);
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!mood) return;
+		const timer = window.setTimeout(() => useMascot.getState().reset(), 1800);
+		return () => window.clearTimeout(timer);
+	}, [mood, sequence]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		"aria-label": mood ? `Monroe skull, ${mood}` : "Monroe human skull",
+		className,
+		"data-mood": mood ?? "idle",
+		role: "img",
+		viewBox: "0 0 48 48",
+		fill: "none",
+		xmlns: "http://www.w3.org/2000/svg",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				d: "M24 3.75c-9.4 0-16.4 7.3-16.4 17.1 0 5 1.8 8.7 5.2 11.1l.7 6.3c.2 1.8 1.8 3.1 3.6 3.1h14c1.8 0 3.4-1.3 3.6-3.1l.7-6.3c3.4-2.4 5.2-6.1 5.2-11.1 0-9.8-7-17.1-16.6-17.1Z",
+				fill: "var(--color-cream)",
+				stroke: "var(--color-brass)",
+				strokeWidth: "1.35"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				d: "M9.8 23.5c2.5-.4 4.1-1.8 5.2-4.4M38.2 23.5c-2.5-.4-4.1-1.8-5.2-4.4",
+				stroke: "var(--color-brass)",
+				strokeWidth: "1",
+				strokeLinecap: "round"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				d: "M13.1 21.6c.2-4.2 3.1-7.1 7-7.1 2 0 3.3.7 3.9 1.5.7-.8 2-1.5 3.9-1.5 3.9 0 6.8 2.9 7 7.1-.1 3.4-2.8 6-6.1 6-2 0-3.7-.8-4.8-2.2-1.1 1.4-2.8 2.2-4.8 2.2-3.3 0-6-2.6-6.1-6Z",
+				fill: "var(--color-ink)",
+				stroke: "var(--color-line)",
+				strokeWidth: "1"
+			}),
+			mood ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", {
+				fill: "var(--color-brass)",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					cx: "18.8",
+					cy: "22.1",
+					r: "1.05"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					cx: "29.2",
+					cy: "22.1",
+					r: "1.05"
+				})]
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				d: "M24 27.2c-.3 2.1-2.5 4.2-2.5 5.9 0 1.3 1 2.1 2.5 2.1s2.5-.8 2.5-2.1c0-1.7-2.2-3.8-2.5-5.9Z",
+				fill: "var(--color-ink)",
+				stroke: "var(--color-brass)",
+				strokeWidth: ".8",
+				strokeLinejoin: "round"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				d: "M15.5 31.4c2 .7 4 .8 6 .2M32.5 31.4c-2 .7-4 .8-6 .2M16.2 35.6l1.1 3.5h13.4l1.1-3.5c-2.4.6-5 .9-7.8.9s-5.4-.3-7.8-.9Z",
+				fill: "var(--color-panel-2)",
+				stroke: "var(--color-brass)",
+				strokeWidth: ".9",
+				strokeLinejoin: "round"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				d: "M19.2 36.2v2.8m3.2-2.7v2.8m3.2-2.8v2.8m3.2-3v2.9",
+				stroke: "var(--color-line)",
+				strokeWidth: ".8",
+				strokeLinecap: "round"
+			}),
+			mood === "bright" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				d: "m40 7 .7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2Z",
+				fill: "var(--color-brass)"
+			}) : null
+		]
+	});
+}
+function LiveModeTransitionModal({ isOpen, onClose }) {
 	if (!isOpen) return null;
-	const handleCopy = () => {
-		navigator.clipboard.writeText(selectedNetwork.address);
-		setCopied(true);
-		setTimeout(() => setCopied(false), 2200);
-	};
-	const handleSimulateDeposit = (amount) => {
-		setSimulating(true);
-		setTimeout(() => {
-			fund("in", amount, selectedNetwork.address, selectedNetwork.name);
-			setSimulating(false);
-			handleActivateLive();
-		}, 700);
-	};
-	const handleActivateLive = () => {
-		setIsActivating(true);
-		setTimeout(() => {
-			setIsActivating(false);
-			onConfirm();
-		}, 1400);
-	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fixed inset-0 z-50 flex items-center justify-center p-4",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "fixed inset-0 bg-ink/80 backdrop-blur-md transition-opacity",
-			onClick: onClose,
-			"aria-hidden": "true"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			"aria-label": "Close live trading status",
+			className: "fixed inset-0 cursor-default bg-ink/80 backdrop-blur-sm",
+			onClick: onClose
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 			role: "dialog",
 			"aria-modal": "true",
-			className: "relative z-10 w-full max-w-xl overflow-hidden rounded-2xl border-2 border-amber-500/60 bg-panel shadow-2xl shadow-amber-500/10 text-cream",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "h-1.5 w-full bg-gradient-to-r from-amber-600 via-amber-400 to-yellow-500" }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "flex items-start justify-between border-b border-line px-6 py-5",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-3",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "flex size-11 items-center justify-center rounded-xl border border-amber-500/40 bg-amber-500/20 text-amber-400",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Zap, { className: "size-6 animate-pulse" })
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex items-center gap-2",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "text-xs font-bold tracking-widest text-amber-400 uppercase",
-								children: "Production Execution"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300",
-								children: "REAL CAPITAL RAIL"
-							})]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-							className: "text-xl font-bold tracking-tight text-cream",
-							children: "Switch to Live Trading Mode"
-						})] })]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			"aria-labelledby": "live-status-title",
+			className: "relative z-10 w-full max-w-lg overflow-hidden rounded-2xl border border-line bg-panel text-cream shadow-2xl",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "flex items-start justify-between border-b border-line px-5 py-4 sm:px-6",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex items-start gap-3",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LockKeyhole, {
+							className: "size-5",
+							"aria-hidden": "true"
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-[11px] font-semibold tracking-widest text-amber-300 uppercase",
+						children: "Execution unavailable"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "live-status-title",
+						className: "mt-1 text-lg font-semibold",
+						children: "Paper trading only"
+					})] })]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					onClick: onClose,
+					"aria-label": "Close",
+					className: "flex size-10 items-center justify-center rounded-lg text-faint hover:bg-panel-2 hover:text-cream",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, {
+						className: "size-4",
+						"aria-hidden": "true"
+					})
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "space-y-4 px-5 py-5 sm:px-6",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-sm leading-relaxed text-faint",
+						children: "No brokerage or exchange execution provider is connected. The desk cannot place real orders, receive deposits, or send withdrawals. Balances and trade activity shown here are simulations."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex gap-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-4",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TriangleAlert, {
+							className: "mt-0.5 size-4 shrink-0 text-amber-300",
+							"aria-hidden": "true"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "text-xs leading-relaxed text-cream/80",
+							children: "Live execution stays locked. A real-money release would require a separately configured broker integration, managed credentials, and audited operational safeguards. No addresses, keys, or trading endpoints are configured in this app."
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "flex justify-end pt-1",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+							onClick: onClose,
+							children: "Back to paper desk"
+						})
+					})
+				]
+			})]
+		})]
+	});
+}
+function StandbyPositionsModal({ isOpen, onClose }) {
+	const positions = useDesk((state) => state.demo.positions);
+	const flatten = useDesk((state) => state.flatten);
+	if (!isOpen) return null;
+	const closePosition = (id) => {
+		flatten(id);
+		if (useDesk.getState().demo.positions.length === 0) onClose();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			"aria-label": "Close standby position review",
+			className: "fixed inset-0 cursor-default bg-ink/85 backdrop-blur-sm",
+			onClick: onClose
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			role: "dialog",
+			"aria-modal": "true",
+			"aria-labelledby": "standby-review-title",
+			className: "relative z-10 my-auto max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-line bg-panel text-cream shadow-2xl",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "border-b border-line px-5 py-4 sm:px-6",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-[11px] font-semibold tracking-widest text-amber-300 uppercase",
+						children: "Bot on standby"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "standby-review-title",
+						className: "mt-1 text-lg font-semibold",
+						children: positions.length ? `${positions.length} open paper position${positions.length === 1 ? "" : "s"}` : "Trading paused"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "mt-2 text-sm leading-relaxed text-faint",
+						children: "New entries and automatic exits are paused. Review the last market marks below, close positions individually, or leave them open to manage later."
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "space-y-3 px-5 py-4 sm:px-6",
+				children: [positions.map((position) => {
+					const unrealized = (position.mark - position.entryPrice) * position.qty;
+					const toTarget = ((position.target ?? position.entryPrice * 1.06) - position.mark) * position.qty;
+					const toStop = (position.stop - position.mark) * position.qty;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", {
+						className: "rounded-xl border border-line bg-panel-2 p-4",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex flex-wrap items-start justify-between gap-3",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+									className: "font-semibold",
+									children: position.symbol
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "mt-1 text-xs text-faint",
+									children: [
+										"Entry $",
+										position.entryPrice.toPrecision(6),
+										" · Last mark $",
+										position.mark.toPrecision(6)
+									]
+								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: cn("font-mono text-sm font-semibold", unrealized >= 0 ? "text-gain" : "text-loss"),
+									children: [
+										unrealized >= 0 ? "+" : "",
+										"$",
+										unrealized.toFixed(2),
+										" unrealized"
+									]
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "mt-3 text-xs leading-relaxed text-faint",
+								children: [
+									"At target: ",
+									toTarget >= 0 ? "+" : "",
+									"$",
+									toTarget.toFixed(2),
+									" from last mark · At stop: ",
+									toStop >= 0 ? "+" : "",
+									"$",
+									toStop.toFixed(2),
+									" from last mark. These are scenario estimates, not forecasts."
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								onClick: () => closePosition(position.id),
+								className: "mt-3 min-h-10 rounded-lg border border-loss/40 px-3 text-xs font-semibold text-loss hover:bg-loss/10",
+								children: [
+									"Close ",
+									position.symbol,
+									" at last paper mark"
+								]
+							})
+						]
+					}, position.id);
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex flex-wrap justify-end gap-2 pt-1",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						onClick: onClose,
-						className: "rounded-lg p-1.5 text-faint hover:bg-panel-2 hover:text-cream transition-colors",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "size-5" })
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "p-6",
-					children: step === "briefing" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex flex-col gap-5",
+						className: "min-h-11 rounded-lg border border-line px-4 text-sm text-faint hover:text-cream",
+						children: "Review later"
+					}), positions.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						onClick: onClose,
+						className: "min-h-11 rounded-lg bg-brass px-4 text-sm font-semibold text-ink hover:brightness-105",
 						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-								className: "text-sm text-faint leading-relaxed",
-								children: [
-									"You are transitioning the Monroe algorithmic sniper from the",
-									" ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "font-semibold text-emerald-400",
-										children: "$500 Demo Sandbox"
-									}),
-									" to the",
-									" ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "font-semibold text-amber-400",
-										children: "Live Execution Rail"
-									}),
-									". In this mode, trades route through live institutional feeds with real capital accounting."
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "grid gap-2.5 rounded-xl border border-line bg-panel-2 p-4",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-										className: "text-xs font-semibold text-brass uppercase tracking-wider",
-										children: "Live Guardrails & Execution Protocols"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex items-start gap-2.5 text-xs",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "size-4 shrink-0 text-gain mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "font-semibold text-cream",
-												children: "Pre-Trade Risk Sizing:"
-											}),
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "text-faint",
-												children: "Position sizes are hard-capped at 1.5% maximum capital risk per candidate."
-											})
-										] })]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex items-start gap-2.5 text-xs",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "size-4 shrink-0 text-gain mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "font-semibold text-cream",
-												children: "Intraday 3% Drawdown Circuit Breaker:"
-											}),
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "text-faint",
-												children: "Automatic halt if portfolio experiences 3 consecutive losses or 3% drawdown."
-											})
-										] })]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex items-start gap-2.5 text-xs",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "size-4 shrink-0 text-gain mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "font-semibold text-cream",
-												children: "Dedicated Multi-Chain Deposit Address:"
-											}),
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "text-faint",
-												children: "Direct non-custodial wallet destination generated for your live account."
-											})
-										] })]
-									})
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-center justify-between rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex items-center gap-2.5",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Wallet, { className: "size-5 text-amber-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-										className: "text-xs font-semibold text-cream",
-										children: "Current Live Ledger Balance"
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-										className: "text-[11px] text-faint",
-										children: "Available cash ready for deployment"
-									})] })]
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "text-right",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-										className: "font-mono text-lg font-bold text-amber-300",
-										children: ["$", live.cash.toFixed(2)]
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-										className: "text-[10px] text-faint",
-										children: live.cash === 0 ? "Deposit required to trade" : "Funded and ready"
-									})]
-								})]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex flex-col gap-2 pt-2 sm:flex-row sm:justify-end",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-									variant: "ghost",
-									onClick: onClose,
-									className: "text-xs",
-									children: "Stay on Demo Sandbox"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
-									onClick: () => setStep("address"),
-									className: "bg-amber-500 hover:bg-amber-400 text-ink font-bold text-xs gap-2",
-									children: ["View Deposit Address & Activate ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArrowRight, { className: "size-3.5" })]
-								})]
-							})
+							"Keep ",
+							positions.length,
+							" position",
+							positions.length === 1 ? "" : "s",
+							" open"
 						]
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex flex-col gap-4",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-center justify-between",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "text-xs font-semibold text-brass uppercase tracking-wider",
-									children: "Assigned Multi-Chain Deposit Address"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									onClick: () => setStep("briefing"),
-									className: "text-xs text-faint hover:text-cream underline",
-									children: "Back to Overview"
-								})]
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								className: "mt-1 text-xs text-faint",
-								children: "Transfer USDT, USDC, SOL, ETH, or BTC to your account address below."
-							})] }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "flex flex-wrap gap-1.5 rounded-xl border border-line bg-panel-2 p-1",
-								children: DEPOSIT_NETWORKS.map((net) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									type: "button",
-									onClick: () => {
-										setSelectedNetwork(net);
-										setCopied(false);
-									},
-									className: cn("flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all", selectedNetwork.id === net.id ? "bg-amber-500 text-ink font-bold shadow-xs" : "text-faint hover:text-cream hover:bg-panel"),
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: net.name }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "text-[10px] opacity-75",
-										children: [
-											"(",
-											net.id,
-											")"
-										]
-									})]
-								}, net.id))
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "rounded-xl border border-line bg-panel-2 p-4",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex items-center justify-between text-xs",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "font-semibold text-cream",
-											children: [
-												selectedNetwork.name,
-												" (",
-												selectedNetwork.standard,
-												")"
-											]
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300",
-											children: selectedNetwork.confirmations
-										})]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "mt-2.5 flex items-center justify-between gap-2 rounded-lg border border-line bg-ink px-3 py-2.5",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "font-mono text-xs font-semibold text-cream break-all select-all",
-											children: selectedNetwork.address
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											onClick: handleCopy,
-											className: "flex shrink-0 items-center gap-1 rounded bg-amber-500/20 px-2.5 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-500/30 transition-colors",
-											children: copied ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Check, { className: "size-3.5 text-gain" }), " Copied"] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Copy, { className: "size-3.5" }), " Copy"] })
-										})]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-										className: "mt-2 text-[11px] text-faint",
-										children: [
-											selectedNetwork.note,
-											" · Est. arrival: ",
-											selectedNetwork.estimatedArrival
-										]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "mt-3 border-t border-line/60 pt-3 flex items-center justify-between",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-											type: "button",
-											onClick: () => setShowQr(!showQr),
-											className: "flex items-center gap-1.5 text-xs text-brass hover:text-amber-300",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(QrCode, { className: "size-4" }), showQr ? "Hide QR Code" : "Show Deposit QR Code"]
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
-											href: `${selectedNetwork.explorerUrl}${selectedNetwork.address}`,
-											target: "_blank",
-											rel: "noreferrer",
-											className: "flex items-center gap-1 text-[11px] text-faint hover:text-cream",
-											children: ["Verify on Explorer ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExternalLink, { className: "size-3" })]
-										})]
-									}),
-									showQr && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "mt-3 flex flex-col items-center justify-center rounded-xl bg-white p-4",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-											viewBox: "0 0 24 24",
-											className: "size-36 text-black",
-											fill: "currentColor",
-											"aria-label": "Deposit QR Code",
-											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: selectedNetwork.qrSvgPattern })
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-											className: "mt-2 text-[10px] text-neutral-800 font-mono text-center",
-											children: [
-												"Scan to deposit ",
-												selectedNetwork.name,
-												" (",
-												selectedNetwork.id,
-												")"
-											]
-										})]
-									})
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "rounded-xl border border-line/80 bg-panel-2/60 p-3.5",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex items-center justify-between",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "flex items-center gap-2",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "size-4 text-brass" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "text-xs font-semibold text-cream",
-												children: "Instant Live Wallet Funding Simulator"
-											})]
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-[10px] text-faint",
-											children: "Instant On-Chain Credit"
-										})]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-										className: "mt-1 text-[11px] text-faint",
-										children: "Need to test live rail execution immediately? Simulate an incoming confirmed deposit."
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "mt-2.5 flex flex-wrap gap-2",
-										children: [
-											250,
-											500,
-											1e3
-										].map((amt) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-											type: "button",
-											disabled: simulating,
-											onClick: () => handleSimulateDeposit(amt),
-											className: "rounded-lg border border-line bg-panel px-3 py-1.5 text-xs font-semibold text-cream hover:border-amber-400 hover:text-amber-300 transition-colors",
-											children: [
-												"+$",
-												amt,
-												" on ",
-												selectedNetwork.id
-											]
-										}, amt))
-									})
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-center justify-end gap-2 pt-2",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-									variant: "ghost",
-									onClick: onClose,
-									disabled: isActivating,
-									className: "text-xs",
-									children: "Cancel"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-									onClick: handleActivateLive,
-									disabled: isActivating,
-									className: "bg-amber-500 hover:bg-amber-400 text-ink font-bold text-xs gap-2",
-									children: isActivating ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Zap, { className: "size-4 animate-spin text-ink" }), " Activating Production Rail..."] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Zap, { className: "size-4 text-ink" }), " Activate Live Rail Mode"] })
-								})]
-							})
-						]
-					})
-				}),
-				isActivating && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "absolute inset-0 z-30 flex flex-col items-center justify-center bg-ink/90 p-6 text-center backdrop-blur-md animate-in fade-in duration-300",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "relative flex size-20 items-center justify-center rounded-2xl border-2 border-amber-400 bg-amber-500/20 text-amber-400 shadow-2xl shadow-amber-500/50 live-pulse",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Zap, { className: "size-10" })
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-							className: "mt-4 text-xl font-bold tracking-tight text-amber-300",
-							children: "SWITCHING TO LIVE EXECUTION RAIL"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "mt-1.5 max-w-sm text-xs text-cream/90 font-mono",
-							children: "Binding assigned deposit address · Arming 1.5% ATR safeguards · Real-capital routing online"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "mt-4 h-1.5 w-48 overflow-hidden rounded-full bg-line",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "h-full bg-gradient-to-r from-amber-500 to-yellow-400 animate-pulse w-full" })
-						})
-					]
-				})
-			]
+					}) : null]
+				})]
+			})]
 		})]
 	});
 }
@@ -4667,7 +4515,7 @@ var INTERVALS = /* @__PURE__ */ new Set([
 	"15m",
 	"1h"
 ]);
-createServerFn({ method: "POST" }).validator((input) => {
+var loadKlines = createServerFn({ method: "POST" }).validator((input) => {
 	const symbol = String(input?.symbol ?? "BTCUSDT").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
 	const interval = INTERVALS.has(String(input?.interval)) ? String(input?.interval) : "5m";
 	return {
@@ -4728,23 +4576,27 @@ function Frame({ children }) {
 		let tickCount = 0;
 		const loop = async () => {
 			if (cancel) return;
-			const book = useSniper.getState().book;
-			const interval = Math.max(1, book.settings.scanSeconds) * 1e3;
-			const due = catchUpTicks(Date.now(), book.lastWall, book.settings.scanSeconds);
-			if (due > 0) useSniper.getState().runTicks(due);
+			const sniperBook = useSniper.getState().book;
+			const interval = Math.max(1, sniperBook.settings.scanSeconds) * 1e3;
 			const desk = useDesk.getState();
 			tickCount++;
-			if (desk.power && tickCount % 3 === 0) try {
+			if (desk.power) {
+				const due = catchUpTicks(Date.now(), sniperBook.lastWall, sniperBook.settings.scanSeconds);
+				if (due > 0) useSniper.getState().runTicks(due);
+			} else useSniper.getState().runTicks(0);
+			if ((desk.power || desk.demo.positions.length > 0) && tickCount % 3 === 0) try {
 				const feeds = await loadFeeds({ data: {} });
 				const combined = [...feeds.binance, ...feeds.dex];
 				if (combined.length) {
-					desk.setTape(combined, feeds.note);
+					const current = useDesk.getState();
+					current.setTape(combined, feeds.note);
 					const prices = {};
 					for (const c of combined) prices[c.id] = c.priceUsd;
-					desk.tick(prices);
+					if (current.power) current.tick(prices);
+					else if (current.demo.positions.length > 0) current.tick(prices, true);
 				}
 			} catch {}
-			if (desk.power) desk.autoStep();
+			if (useDesk.getState().power) useDesk.getState().autoStep();
 			timer = window.setTimeout(loop, interval);
 		};
 		(async () => {
@@ -4755,6 +4607,21 @@ function Frame({ children }) {
 			]);
 			if (cancel) return;
 			setReady(true);
+			getTradeLearningState().then((state) => {
+				useDesk.getState().restoreLearningState({
+					seen: state.seen,
+					wins: state.wins,
+					losses: state.losses,
+					realized: state.realized,
+					minScore: state.minScore
+				}, state.seen);
+			}).catch((error) => {
+				console.error("[trade-learning] Failed to restore database learning state:", error);
+				useDesk.setState((desk) => ({
+					note: "Database learning state is unavailable; local paper learning remains active.",
+					log: ["Trade learning state could not be loaded from the database.", ...desk.log].slice(0, 50)
+				}));
+			});
 			loop();
 		})();
 		return () => {
@@ -4778,6 +4645,12 @@ function Shell({ children }) {
 	const book = useSniper((s) => s.book);
 	const unlocked = useSniper((s) => s.unlocked);
 	const locked = Boolean(book.pinHash) && !unlocked;
+	const appearance = book.settings.appearance ?? defaultSettings.appearance;
+	(0, import_react.useEffect)(() => {
+		document.documentElement.dataset.theme = appearance.theme.toLowerCase();
+		const themeColor = appearance.theme === "PAPER" ? "#f4f1e8" : appearance.theme === "MIDNIGHT" ? "#000000" : "#10120e";
+		document.querySelector("meta[name=\"theme-color\"]")?.setAttribute("content", themeColor);
+	}, [appearance.theme]);
 	const [nowTs, setNowTs] = (0, import_react.useState)(Date.now());
 	(0, import_react.useEffect)(() => {
 		const timer = window.setInterval(() => setNowTs(Date.now()), 1e3);
@@ -4795,9 +4668,17 @@ function Shell({ children }) {
 	const nairobi = formatNairobiTime(botStartedAt, nowTs);
 	const readiness = getReadiness ? getReadiness() : null;
 	const [showLiveModal, setShowLiveModal] = (0, import_react.useState)(false);
-	const [justActivatedLive, setJustActivatedLive] = (0, import_react.useState)(false);
+	const [showStandbyModal, setShowStandbyModal] = (0, import_react.useState)(false);
+	const requestStandby = () => {
+		if (!power) {
+			setPower(true);
+			return;
+		}
+		setPower(false);
+		if (useDesk.getState().demo.positions.length) setShowStandbyModal(true);
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: cn("min-h-screen bg-ink text-cream md:pl-56 transition-colors duration-700", justActivatedLive && "live-flash-screen"),
+		className: "min-h-screen bg-ink text-cream md:pl-56",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 				className: "fixed inset-y-0 left-0 z-20 hidden w-56 flex-col border-r border-line bg-panel md:flex",
@@ -4807,12 +4688,12 @@ function Shell({ children }) {
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "flex items-center justify-between",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "text-xs tracking-widest text-brass uppercase",
-									children: "Monroe"
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "flex items-center gap-1.5 text-xs tracking-widest text-brass uppercase",
+									children: [appearance.showMascot ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mascot, { className: "size-8 shrink-0" }) : null, "Monroe"]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: cn("rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wider uppercase", mode === "live" ? "border border-amber-500/40 bg-amber-500/20 text-amber-300" : "border border-emerald-500/40 bg-emerald-500/20 text-emerald-300"),
-									children: mode.toUpperCase()
+									children: mode === "live" ? "LOCKED" : "PAPER"
 								})]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -4854,7 +4735,7 @@ function Shell({ children }) {
 								className: "flex items-center justify-between text-[11px]",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "text-faint",
-									children: "Real Money Readiness"
+									children: "Paper Discipline"
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 									className: "font-semibold text-emerald-400",
 									children: [readiness.readinessScore, "%"]
@@ -4873,7 +4754,7 @@ function Shell({ children }) {
 									readiness.completedDemoTrades,
 									"/",
 									readiness.targetDemoTrades,
-									" demo trades trained"
+									" paper trades recorded"
 								]
 							})
 						]
@@ -4887,7 +4768,7 @@ function Shell({ children }) {
 								className: "flex items-center justify-between text-xs text-faint",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Active Mode" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: mode === "live" ? "text-amber-400 font-medium" : "text-gain font-medium",
-									children: mode === "live" ? "Live Rail" : "Demo Sandbox"
+									children: mode === "live" ? "Legacy state locked" : "Paper simulation"
 								})]
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 								className: "num mt-1 text-base font-semibold text-cream",
@@ -4897,15 +4778,15 @@ function Shell({ children }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "px-5 py-3 text-[11px] text-faint",
-						children: "Global sniper desk. Automated risk & execution."
+						children: "Paper-only trading simulator with automated risk controls."
 					})
 				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "flex min-h-screen flex-col pb-20 md:pb-0",
+				className: "flex min-h-screen flex-col pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-0",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-						className: "sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-line bg-ink/95 px-4 py-3 backdrop-blur md:px-8",
+						className: "sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-line bg-ink/95 px-4 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 backdrop-blur sm:gap-3 md:px-8",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex min-w-0 items-center gap-2.5",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -4916,12 +4797,24 @@ function Shell({ children }) {
 								suppressHydrationWarning: true,
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "flex items-center gap-1.5",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "text-[11px] font-semibold tracking-wider text-brass uppercase",
-										children: "Nairobi EAT (UTC+3)"
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "rounded bg-emerald-500/20 px-1.5 py-0.2 text-[10px] font-bold text-emerald-300",
-										children: nairobi.dayLabel
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "whitespace-nowrap text-[11px] font-semibold tracking-wider text-brass uppercase",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sm:hidden",
+											children: "Nairobi EAT"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "hidden sm:inline",
+											children: "Nairobi EAT (UTC+3)"
+										})]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "max-[359px]:hidden rounded bg-emerald-500/20 px-1.5 py-0.2 text-[10px] font-bold text-emerald-300",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sm:hidden",
+											children: nairobi.dayLabel.replace(" Active", "")
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "hidden sm:inline",
+											children: nairobi.dayLabel
+										})]
 									})]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 									className: "truncate font-mono text-xs font-medium text-cream md:text-sm",
@@ -4933,88 +4826,94 @@ function Shell({ children }) {
 								})]
 							})]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex items-center gap-2 sm:gap-3",
+							className: "flex items-center gap-1.5 sm:gap-3",
 							children: [
 								readiness && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									title: readiness.statusMessage,
+									title: `${readiness.completedDemoTrades} paper trades recorded`,
 									className: "hidden items-center gap-2 rounded-full border border-line bg-panel-2 px-3 py-1 lg:flex",
 									suppressHydrationWarning: true,
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "size-3.5 text-brass" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 										className: "flex items-center gap-1.5 text-xs",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 											className: "text-faint",
-											children: "Demo Training:"
+											children: "Paper discipline:"
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 											className: cn("font-semibold", readiness.readinessScore >= 85 ? "text-gain" : "text-amber-400"),
-											children: [readiness.readinessScore, "% Ready"]
+											children: [readiness.readinessScore, "%"]
 										})]
 									})]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "flex items-center rounded-full border border-line bg-panel-2 p-0.5",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										type: "button",
+										"aria-label": "Paper simulation mode",
 										onClick: () => setMode("demo"),
-										className: cn("rounded-full px-2.5 py-1 text-xs font-medium transition-colors", mode === "demo" ? "bg-brass text-ink font-semibold shadow-xs" : "text-faint hover:text-cream"),
-										children: "Demo ($500)"
+										className: cn("min-h-11 rounded-full px-2 py-1 text-[11px] font-medium transition-colors sm:px-2.5 sm:text-xs", mode === "demo" ? "bg-brass text-ink font-semibold shadow-xs" : "text-faint hover:text-cream"),
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sm:hidden",
+											"aria-hidden": "true",
+											children: "Demo"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "hidden sm:inline",
+											children: "Paper"
+										})]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										type: "button",
-										onClick: () => {
-											if (mode !== "live") setShowLiveModal(true);
-											else setShowLiveModal(true);
-										},
-										className: cn("rounded-full px-2.5 py-1 text-xs font-medium transition-colors", mode === "live" ? "bg-amber-500 text-ink font-semibold shadow-xs" : "text-faint hover:text-cream"),
-										children: [
-											"Live ($",
-											live.cash.toFixed(0),
-											")"
-										]
+										"aria-label": "Live trading unavailable. View connection status.",
+										onClick: () => setShowLiveModal(true),
+										className: "min-h-11 rounded-full px-2 py-1 text-[11px] font-medium text-faint transition-colors hover:text-cream sm:px-2.5 sm:text-xs",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sm:hidden",
+											"aria-hidden": "true",
+											children: "Live off"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "hidden sm:inline",
+											children: "Live unavailable"
+										})]
 									})]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "hidden text-right font-mono sm:block",
 									suppressHydrationWarning: true,
 									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 											className: "text-[10px] tracking-wider text-faint uppercase",
-											children: [mode === "live" ? "Live Bal" : "Demo Bal", ":"]
+											children: "Paper balance:"
 										}),
 										" ",
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: cn("text-sm font-semibold", mode === "live" ? "text-amber-300" : "text-cream"),
+											className: "text-sm font-semibold text-cream",
 											children: ["$", activeEq.toFixed(2)]
 										})
 									]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									type: "button",
-									onClick: () => setPower(!power),
-									className: cn("inline-flex min-h-10 items-center gap-2 rounded-full border px-3 text-xs font-medium transition-colors", power ? mode === "live" ? "border-amber-500/60 bg-amber-500/15 text-amber-300" : "border-gain/50 bg-gain/10 text-gain" : "border-line bg-panel text-faint hover:text-cream"),
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: cn("size-2 rounded-full", power ? mode === "live" ? "bg-amber-400 pulse-dot" : "bg-gain pulse-dot" : "bg-faint") }), power ? mode === "live" ? "Live Armed" : "Sniper Armed" : "Standby"]
+									"aria-label": power ? "Disarm paper bot" : "Arm paper bot",
+									onClick: requestStandby,
+									className: cn("inline-flex min-h-11 items-center gap-1.5 rounded-full border px-2 text-xs font-medium transition-colors sm:gap-2 sm:px-3", power ? mode === "live" ? "border-amber-500/60 bg-amber-500/15 text-amber-300" : "border-gain/50 bg-gain/10 text-gain" : "border-line bg-panel text-faint hover:text-cream"),
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: cn("size-2 rounded-full", power ? mode === "live" ? "bg-amber-400 pulse-dot" : "bg-gain pulse-dot" : "bg-faint") }), power ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "sm:hidden",
+										children: "Armed"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "hidden sm:inline",
+										children: "Paper bot armed"
+									})] }) : "Standby"]
 								})
 							]
 						})]
 					}),
 					mode === "live" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center justify-between border-b border-amber-500/40 bg-gradient-to-r from-amber-950/60 via-panel-2 to-amber-950/60 px-4 py-2 text-xs backdrop-blur md:px-8",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex items-center gap-2",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "size-2 rounded-full bg-amber-400 animate-ping" }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "font-bold tracking-wider text-amber-300 uppercase",
-									children: "⚡ Live Capital Execution Rail Active"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "hidden text-faint md:inline",
-									children: "· Non-custodial DEX/CEX execution routing with strict 1.5% ATR sizing"
-								})
-							]
+						className: "flex items-center justify-between border-b border-amber-500/40 bg-panel-2 px-4 py-2 text-xs md:px-8",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "font-semibold text-amber-300",
+							children: "Live execution is unavailable. This session is simulation-only."
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							onClick: () => setShowLiveModal(true),
-							className: "flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-300 hover:bg-amber-500/30 transition-colors",
-							children: "Deposit Address & Rail Status"
+							onClick: () => setMode("demo"),
+							className: "min-h-11 rounded bg-panel px-3 text-[11px] font-semibold text-cream hover:bg-panel-2",
+							children: "Return to paper mode"
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("main", {
@@ -5023,18 +4922,16 @@ function Shell({ children }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LiveModeTransitionModal, {
 						isOpen: showLiveModal,
-						onClose: () => setShowLiveModal(false),
-						onConfirm: () => {
-							setMode("live");
-							setShowLiveModal(false);
-							setJustActivatedLive(true);
-							setTimeout(() => setJustActivatedLive(false), 2e3);
-						}
+						onClose: () => setShowLiveModal(false)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StandbyPositionsModal, {
+						isOpen: showStandbyModal,
+						onClose: () => setShowStandbyModal(false)
 					})
 				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
-				className: "fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-panel md:hidden",
+				className: "fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-panel pb-[env(safe-area-inset-bottom)] md:hidden",
 				children: NAV.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NavLink, {
 					...item,
 					compact: true
@@ -5129,14 +5026,14 @@ function LockScreen() {
 		]
 	});
 }
-var styles_default = "/assets/styles-BrusHofR.css";
+var styles_default = "/assets/styles-BhFDU-8v.css";
 var Route$7 = createRootRoute({
 	head: () => ({
 		meta: [
 			{ charSet: "utf-8" },
 			{
 				name: "viewport",
-				content: "width=device-width, initial-scale=1"
+				content: "width=device-width, initial-scale=1, viewport-fit=cover"
 			},
 			{ title: "Monroe Sniper" },
 			{
@@ -5197,19 +5094,19 @@ var Route$7 = createRootRoute({
 		})]
 	})
 });
-var $$splitComponentImporter$6 = () => import("./routes-B2w1xlmw.mjs");
+var $$splitComponentImporter$6 = () => import("./routes-B2A4r-0j.mjs");
 var Route$6 = createFileRoute("/")({ component: lazyRouteComponent($$splitComponentImporter$6, "component") });
-var $$splitComponentImporter$5 = () => import("./learn-nH1UXVsH.mjs");
+var $$splitComponentImporter$5 = () => import("./learn-CAMZfIib.mjs");
 var Route$5 = createFileRoute("/learn")({ component: lazyRouteComponent($$splitComponentImporter$5, "component") });
 var $$splitComponentImporter$4 = () => import("./opportunities-DMVsPuIu.mjs");
 var Route$4 = createFileRoute("/opportunities")({ component: lazyRouteComponent($$splitComponentImporter$4, "component") });
-var $$splitComponentImporter$3 = () => import("./settings-CMkw-kAz.mjs");
+var $$splitComponentImporter$3 = () => import("./settings-DB7L_38c.mjs");
 var Route$3 = createFileRoute("/settings")({ component: lazyRouteComponent($$splitComponentImporter$3, "component") });
-var $$splitComponentImporter$2 = () => import("./signals-mL_kjGvO.mjs");
+var $$splitComponentImporter$2 = () => import("./signals-BWyze7eC.mjs");
 var Route$2 = createFileRoute("/signals")({ component: lazyRouteComponent($$splitComponentImporter$2, "component") });
-var $$splitComponentImporter$1 = () => import("./tape-iUQTfZGy.mjs");
+var $$splitComponentImporter$1 = () => import("./tape-Bsk1DKUL.mjs");
 var Route$1 = createFileRoute("/tape")({ component: lazyRouteComponent($$splitComponentImporter$1, "component") });
-var $$splitComponentImporter = () => import("./wallet-JHgwM7I0.mjs");
+var $$splitComponentImporter = () => import("./wallet-DFMwUWTb.mjs");
 var Route = createFileRoute("/wallet")({ component: lazyRouteComponent($$splitComponentImporter, "component") });
 var rootRouteChildren = {
 	IndexRoute: Route$6.update({
@@ -5258,4 +5155,4 @@ function getRouter() {
 	});
 }
 //#endregion
-export { kellyFraction as a, formatNairobiTime as c, scanAllAvenues as d, useDesk as f, SOURCE_META as i, useDyorStore as l, LiveModeTransitionModal as n, money as o, useSniper as r, pct as s, router_exports as t, DEPOSIT_NETWORKS as u };
+export { LiveModeTransitionModal as a, SOURCE_META as c, money as d, pct as f, useDesk as g, scanAllAvenues as h, StandbyPositionsModal as i, defaultSettings as l, useDyorStore as m, loadFeeds as n, useMascot as o, formatNairobiTime as p, loadKlines as r, useSniper as s, router_exports as t, kellyFraction as u };
