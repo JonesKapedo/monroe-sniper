@@ -56,6 +56,7 @@ export function scanAllAvenues(
       ],
       confidenceScore: 88,
       discoveredAt: now - 180000,
+      anchorSymbol: "SOL",
     },
     {
       id: "perp-sui-momentum",
@@ -83,6 +84,7 @@ export function scanAllAvenues(
       ],
       confidenceScore: 82,
       discoveredAt: now - 340000,
+      anchorSymbol: "SUI",
     },
     {
       id: "perp-pepe-short-hedge",
@@ -110,6 +112,7 @@ export function scanAllAvenues(
       ],
       confidenceScore: 79,
       discoveredAt: now - 520000,
+      anchorSymbol: "PEPE",
     },
   ];
 
@@ -141,6 +144,7 @@ export function scanAllAvenues(
       ],
       confidenceScore: 94,
       discoveredAt: now - 90000,
+      anchorSymbol: "BONK",
     },
     {
       id: "arb-wif-orca",
@@ -168,6 +172,7 @@ export function scanAllAvenues(
       ],
       confidenceScore: 91,
       discoveredAt: now - 220000,
+      anchorSymbol: "WIF",
     },
   ];
 
@@ -253,12 +258,51 @@ export function scanAllAvenues(
       ],
       confidenceScore: 96,
       discoveredAt: now - 720000,
+      anchorSymbol: "SOL",
     },
   ];
 
   // Combine and sort by confidence score
   const all = [...perpSetups, ...arbSetups, ...earlyIpoSetups, ...yieldSetups];
   return all.sort((a, b) => b.confidenceScore - a.confidenceScore);
+}
+
+function tapeBaseOf(symbol: string): string {
+  return symbol.toUpperCase().split(/[/:_\-]/)[0];
+}
+
+/**
+ * Live tape price for an avenue's anchor symbol; deepest pool wins so a thin
+ * listing can't wag the mark.
+ */
+export function avenueAnchorPrice(
+  anchor: string,
+  tape: Array<{ symbol: string; priceUsd: number; liquidityUsd: number }>,
+): number | null {
+  const want = anchor.toUpperCase();
+  let best: number | null = null;
+  let bestLiq = -1;
+  for (const c of tape) {
+    if (tapeBaseOf(c.symbol) !== want || !(c.priceUsd > 0)) continue;
+    if (c.liquidityUsd > bestLiq) {
+      bestLiq = c.liquidityUsd;
+      best = c.priceUsd;
+    }
+  }
+  return best;
+}
+
+/** avenue id → anchor symbol for the current scan. */
+export function avenueAnchors(
+  book: Book,
+  rules: DisciplineRules = defaultDisciplineRules,
+  now: number = Date.now(),
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const a of scanAllAvenues(book, rules, now)) {
+    if (a.anchorSymbol) map.set(a.id, a.anchorSymbol);
+  }
+  return map;
 }
 
 /**

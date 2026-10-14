@@ -1,10 +1,20 @@
 import type { Book, Candidate } from "../paper";
 import { equity, exposure } from "../paper";
 import { auditAcademicSafeguards } from "./investopedia-mistakes-guard";
+import { fibExtensions, snapToFib } from "../math/fib";
+import { isCorrelatedDuplicate, setupVector, winnerResemblance, type SetupVector } from "../math/vectors";
 
 export type SizingModel = "VOLATILITY_PARITY" | "FRACTIONAL_KELLY" | "FIXED_FRACTION";
-export type SizingProfile = "CONSERVATIVE" | "OPTIMUM_SWEET_SPOT" | "AGGRESSIVE";
+export type SizingProfile = "CONSERVATIVE" | "OPTIMUM_SWEET_SPOT" | "AGGRESSIVE" | "TURBO";
 export type VolatilityRegime = "LOW" | "NORMAL" | "ELEVATED" | "EXTREME";
+
+/** Optional geometric overlays — absent means classic evaluation. */
+export type RiskMathOverlays = {
+  /** Feature vectors of past winning closes for resemblance scoring. */
+  winnerVectors?: SetupVector[];
+  /** Feature vectors of open positions for the correlation guard. */
+  openVectors?: SetupVector[];
+};
 
 export type RiskEngineSettings = {
   sizingModel: SizingModel;
@@ -112,6 +122,7 @@ export function evaluateRiskAndSize(
   settings: RiskEngineSettings = defaultRiskSettings,
   minScore = 62,
   now = Date.now(),
+  math?: RiskMathOverlays,
 ): SizingVerdict {
   const checks: RiskCheck[] = [];
   const reasons: string[] = [];
@@ -139,16 +150,45 @@ export function evaluateRiskAndSize(
   const rrRatio = calculatedTargetPct / calculatedStopPct;
 
   const entryPrice = candidate.priceUsd;
-  const stopPrice = entryPrice * (1 - calculatedStopPct);
-  const targetPrice = entryPrice * (1 + calculatedTargetPct);
+  let stopPrice = entryPrice * (1 - calculatedStopPct);
+  let targetPrice = entryPrice * (1 + calculatedTargetPct);
+
+  // Turbo brackets snap to Fibonacci geometry: stops sit on the nearest
+  // retracement of the ±2ATR swing and targets extend 1.618× stop distance.
+  let fibNote: string | null = null;
+  if (settings.sizingProfile === "TURBO") {
+    const swingHigh = entryPrice * (1 + 2 * calculatedStopPct);
+    const swingLow = Math.max(0.000001, entryPrice * (1 - 2 * calculatedStopPct));
+    const snappedStop = snapToFib(stopPrice, swingHigh, swingLow);
+    if (snappedStop !== stopPrice) {
+      stopPrice = snappedStop;
+      fibNote = "Stop snapped to fib retracement";
+    }
+    const stopDistance = Math.max(0.000001, entryPrice - stopPrice);
+    const fibTarget = fibExtensions(entryPrice, stopDistance)[1]?.price ?? targetPrice;
+    if (fibTarget > targetPrice) {
+      targetPrice = fibTarget;
+      fibNote = fibNote ? `${fibNote} · target at 1.618 extension` : "Target at 1.618 extension";
+    }
+  }
 
   // 3. Position Sizing based on selected model & Dynamic Sweet Spot Allocation
-  const conviction = Math.min(1.25, Math.max(0.75, candidate.score / 75));
+  const candidateVector = setupVector({
+    change24h: candidate.change24h,
+    volume24h: candidate.volume24h,
+    liquidityUsd: candidate.liquidityUsd,
+    score: candidate.score,
+  });
+  // Winner resemblance tunes conviction: proven shapes size up slightly,
+  // alien shapes size down — never a veto, never a pass.
+  const resemblance = winnerResemblance(candidateVector, math?.winnerVectors ?? []);
+  const conviction = Math.min(1.35, Math.max(0.65, (candidate.score / 75) * (0.9 + 0.2 * resemblance)));
   const openSlots = Math.max(1, settings.maxPositions - book.positions.length);
   const cashPerSlot = book.cash / openSlots;
 
   // Dynamic max idea ceiling tuned to optimum compounding corridor
   const profileMaxIdea =
+    settings.sizingProfile === "TURBO" ? 0.45 :
     settings.sizingProfile === "AGGRESSIVE" ? 0.35 :
     settings.sizingProfile === "CONSERVATIVE" ? 0.18 : 0.28;
   const maxIdeaCash = Math.max(
@@ -156,6 +196,7 @@ export function evaluateRiskAndSize(
     currentEquity * profileMaxIdea * conviction,
   );
   const maxBookExposure =
+    settings.sizingProfile === "TURBO" ? 0.9 :
     settings.sizingProfile === "AGGRESSIVE" ? 0.85 :
     settings.sizingProfile === "CONSERVATIVE" ? 0.50 : 0.75;
   const bookCapRemaining = Math.max(0, currentEquity * maxBookExposure - currentExposure);
@@ -163,8 +204,9 @@ export function evaluateRiskAndSize(
   let rawSize = 0;
 
   if (settings.sizingModel === "VOLATILITY_PARITY") {
-    // Risk exactly `riskPerTrade` (e.g. 2.5%) of equity if stop loss is hit
+    // Risk exactly `riskPerTrade` of equity if stop loss is hit
     const riskFraction =
+      settings.sizingProfile === "TURBO" ? 0.05 :
       settings.sizingProfile === "AGGRESSIVE" ? 0.035 :
       settings.sizingProfile === "CONSERVATIVE" ? 0.015 : settings.riskPerTrade;
     const dollarRiskBudget = Math.max(
@@ -198,7 +240,6 @@ export function evaluateRiskAndSize(
 
   const roundedNotional = Math.round(bindingNotional * 100) / 100;
   const qty = roundedNotional > 0 && entryPrice > 0 ? roundedNotional / entryPrice : 0;
-  const dollarRisk = roundedNotional * calculatedStopPct;
 
   // 95% 1-day Value at Risk (parametric normal VaR = 1.645 * volatility * notional)
   const valueAtRisk95 = Math.round(roundedNotional * volatility * 1.645 * 100) / 100;
@@ -286,6 +327,30 @@ export function evaluateRiskAndSize(
   });
   if (!scorePass) reasons.push(`Score ${candidate.score} below adaptive floor ${minScore}`);
 
+  // Geometric overlays (informational unless stated)
+  checks.push({
+    id: "fib-geometry",
+    label: "Fib bracket geometry",
+    pass: true,
+    detail: fibNote ?? (settings.sizingProfile === "TURBO" ? "Raw ATR brackets (no level within snap)" : "Classic ATR brackets"),
+  });
+  checks.push({
+    id: "winner-resemblance",
+    label: "Resembles past winners",
+    pass: true,
+    detail: `${Math.round(resemblance * 100)}% vector similarity over ${math?.winnerVectors?.length ?? 0} wins`,
+  });
+  if (math?.openVectors && math.openVectors.length > 0) {
+    const stacked = isCorrelatedDuplicate(candidateVector, math.openVectors);
+    checks.push({
+      id: "correlation",
+      label: "Uncorrelated with open risk",
+      pass: !stacked,
+      detail: stacked ? "Near-duplicate of an open position" : "Distinct market character",
+    });
+    if (stacked) reasons.push("Candidate duplicates the character of an open position");
+  }
+
   // Gate: Minimum Liquidity
   const liqPass = candidate.liquidityUsd >= settings.minLiquidity;
   checks.push({
@@ -309,6 +374,9 @@ export function evaluateRiskAndSize(
 
   const allowed = checks.every((c) => c.pass);
 
+  const finalStopPct = entryPrice > 0 ? Math.max(0, (entryPrice - stopPrice) / entryPrice) : calculatedStopPct;
+  const finalTargetPct = entryPrice > 0 ? Math.max(0, (targetPrice - entryPrice) / entryPrice) : calculatedTargetPct;
+
   return {
     allowed,
     notional: allowed ? roundedNotional : 0,
@@ -316,13 +384,13 @@ export function evaluateRiskAndSize(
     entryPrice,
     stopPrice,
     targetPrice,
-    stopLossPct: calculatedStopPct,
-    takeProfitPct: calculatedTargetPct,
-    riskRewardRatio: Math.round(rrRatio * 10) / 10,
+    stopLossPct: finalStopPct,
+    takeProfitPct: finalTargetPct,
+    riskRewardRatio: Math.round(((finalStopPct > 0 ? finalTargetPct / finalStopPct : rrRatio) ) * 10) / 10,
+    riskAmount: Math.round(roundedNotional * finalStopPct * 100) / 100,
     atr: Math.round(atr * 10000) / 10000,
     volatility: Math.round(volatility * 1000) / 10, // In percent
     volatilityRegime: regime,
-    riskAmount: Math.round(dollarRisk * 100) / 100,
     valueAtRisk95,
     checks,
     reasons,

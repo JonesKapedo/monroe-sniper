@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ShieldAlert,
   ShieldCheck,
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useDyorStore } from "@/lib/dyor/store";
 import { useDesk } from "@/lib/desk-store";
+import { searchInstruments } from "@/lib/market.functions";
 import { getTradeLearningEvents } from "@/lib/trade-memory.functions";
 import { Card, Label, Button } from "@/components/ui";
 import { cn } from "@/lib/cn";
@@ -53,6 +54,39 @@ export function LearnView() {
   const dbGrossLoss = useDesk((s) => s.dbGrossLoss);
   const tradeLearningDbCount = useDesk((s) => s.tradeLearningDbCount);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [globalNote, setGlobalNote] = useState<string | null>(null);
+  const [globalBusy, setGlobalBusy] = useState(false);
+  const debounceRef = useRef(0);
+
+  const runGlobalSearch = useCallback(async (q: string) => {
+    const query = q.trim();
+    if (query.length < 2 || useDyorStore.getState().isScanning) return;
+    setGlobalBusy(true);
+    try {
+      const res = await searchInstruments({ data: { query } });
+      const api = useDyorStore.getState();
+      res.candidates.slice(0, 5).forEach((c) => api.ingestCandidate(c));
+      const first = res.candidates[0];
+      if (first) {
+        api.setSelectedInstrument(first.id);
+        api.runDeepEvaluation(first.id);
+      }
+      setGlobalNote(res.note);
+    } catch {
+      setGlobalNote("Search failed — public feeds may be rate-limited. Try again shortly.");
+    } finally {
+      setGlobalBusy(false);
+    }
+  }, []);
+
+  // Fire automatically as the user types (debounced); the button submits now.
+  useEffect(() => {
+    window.clearTimeout(debounceRef.current);
+    if (globalQuery.trim().length < 2) return;
+    debounceRef.current = window.setTimeout(() => void runGlobalSearch(globalQuery), 600);
+    return () => window.clearTimeout(debounceRef.current);
+  }, [globalQuery, runGlobalSearch]);
 
   const refreshHistory = () => {
     setHistoryBusy(true);
@@ -289,6 +323,42 @@ export function LearnView() {
         <div className="grid gap-5 lg:grid-cols-12">
           {/* Left Column: Instruments List & Filters */}
           <div className="flex flex-col gap-3 lg:col-span-5">
+            {/* Universal search: any coin, token, or contract address */}
+            <div className="flex flex-col gap-2 rounded-xl border border-brass/40 bg-panel p-3">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  window.clearTimeout(debounceRef.current);
+                  void runGlobalSearch(globalQuery);
+                }}
+                className="flex gap-2"
+              >
+                <div className="relative flex-1">
+                  <Search className="absolute top-3 left-3 size-4 text-brass" />
+                  <input
+                    type="text"
+                    placeholder="Search any coin, token, or paste a contract address…"
+                    value={globalQuery}
+                    onChange={(e) => setGlobalQuery(e.target.value)}
+                    className="field h-10 w-full rounded-lg border border-line bg-panel-2 pr-3 pl-9 text-xs text-cream outline-none focus:border-brass"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  variant="solid"
+                  disabled={globalBusy || globalQuery.trim().length < 2}
+                  className="h-10 shrink-0 px-4 text-xs font-semibold"
+                >
+                  <Search className={cn("mr-1.5 size-3.5", globalBusy && "animate-pulse")} />
+                  {globalBusy ? "Searching…" : "Search"}
+                </Button>
+              </form>
+              {globalNote && (
+                <p className="text-[11px] text-faint" aria-live="polite">
+                  {globalBusy ? "Scanning live feeds… " : ""}{globalNote}
+                </p>
+              )}
+            </div>
             {/* Search and Filters */}
             <div className="flex flex-col gap-2 rounded-xl border border-line bg-panel p-3">
               <div className="relative">

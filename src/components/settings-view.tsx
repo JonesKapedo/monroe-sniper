@@ -17,6 +17,8 @@ export function SettingsView() {
   const resetDemo = useDesk((s) => s.resetDemo);
   const riskSettings = useDesk((s) => s.riskSettings);
   const updateRiskSettings = useDesk((s) => s.updateRiskSettings);
+  const startTurbo = useDesk((s) => s.startTurbo);
+  const turboPhase = useDesk((s) => s.turboPhase);
   const disciplineRules = useDesk((s) => s.disciplineRules);
   const updateDisciplineRules = useDesk((s) => s.updateDisciplineRules);
   const deskMode = useDesk((s) => s.mode);
@@ -57,7 +59,7 @@ export function SettingsView() {
           Selects the dynamic compounding corridor. Sizes positions wisely based on current balance—never starved in micro $1 pennies, nor reckless with capital.
         </p>
 
-        <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
           <button
             type="button"
             onClick={() => updateRiskSettings({ sizingProfile: "CONSERVATIVE", riskPerTrade: 0.015, maxIdeaExposure: 0.18, rewardMultiple: 2.5 })}
@@ -104,6 +106,25 @@ export function SettingsView() {
             <span className="font-bold text-sm">⚡ Aggressive Growth</span>
             <span className="text-xs mt-1">3.5% Risk · 35% Max Slot</span>
             <span className="text-[11px] text-faint mt-1">High-velocity compounding</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => startTurbo()}
+            disabled={turboPhase === "cooling"}
+            className={cn(
+              "flex flex-col items-start rounded-xl border p-3 text-left transition-all relative",
+              turboPhase !== "off"
+                ? "border-loss bg-loss/10 text-loss ring-1 ring-loss/50"
+                : "border-line bg-panel-2 text-faint hover:text-cream",
+            )}
+          >
+            <span className="absolute -top-2 right-2 rounded bg-loss px-1.5 py-0.2 text-[10px] font-bold text-ink uppercase">
+              {turboPhase === "running" ? "Running" : turboPhase === "cooling" ? "Cooling" : "27-min runs"}
+            </span>
+            <span className="font-bold text-sm">🔥 Turbo Gambler</span>
+            <span className="text-xs mt-1">5% Risk · 45% Max Slot · 5 Slots</span>
+            <span className="text-[11px] text-faint mt-1">Max aggression · safety gates stay armed</span>
           </button>
         </div>
 

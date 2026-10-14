@@ -33,6 +33,7 @@ import {
 import { useDesk } from "@/lib/desk-store";
 import { loadFeeds } from "@/lib/market.functions";
 import { Button, Card, Label } from "@/components/ui";
+import { Money } from "@/components/money";
 import { cn } from "@/lib/cn";
 import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
@@ -44,6 +45,14 @@ const px = (n: number) => {
   if (n >= 1) return `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
   return `$${n.toPrecision(4)}`;
 };
+
+function formatCountdown(target: number | null, now: number): string {
+  if (!target) return "--:--";
+  const ms = Math.max(0, target - now);
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
 
 export function Desk() {
   const mode = useDesk((s) => s.mode);
@@ -63,6 +72,13 @@ export function Desk() {
 
   const botStartedAt = useDesk((s) => s.botStartedAt);
   const disciplineRules = useDesk((s) => s.disciplineRules);
+  const turboPhase = useDesk((s) => s.turboPhase);
+  const turboEndsAt = useDesk((s) => s.turboEndsAt);
+  const turboCooldownUntil = useDesk((s) => s.turboCooldownUntil);
+  const turboEntries = useDesk((s) => s.turboEntries);
+  const turboReport = useDesk((s) => s.turboReport);
+  const startTurbo = useDesk((s) => s.startTurbo);
+  const bypassTurboCooldown = useDesk((s) => s.bypassTurboCooldown);
   const getReadiness = useDesk((s) => s.getReadiness);
   const readiness = getReadiness ? getReadiness() : null;
 
@@ -222,6 +238,44 @@ export function Desk() {
             )}
           </Button>
 
+          {/* Turbo mode: 27-min max-aggression run */}
+          {turboPhase === "off" ? (
+            <Button
+              variant="ghost"
+              onClick={() => startTurbo()}
+              className="border-loss/50 font-semibold text-loss hover:bg-loss/10"
+              title="27-minute max-aggression run. Safety gates stay armed."
+            >
+              🔥 Turbo
+            </Button>
+          ) : (
+            <span
+              className={cn(
+                "inline-flex min-h-10 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-bold",
+                turboPhase === "running"
+                  ? "border-loss/60 bg-loss/10 text-loss"
+                  : "border-amber-500/50 bg-amber-500/10 text-amber-300",
+              )}
+              title={turboPhase === "running" ? "Turbo run in progress" : "Turbo cooling — entries halted"}
+            >
+              🔥 {turboPhase === "running" ? `TURBO ${formatCountdown(turboEndsAt, nowTs)}` : `COOL ${formatCountdown(turboCooldownUntil, nowTs)}`}
+            </span>
+          )}
+          {turboPhase === "cooling" && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (window.confirm("Bypass the 10-minute turbo cooldown? New entries resume immediately.")) {
+                  bypassTurboCooldown();
+                }
+              }}
+              className="border border-line text-xs text-faint hover:text-cream"
+              title="Resume entries now (logged)"
+            >
+              Bypass cooldown
+            </Button>
+          )}
+
           {/* Refresh Feeds */}
           <Button
             variant="ghost"
@@ -297,18 +351,18 @@ export function Desk() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard
           label={`${mode.toUpperCase()} EQUITY`}
-          value={money(eq)}
+          value={<Money value={eq} kind="balance" className="text-lg font-bold sm:text-xl" />}
           sub="Paper balance"
         />
         <StatCard
           label="DAY P&L"
-          value={(book.dayPnl >= 0 ? "+" : "") + money(book.dayPnl)}
+          value={<Money value={book.dayPnl} kind="delta" className="text-lg font-bold sm:text-xl" />}
           tone={book.dayPnl >= 0 ? "gain" : "loss"}
           sub={eq > 0 ? `${((book.dayPnl / eq) * 100).toFixed(2)}% ROI` : "0.00%"}
         />
         <StatCard
           label="AVAILABLE CASH"
-          value={money(book.cash)}
+          value={<Money value={book.cash} kind="balance" className="text-lg font-bold sm:text-xl" />}
           sub={`Risk cap: ${money(eq * 0.6)}`}
         />
         <StatCard
@@ -318,7 +372,7 @@ export function Desk() {
         />
         <StatCard
           label="OPEN RISK"
-          value={money(exp)}
+          value={<Money value={exp} kind="balance" className="text-lg font-bold sm:text-xl" />}
           sub={`${book.positions.length}/3 positions held`}
         />
         <StatCard
@@ -328,6 +382,31 @@ export function Desk() {
           accent
         />
       </div>
+
+      {/* Turbo run debrief: what the run (and cooldown) taught the bot */}
+      {turboReport && turboPhase !== "off" && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-xl border border-loss/40 bg-loss/5 px-4 py-3 text-xs">
+          <span className="font-bold text-loss">
+            🔥 {turboPhase === "running" ? "Turbo running" : "Turbo cooling — entries halted, open positions ride to exits"}
+          </span>
+          <span className="text-faint">
+            Entries this run: <strong className="text-cream">{turboEntries}</strong>
+          </span>
+          <span className="text-faint">
+            Realized:{" "}
+            <strong className={memory.realized - turboReport.startRealized >= 0 ? "text-gain" : "text-loss"}>
+              {(memory.realized - turboReport.startRealized >= 0 ? "+" : "")}$
+              {(memory.realized - turboReport.startRealized).toFixed(2)}
+            </strong>
+          </span>
+          <span className="text-faint">
+            Score floor: <strong className="text-brass">{turboReport.startMinScore} → {memory.minScore}</strong>
+          </span>
+          <span className="text-faint">
+            Closes banked: <strong className="text-cream">{memory.seen - turboReport.startSeen}</strong>
+          </span>
+        </div>
+      )}
 
       {/* Universal Money-Making Avenues & Capital Discipline Hub */}
       <div className="flex flex-col gap-3 rounded-xl border border-line bg-panel p-4 md:p-5">
@@ -752,6 +831,11 @@ export function Desk() {
                           <span className="rounded bg-gain/10 px-1.5 py-0.5 text-[10px] font-semibold text-gain">
                             LONG
                           </span>
+                          {p.markSimulated && (
+                            <span title="Priced by simulated drift — no live quote for this avenue" className="rounded bg-brass/15 px-1.5 py-0.5 text-[10px] font-semibold text-brass">
+                              SIM
+                            </span>
+                          )}
                         </div>
                         <p className="num mt-0.5 text-xs text-faint">
                           Entry {px(p.entryPrice)} · Mark {px(p.mark)} · Stop {px(p.stop)} · Take Profit {px(targetPx)}
@@ -760,15 +844,13 @@ export function Desk() {
 
                       <div className="flex items-center justify-between gap-4 sm:justify-end">
                         <div className="text-right">
-                          <p
-                            className={cn(
-                              "num text-sm font-bold",
-                              pnl >= 0 ? "text-gain" : "text-loss",
-                            )}
-                          >
-                            {pnl >= 0 ? "+" : ""}
-                            {money(pnl)} ({pnlPct >= 0 ? "+" : ""}
-                            {pnlPct.toFixed(2)}%)
+                          <Money
+                            value={pnl}
+                            kind="delta"
+                            className="text-sm font-bold"
+                          />
+                          <p className={cn("num text-[11px]", pnlPct >= 0 ? "text-gain" : "text-loss")}>
+                            ({pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%)
                           </p>
                           <p className="num text-[11px] text-faint">Size: ${p.notional.toFixed(2)}</p>
                         </div>
@@ -1026,7 +1108,7 @@ function StatCard({
   accent,
 }: {
   label: string;
-  value: string;
+  value: React.ReactNode;
   sub: string;
   tone?: "gain" | "loss";
   accent?: boolean;

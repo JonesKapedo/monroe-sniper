@@ -6,6 +6,8 @@ export type TokenMetrics = {
   marketCap: number | null; fdv: number | null; priceChange24h: number | null;
   buys24h: number | null; sells24h: number | null; pairCreatedAt: number | null;
   url: string | null; fetchedAt: number;
+  /** DexScreener pair address for charting (absent on aggregated rows). */
+  pairAddress?: string | null;
 };
 export type SecurityReport = {
   honeypot: boolean | null; lpLocked: boolean | null; ownerCanMint: boolean | null;
@@ -85,12 +87,13 @@ export function normalizeDexPair(input: unknown): TokenMetrics | null {
   if (!address) return null;
   const chain = normalizeChain(str(p.chainId, "unknown")), volume = obj(p.volume), change = obj(p.priceChange);
   const day = obj(obj(p.txns).h24);
+  const pairAddress = typeof p.pairAddress === "string" && p.pairAddress.trim() ? p.pairAddress.trim() : null;
   return {
     chain, address, symbol: str(base.symbol, "UNKNOWN").toUpperCase(), name: str(base.name, str(base.symbol, "Unknown token")),
     priceUsd: num(p.priceUsd), liquidityUsd: num(obj(p.liquidity).usd), volume24h: num(volume.h24),
     marketCap: num(p.marketCap), fdv: num(p.fdv), priceChange24h: num(change.h24),
     buys24h: num(day.buys), sells24h: num(day.sells), pairCreatedAt: num(p.pairCreatedAt),
-    url: str(p.url) || null, fetchedAt: Date.now(),
+    url: str(p.url) || null, fetchedAt: Date.now(), pairAddress,
   };
 }
 function dedupe(raw: unknown[]): TokenMetrics[] {

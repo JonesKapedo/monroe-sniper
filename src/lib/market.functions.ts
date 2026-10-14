@@ -2,6 +2,10 @@ import { createServerFn } from "@tanstack/react-start";
 import { binanceExecutionStatus } from "./feeds/execution";
 import type { FeedHealth } from "./feeds/status";
 import { scoreCandidate, type Candidate } from "./paper";
+import { fetchGeckoCandles, type DexTimeframe } from "./charts/geckoterminal";
+import { fetchJupiterTicks, type JupiterTick } from "./charts/jupiter";
+import { FX_PAIRS, fetchFrankfurterSpot, fetchTwelveCandles, fxIntervalFor } from "./fx/twelvedata";
+import { dexSearch } from "./data/market-sources";
 import {
   krakenIntervalFor,
   krakenPairFor,
@@ -360,4 +364,256 @@ export const scanMarket = createServerFn({ method: "POST" })
       const message = err instanceof Error ? err.message : "Feed unavailable";
       return { candidates: [], source: "empty", note: message };
     }
+  });
+
+const ADDRESS_RE = /^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,48})$/;
+
+/**
+ * Universal instrument lookup: paste a contract/mint address or type any
+ * name, symbol, or token. Address queries hit DexScreener directly (exact
+ * match first); text queries search pairs across chains.
+ */
+export const searchInstruments = createServerFn({ method: "POST" })
+  .validator((input: { query?: string }) => ({
+    query: String(input?.query ?? "").trim().slice(0, 64),
+  }))
+  .handler(async ({ data }): Promise<{ candidates: Candidate[]; note: string; isAddress: boolean }> => {
+    const q = data.query;
+    const isAddress = ADDRESS_RE.test(q);
+    if (!q) return { candidates: [], note: "Type a name, symbol, or contract address", isAddress: false };
+    try {
+      const metrics = await dexSearch(q);
+      const exact = q.toLowerCase();
+      const ranked = [...metrics].sort((a, b) => {
+        const aExact = a.address.toLowerCase() === exact ? 1 : 0;
+        const bExact = b.address.toLowerCase() === exact ? 1 : 0;
+        if (aExact !== bExact) return bExact - aExact;
+        return (b.liquidityUsd ?? 0) - (a.liquidityUsd ?? 0);
+      });
+      const candidates: Candidate[] = [];
+      for (const m of ranked.slice(0, 8)) {
+        const c = scoreCandidate({
+          symbol: m.symbol,
+          name: m.name,
+          chain: m.chain,
+          address: m.address,
+          priceUsd: m.priceUsd,
+          liquidityUsd: m.liquidityUsd,
+          volume24h: m.volume24h,
+          change24h: m.priceChange24h,
+          pairCreatedAt: m.pairCreatedAt,
+          url: m.url,
+          venue: "dex",
+        });
+        if (c) candidates.push(c);
+      }
+      return {
+        candidates,
+        note: candidates.length
+          ? `${candidates.length} match${candidates.length === 1 ? "" : "es"} for "${q}"`
+          : `No pairs found for "${q}" — check the address or try another chain`,
+        isAddress,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Search unavailable";
+      return { candidates: [], note: message, isAddress };
+    }
+  });
+
+const DEX_INTERVALS = new Set(["1m", "5m", "15m", "1h"]);
+const dexCandleCache = new Map<string, { at: number; result: { candles: Candle[]; note: string } }>();
+const DEX_CANDLE_CACHE_MS = 20_000;
+
+/** DEX candles for any Solana pool via GeckoTerminal (free, no key). */
+export const loadDexCandles = createServerFn({ method: "POST" })
+  .validator((input: { poolAddress?: string; interval?: string }) => {
+    const poolAddress = String(input?.poolAddress ?? "").trim().replace(/[^A-Za-z0-9]/g, "").slice(0, 48);
+    const interval = (DEX_INTERVALS.has(String(input?.interval)) ? String(input?.interval) : "5m") as DexTimeframe;
+    return { poolAddress, interval };
+  })
+  .handler(async ({ data }): Promise<{ candles: Candle[]; note: string }> => {
+    if (data.poolAddress.length < 32) {
+      return { candles: [], note: "No pool selected — pick a token to chart its deepest pool" };
+    }
+    const cacheKey = `${data.poolAddress}:${data.interval}`;
+    const cached = dexCandleCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < DEX_CANDLE_CACHE_MS) return cached.result;
+    try {
+      const candles = await fetchGeckoCandles(data.poolAddress, data.interval);
+      if (!candles.length) throw new Error("GeckoTerminal returned no usable candles for this pool");
+      const result = { candles, note: `GeckoTerminal ${data.poolAddress.slice(0, 6)}… ${data.interval}` };
+      dexCandleCache.set(cacheKey, { at: Date.now(), result });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "DEX candles unavailable";
+      return { candles: [], note: message };
+    }
+  });
+
+const tickCache = new Map<string, { at: number; result: { ticks: JupiterTick[]; note: string } }>();
+const TICK_CACHE_MS = 10_000;
+
+/** Live batch price ticks for Solana mints via Jupiter Lite (free, no key). */
+export const loadTokenTicks = createServerFn({ method: "POST" })
+  .validator((input: { mints?: string[] }) => {
+    const mints = (Array.isArray(input?.mints) ? input.mints : [])
+      .map((m) => String(m).trim())
+      .filter((m) => /^[A-Za-z0-9]{32,48}$/.test(m))
+      .slice(0, 25);
+    return { mints };
+  })
+  .handler(async ({ data }): Promise<{ ticks: JupiterTick[]; note: string }> => {
+    if (!data.mints.length) return { ticks: [], note: "No tracked mints" };
+    const cacheKey = [...data.mints].sort().join(",");
+    const cached = tickCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < TICK_CACHE_MS) return cached.result;
+    try {
+      const ticks = await fetchJupiterTicks(data.mints);
+      const result = {
+        ticks,
+        note: ticks.length ? `Jupiter live · ${ticks.length}/${data.mints.length} mints` : "Jupiter returned no prices",
+      };
+      tickCache.set(cacheKey, { at: Date.now(), result });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Jupiter ticks unavailable";
+      return { ticks: [], note: message };
+    }
+  });
+
+const poolCache = new Map<string, { at: number; result: ChartPool | null }>();
+const POOL_CACHE_MS = 5 * 60_000;
+
+export type ChartPool = {
+  poolAddress: string;
+  baseSymbol: string;
+  chain: string;
+  liquidityUsd: number | null;
+  label: string;
+};
+
+/** Deepest Solana DEX pool for a base symbol (positions + avenues become chartable). */
+export const resolveChartPool = createServerFn({ method: "POST" })
+  .validator((input: { symbol?: string }) => ({
+    symbol: String(input?.symbol ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20),
+  }))
+  .handler(async ({ data }): Promise<{ pool: ChartPool | null; note: string }> => {
+    const want = data.symbol;
+    if (!want) return { pool: null, note: "No symbol" };
+    const cached = poolCache.get(want);
+    if (cached && Date.now() - cached.at < POOL_CACHE_MS) {
+      return { pool: cached.result, note: cached.result ? `Cached ${cached.result.label}` : `No pool found for ${want}` };
+    }
+    try {
+      const metrics = await dexSearch(want);
+      const match = metrics.find(
+        (m) => m.symbol.split(/[/:_\-]/)[0] === want && m.pairAddress && m.chain !== "binance" && m.chain !== "coingecko" && m.chain !== "coinmarketcap",
+      );
+      const pool: ChartPool | null = match?.pairAddress
+        ? {
+            poolAddress: match.pairAddress,
+            baseSymbol: match.symbol.split(/[/:_\-]/)[0],
+            chain: match.chain,
+            liquidityUsd: match.liquidityUsd,
+            label: `${match.symbol} · ${match.chain}`,
+          }
+        : null;
+      poolCache.set(want, { at: Date.now(), result: pool });
+      return { pool, note: pool ? `Deepest ${pool.label} pool` : `No DEX pool found for ${want}` };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Pool lookup failed";
+      return { pool: null, note: message };
+    }
+  });
+
+const FX_INTERVALS = new Set(["1m", "5m", "15m", "1h"]);
+const fxCandleCache = new Map<string, { at: number; result: { candles: Candle[]; note: string } }>();
+const FX_CANDLE_CACHE_MS = 60_000;
+
+/** FX intraday candles via TwelveData (server key). Paper trading only. */
+export const loadFxCandles = createServerFn({ method: "POST" })
+  .validator((input: { pair?: string; interval?: string }) => {
+    const raw = String(input?.pair ?? "").toUpperCase().replace(/[^A-Z/]/g, "").slice(0, 10);
+    const pair = (FX_PAIRS as readonly string[]).includes(raw) ? raw : "EUR/USD";
+    const interval = FX_INTERVALS.has(String(input?.interval)) ? String(input?.interval) : "5m";
+    return { pair, interval };
+  })
+  .handler(async ({ data }): Promise<{ candles: Candle[]; note: string }> => {
+    const apiKey = process.env.TWELVEDATA_API_KEY?.trim();
+    if (!apiKey) {
+      return { candles: [], note: "FX candles need TWELVEDATA_API_KEY on the host (free tier)" };
+    }
+    const cacheKey = `${data.pair}:${data.interval}`;
+    const cached = fxCandleCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < FX_CANDLE_CACHE_MS) return cached.result;
+    try {
+      const candles = await fetchTwelveCandles(
+        data.pair,
+        fxIntervalFor(data.interval as "1m" | "5m" | "15m" | "1h"),
+        apiKey,
+      );
+      if (!candles.length) throw new Error("TwelveData returned no usable candles");
+      const result = { candles, note: `TwelveData ${data.pair} ${data.interval}` };
+      fxCandleCache.set(cacheKey, { at: Date.now(), result });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "FX candles unavailable";
+      return { candles: [], note: message };
+    }
+  });
+
+const fxSpotCache = new Map<string, { at: number; prices: Record<string, number> }>();
+const FX_SPOT_CACHE_MS = 30_000;
+
+/**
+ * FX spot marks for open paper positions. TwelveData when keyed, otherwise the
+ * free Frankfurter daily reference — marks, never execution.
+ */
+export const loadFxSpot = createServerFn({ method: "POST" })
+  .validator((input: { pairs?: string[] }) => {
+    const pairs = (Array.isArray(input?.pairs) ? input.pairs : [])
+      .map((p) => String(p).toUpperCase().replace(/[^A-Z/]/g, "").slice(0, 10))
+      .filter((p) => (FX_PAIRS as readonly string[]).includes(p))
+      .slice(0, 8);
+    return { pairs };
+  })
+  .handler(async ({ data }): Promise<{ prices: Record<string, number>; note: string }> => {
+    if (!data.pairs.length) return { prices: {}, note: "No FX pairs requested" };
+    const cacheKey = [...data.pairs].sort().join(",");
+    const cached = fxSpotCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < FX_SPOT_CACHE_MS) {
+      return { prices: cached.prices, note: "FX spots (cached)" };
+    }
+    const prices: Record<string, number> = {};
+    const apiKey = process.env.TWELVEDATA_API_KEY?.trim();
+    if (apiKey) {
+      const settled = await Promise.allSettled(
+        data.pairs.map((pair) => fetchTwelveCandles(pair, "1min", apiKey, 1)),
+      );
+      settled.forEach((r, i) => {
+        const last = r.status === "fulfilled" ? r.value.at(-1) : undefined;
+        if (last) prices[`fx:${data.pairs[i].replace("/", "")}`] = last.close;
+      });
+    }
+    // Frankfurter fills whatever TwelveData missed (free, keyless, daily ref).
+    await Promise.all(
+      data.pairs.map(async (pair) => {
+        const key = `fx:${pair.replace("/", "")}`;
+        if (prices[key] > 0) return;
+        const [base, quote] = pair.split("/");
+        const direct = await fetchFrankfurterSpot(base, quote);
+        if (direct !== null && direct > 0) {
+          prices[key] = direct;
+          return;
+        }
+        // Cross via USD when the direct quote is unavailable.
+        const [baseUsd, quoteUsd] = await Promise.all([
+          fetchFrankfurterSpot(base, "USD"),
+          fetchFrankfurterSpot(quote, "USD"),
+        ]);
+        if (baseUsd !== null && quoteUsd !== null && quoteUsd > 0) prices[key] = baseUsd / quoteUsd;
+      }),
+    );
+    fxSpotCache.set(cacheKey, { at: Date.now(), prices });
+    return { prices, note: `FX spots · ${Object.keys(prices).length}/${data.pairs.length} pairs` };
   });

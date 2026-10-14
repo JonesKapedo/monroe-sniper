@@ -127,6 +127,13 @@
     .pulse-dot {
       animation: none;
     }
+    .mascot-turbo-eyes,
+    .mascot-pupils,
+    .mascot-float,
+    .mascot-flame,
+    .mascot-smoke {
+      animation: none;
+    }
   }
 }
 
@@ -187,6 +194,117 @@
   50% {
     opacity: 0.35;
   }
+}
+
+@keyframes turbo-eye-flicker {
+  0%, 100% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0.55;
+  }
+  60% {
+    opacity: 0.95;
+  }
+}
+
+@keyframes mascot-gaze {
+  0%, 100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(0.7px, 0.3px);
+  }
+  50% {
+    transform: translate(-0.5px, 0.5px);
+  }
+  75% {
+    transform: translate(0.3px, -0.6px);
+  }
+}
+
+@keyframes mascot-breathe {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.2px);
+  }
+}
+
+@keyframes turbo-flame-flicker {
+  0%, 100% {
+    transform: translateX(-50%) scaleY(1) skewX(-2deg);
+  }
+  30% {
+    transform: translateX(-50%) scaleY(1.18) skewX(3deg);
+  }
+  65% {
+    transform: translateX(-50%) scaleY(0.9) skewX(-4deg);
+  }
+}
+
+@keyframes turbo-smoke-rise {
+  0% {
+    transform: translate(-50%, 0) scale(0.6);
+    opacity: 0;
+  }
+  25% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: translate(-30%, -26px) scale(1.4);
+    opacity: 0;
+  }
+}
+
+/* Turbo mascot: glowing hot-red eyes, flaming crown, rising smoke. */
+.mascot-turbo-eyes {
+  filter: drop-shadow(0 0 2px #ff3b1f) drop-shadow(0 0 6px #ff3b1f);
+  animation: turbo-eye-flicker 0.9s ease-in-out infinite;
+}
+
+/* Living mascot: slow gaze drift, glowing pupils, gentle breathing float. */
+.mascot-float {
+  animation: mascot-breathe 5s ease-in-out infinite;
+}
+
+.mascot-pupils {
+  filter: drop-shadow(0 0 1.5px var(--color-brass));
+  animation: mascot-gaze 4.5s ease-in-out infinite;
+}
+
+.mascot-flame {
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  width: 26px;
+  height: 26px;
+  transform: translateX(-50%);
+  background:
+    radial-gradient(circle at 50% 78%, #ffd23f 0 22%, transparent 23%),
+    radial-gradient(circle at 50% 62%, #ff7a1a 0 34%, transparent 35%),
+    radial-gradient(circle at 50% 45%, #ff3b1f 0 46%, transparent 47%);
+  border-radius: 50% 50% 46% 46%;
+  filter: drop-shadow(0 0 6px rgba(255, 80, 20, 0.8));
+  animation: turbo-flame-flicker 0.7s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.mascot-smoke {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(180, 180, 180, 0.55), transparent 70%);
+  animation: turbo-smoke-rise 2.4s ease-out infinite;
+  pointer-events: none;
+}
+
+.mascot-smoke-2 {
+  animation-delay: 1.2s;
 }
 
 @keyframes live-pulse {

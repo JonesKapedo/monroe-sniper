@@ -22,26 +22,54 @@ import {
   evaluateRiskAndSize,
   defaultRiskSettings,
   type RiskEngineSettings,
+  type SizingProfile,
   type SizingVerdict,
 } from "./sniper/risk-engine";
+import { setupVector, type SetupVector } from "./math/vectors";
+import { fibReentryDelayMin } from "./math/fib";
 import { getDbHealth, saveTradeLearning, type TradeLearningEvent } from "./trade-memory.functions";
 import type { AvenueCategory, DisciplineRules, PaperReadiness } from "./avenues/types";
 import {
   defaultDisciplineRules,
+  avenueAnchorPrice,
+  avenueAnchors,
   scanAllAvenues,
   calculatePaperReadiness,
 } from "./avenues/engine";
+import { FX_PAIRS } from "./fx/twelvedata";
+import { useDyorStore } from "./dyor/store";
 import { assessEdge } from "./intel/emh";
 
 export type Mode = "demo" | "live";
 export type DbSource = "neon" | "pglite" | "unknown";
+export type TurboPhase = "off" | "running" | "cooling";
+
+/** A turbo run is 27 minutes of max aggression, then a 10-minute cooldown. */
+export const TURBO_RUN_MS = 27 * 60_000;
+export const TURBO_COOLDOWN_MS = 10 * 60_000;
+
+export type TurboReport = {
+  startedAt: number;
+  entries: number;
+  startSeen: number;
+  startRealized: number;
+  startMinScore: number;
+};
+
+export type ExecutionVenue =
+  | "Binance Spot"
+  | "Raydium CLMM"
+  | "Uniswap v3"
+  | "Orca"
+  | "PancakeSwap"
+  | "FX Spot";
 
 export type TapeExecution = {
   id: string;
   hash: string;
   ts: number;
   symbol: string;
-  venue: "Binance Spot" | "Raydium CLMM" | "Uniswap v3" | "Orca" | "PancakeSwap";
+  venue: ExecutionVenue;
   side: "BUY" | "SELL";
   price: number;
   qty: number;
@@ -95,6 +123,23 @@ type DeskState = {
   setDbStatus: (patch: { source?: DbSource; ok?: boolean; error?: string | null }) => void;
   setDbHistory: (events: TradeLearningEvent[], grossWin: number, grossLoss: number) => void;
   refreshDbStats: () => void;
+  /** Latest FX spot marks by token id (`fx:EURUSD`), session only. */
+  fxPrices: Record<string, number>;
+  setFxPrices: (prices: Record<string, number>) => void;
+  // Turbo mode: 27-minute aggressive runs with a 10-minute cooldown.
+  turboPhase: TurboPhase;
+  turboStartedAt: number | null;
+  turboEndsAt: number | null;
+  turboCooldownUntil: number | null;
+  turboPrevProfile: SizingProfile | null;
+  turboEntries: number;
+  turboReport: TurboReport | null;
+  /** Consecutive stops per symbol for fib-spaced turbo re-entry delays (session only). */
+  stopStreak: Record<string, number>;
+  lastStopAt: Record<string, number>;
+  startTurbo: () => { ok: boolean; note: string };
+  bypassTurboCooldown: () => void;
+  tickTurbo: () => void;
   setPower: (on: boolean) => void;
   setMode: (mode: Mode) => void;
   setTape: (rows: Candidate[], note: string) => void;
@@ -112,7 +157,6 @@ type DeskState = {
   ) => { ok: boolean; note: string };
   resetDemo: () => void;
   setDemoBalance: (amount: number) => void;
-  simulateBatchTicks: (count?: number) => void;
   updateRiskSettings: (patch: Partial<RiskEngineSettings>) => void;
   updateDisciplineRules: (patch: Partial<DisciplineRules>) => void;
   getReadiness: () => PaperReadiness;
@@ -140,11 +184,40 @@ function makeSolHash(): string {
   return str;
 }
 
-function venueFor(c: Candidate): "Binance Spot" | "Raydium CLMM" | "Uniswap v3" | "Orca" | "PancakeSwap" {
+function venueFor(c: Candidate): ExecutionVenue {
+  if (c.venue === "fx" || c.chain === "fx") return "FX Spot";
   if (c.venue === "binance") return "Binance Spot";
   if (c.chain === "solana") return Math.random() > 0.4 ? "Raydium CLMM" : "Orca";
   if (c.chain === "bsc") return "PancakeSwap";
   return "Uniswap v3";
+}
+
+const EMPTY_SET: ReadonlySet<string> = new Set<string>();
+
+/** Winner feature vectors from persisted closes for resemblance scoring. */
+function winnerVectors(): SetupVector[] {
+  return useDesk
+    .getState()
+    .dbEvents.filter((e) => e.pnl > 0)
+    .slice(0, 60)
+    .map((e) =>
+      setupVector({ change24h: e.change24h, volume24h: e.volume24h, liquidityUsd: e.liquidityUsd, score: e.score }),
+    );
+}
+
+function openVectorsOf(book: Book): SetupVector[] {
+  return book.positions.map((p) =>
+    setupVector({
+      change24h: p.entryChange24h,
+      volume24h: p.entryVolume24h,
+      liquidityUsd: p.entryLiquidityUsd,
+      score: p.entryScore,
+    }),
+  );
+}
+
+function mathOverlays(book: Book): { winnerVectors: SetupVector[]; openVectors: SetupVector[] } {
+  return { winnerVectors: winnerVectors(), openVectors: openVectorsOf(book) };
 }
 
 function absorb(
@@ -152,9 +225,10 @@ function absorb(
   prices: Record<string, number>,
   memory: Memory,
   monitorOnly = false,
+  driftIds: ReadonlySet<string> = EMPTY_SET,
 ): { book: Book; memory: Memory; newTrades: typeof book.trades } {
   const priorIds = new Set(book.trades.map((trade) => trade.id));
-  const next = markBook(book, prices, Date.now(), !monitorOnly);
+  const next = markBook(book, prices, Date.now(), !monitorOnly, { driftIds });
   let mem = memory;
   const newTrades = next.trades.filter((trade) => !priorIds.has(trade.id));
   for (const trade of newTrades) {
@@ -198,6 +272,9 @@ function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>)
             qty: trade.qty ?? 0,
             pnl: trade.pnl,
             score: trade.entryScore ?? 0,
+            change24h: trade.entryChange24h ?? 0,
+            liquidityUsd: trade.entryLiquidityUsd ?? 0,
+            volume24h: trade.entryVolume24h ?? 0,
             mode,
             reason: trade.reason,
             openedAt: trade.openedAt ?? trade.closedAt,
@@ -276,6 +353,16 @@ export const useDesk = create<DeskState>()(
       dbEvents: [],
       dbGrossWin: 0,
       dbGrossLoss: 0,
+      fxPrices: {},
+      turboPhase: "off",
+      turboStartedAt: null,
+      turboEndsAt: null,
+      turboCooldownUntil: null,
+      turboPrevProfile: null,
+      turboEntries: 0,
+      turboReport: null,
+      stopStreak: {},
+      lastStopAt: {},
       botStartedAt: Date.now() - 3600000,
       walletHistory: [
         {
@@ -305,6 +392,94 @@ export const useDesk = create<DeskState>()(
           dbError: patch.error !== undefined ? patch.error : s.dbError,
         })),
 
+      startTurbo: () => {
+        const s = get();
+        if (s.mode !== "demo") {
+          return { ok: false, note: "Turbo runs on the paper desk only." };
+        }
+        if (s.turboPhase === "running") {
+          return { ok: true, note: "Turbo run already in progress." };
+        }
+        if (s.turboPhase === "cooling") {
+          return { ok: false, note: "Turbo is cooling — wait it out or bypass the cooldown." };
+        }
+        const now = Date.now();
+        set({
+          turboPrevProfile: s.riskSettings.sizingProfile,
+          riskSettings: { ...s.riskSettings, sizingProfile: "TURBO", maxPositions: 5 },
+          turboPhase: "running",
+          turboStartedAt: now,
+          turboEndsAt: now + TURBO_RUN_MS,
+          turboCooldownUntil: null,
+          turboEntries: 0,
+          turboReport: {
+            startedAt: now,
+            entries: 0,
+            startSeen: s.memory.seen,
+            startRealized: s.memory.realized,
+            startMinScore: s.memory.minScore,
+          },
+          power: true,
+          note: "🔥 TURBO ARMED — 27-minute max-aggression run. Safety gates stay armed.",
+          log: pushLog(s.log, "🔥 TURBO run started (27:00)"),
+        });
+        return { ok: true, note: "Turbo run started." };
+      },
+
+      bypassTurboCooldown: () => {
+        const s = get();
+        if (s.turboPhase !== "cooling") return;
+        set({
+          turboPhase: "off",
+          turboCooldownUntil: null,
+          note: "Turbo cooldown bypassed by operator — entries resume.",
+          log: pushLog(s.log, "Turbo cooldown BYPASSED by operator"),
+        });
+      },
+
+      tickTurbo: () => {
+        const s = get();
+        const now = Date.now();
+        // Switching profiles manually abandons the run (no orphaned timers).
+        if (s.turboPhase === "running" && s.riskSettings.sizingProfile !== "TURBO") {
+          set({
+            turboPhase: "off",
+            turboStartedAt: null,
+            turboEndsAt: null,
+            note: "Turbo run cancelled — sizing profile changed manually.",
+            log: pushLog(s.log, "Turbo run cancelled (profile changed)"),
+          });
+          return;
+        }
+        if (s.turboPhase === "running" && s.turboEndsAt !== null && now >= s.turboEndsAt) {
+          const realized = Math.round((s.memory.realized - (s.turboReport?.startRealized ?? 0)) * 100) / 100;
+          set({
+            turboPhase: "cooling",
+            turboCooldownUntil: now + TURBO_COOLDOWN_MS,
+            riskSettings: {
+              ...s.riskSettings,
+              sizingProfile: s.turboPrevProfile ?? "OPTIMUM_SWEET_SPOT",
+            },
+            turboPrevProfile: null,
+            turboReport: s.turboReport ? { ...s.turboReport, entries: s.turboEntries } : null,
+            note: `Turbo run complete — ${s.turboEntries} entries, ${realized >= 0 ? "+" : ""}$${realized.toFixed(2)} realized. Cooling 10:00; open positions ride to exits.`,
+            log: pushLog(
+              s.log,
+              `Turbo run complete: ${s.turboEntries} entries, ${realized >= 0 ? "+" : ""}$${realized.toFixed(2)} (cooling 10:00)`,
+            ),
+          });
+          return;
+        }
+        if (s.turboPhase === "cooling" && s.turboCooldownUntil !== null && now >= s.turboCooldownUntil) {
+          set({
+            turboPhase: "off",
+            turboCooldownUntil: null,
+            note: "Turbo cooldown elapsed — turbo may be armed again.",
+            log: pushLog(s.log, "Turbo cooldown elapsed"),
+          });
+        }
+      },
+
       setDbHistory: (events, grossWin, grossLoss) =>
         set((s) => ({
           dbEvents: events.slice(0, 200),
@@ -312,6 +487,9 @@ export const useDesk = create<DeskState>()(
           dbGrossLoss: grossLoss,
           tradeLearningDbCount: Math.max(s.tradeLearningDbCount, events.length),
         })),
+
+      setFxPrices: (prices) =>
+        set((s) => ({ fxPrices: { ...s.fxPrices, ...prices } })),
 
       refreshDbStats: () => {
         void getDbHealth().then((health) => {
@@ -370,13 +548,12 @@ export const useDesk = create<DeskState>()(
 
       setTape: (rows, note) => {
         set({ tape: rows, note });
-        // Automatically feed top discovered candidate instruments into DYOR evaluation engine
+        // Feed top discovered instruments into DYOR (static import: the
+        // dynamic import previously defeated chunk splitting).
         if (typeof window !== "undefined" && rows.length > 0) {
           try {
-            import("./dyor/store").then(({ useDyorStore }) => {
-              const ingest = useDyorStore.getState().ingestCandidate;
-              rows.slice(0, 5).forEach((cand) => ingest(cand));
-            });
+            const ingest = useDyorStore.getState().ingestCandidate;
+            rows.slice(0, 5).forEach((cand) => ingest(cand));
           } catch {
             // Ignore in SSR
           }
@@ -411,16 +588,41 @@ export const useDesk = create<DeskState>()(
 
       tick: (prices, monitorOnly = false) => {
         const s = get();
-        const demoAbs = absorb(s.demo, prices, s.memory, monitorOnly);
-        const liveAbs = absorb(s.live, prices, demoAbs.memory, monitorOnly);
+        // Enrich the feed map so every open position has a price: avenue
+        // positions resolve through their anchor symbol, anything still
+        // unpriced falls back to labeled simulated drift inside markBook.
+        const enriched: Record<string, number> = { ...prices };
+        const driftIds = new Set<string>();
+        const openPositions = [...s.demo.positions, ...s.live.positions];
+        if (openPositions.some((p) => !(enriched[p.tokenId] > 0))) {
+          const anchors = avenueAnchors(s.demo, s.disciplineRules);
+          for (const p of openPositions) {
+            if (enriched[p.tokenId] > 0) continue;
+            const anchor = anchors.get(p.tokenId);
+            const px = anchor ? avenueAnchorPrice(anchor, s.tape) : null;
+            if (px !== null) enriched[p.tokenId] = px;
+            else driftIds.add(p.tokenId);
+          }
+        }
+        const demoAbs = absorb(s.demo, enriched, s.memory, monitorOnly, driftIds);
+        const liveAbs = absorb(s.live, enriched, demoAbs.memory, monitorOnly, driftIds);
         const closedTrades = [
           ...demoAbs.newTrades.map((trade) => ({ trade, mode: "demo" as const })),
           ...liveAbs.newTrades.map((trade) => ({ trade, mode: "live" as const })),
         ];
         let nextExecs = s.executions;
         let nextLog = s.log;
+        const stopStreak = { ...s.stopStreak };
+        const lastStopAt = { ...s.lastStopAt };
 
         for (const { trade, mode } of closedTrades) {
+          // Fib-spaced re-entry memory: stops stack per symbol, targets forgive.
+          if (trade.reason === "STOP") {
+            stopStreak[trade.symbol] = (stopStreak[trade.symbol] ?? 0) + 1;
+            lastStopAt[trade.symbol] = trade.closedAt;
+          } else if (trade.reason === "TARGET") {
+            stopStreak[trade.symbol] = 0;
+          }
           const isProfit = trade.pnl > 0;
           const verb =
             trade.reason === "TARGET" ? "TAKE PROFIT" : trade.reason === "STOP" ? "STOP LOSS" : "CLOSED";
@@ -451,16 +653,35 @@ export const useDesk = create<DeskState>()(
           memory: liveAbs.memory,
           executions: nextExecs,
           log: nextLog,
+          stopStreak,
+          lastStopAt,
         });
         archiveClosedTrades(closedTrades);
       },
 
       autoStep: () => {
+        get().tickTurbo();
         const s = get();
         if (!s.power || s.mode !== "demo") return;
+        // Cooling halts entries only — open positions still ride to exits via tick().
+        if (s.turboPhase === "cooling") return;
         const targetKey = s.mode;
         const currentBook = s[targetKey];
         if (currentBook.positions.length >= s.riskSettings.maxPositions) return;
+        const isTurbo = s.riskSettings.sizingProfile === "TURBO";
+        // Turbo hunts deeper: adaptive floor drops 15 points, never below 45.
+        const scoreFloor = isTurbo ? Math.max(45, s.memory.minScore - 15) : s.memory.minScore;
+        const overlays = mathOverlays(currentBook);
+
+        // Fib-spaced re-entry: a symbol that just stopped sits out a few
+        // minutes (turbo only — other profiles keep classic behavior).
+        const fibBlocked = (symbol: string): boolean => {
+          if (!isTurbo) return false;
+          const last = s.lastStopAt[symbol];
+          if (!last) return false;
+          const delayMin = fibReentryDelayMin(s.stopStreak[symbol] ?? 1);
+          return Date.now() - last < delayMin * 60_000;
+        };
 
         // Capital Discipline: Daily Drawdown Circuit Breaker
         const currentEq = equity(currentBook);
@@ -476,7 +697,8 @@ export const useDesk = create<DeskState>()(
           (a) =>
             !currentBook.positions.some((p) => p.tokenId === a.id) &&
             a.disciplineApproved &&
-            a.confidenceScore >= 80,
+            a.confidenceScore >= 80 &&
+            !fibBlocked(a.symbol),
         );
 
         // If an avenue setup is available, execute with disciplined parameters
@@ -505,13 +727,14 @@ export const useDesk = create<DeskState>()(
             currentBook,
             aveCand,
             s.riskSettings,
-            s.memory.minScore,
+            scoreFloor,
             Date.now(),
+            overlays,
           );
 
           if (verdict.allowed && verdict.notional > 0) {
             const notional = Math.min(verdict.notional, unheldAvenue.maxCapitalAllocationUsd);
-            const result = enter(currentBook, aveCand, Date.now(), s.memory.minScore, {
+            const result = enter(currentBook, aveCand, Date.now(), scoreFloor, {
               notional,
               stop: unheldAvenue.stopLossPrice,
               target: unheldAvenue.targetPrice,
@@ -545,35 +768,120 @@ export const useDesk = create<DeskState>()(
                 note: noteLine,
                 log: pushLog(s.log, noteLine),
                 executions: [exec, ...s.executions].slice(0, 100),
+                turboEntries: s.turboEntries + (isTurbo ? 1 : 0),
               });
-              return;
+              // Turbo takes a tape trade too when slots remain; otherwise one entry per cycle.
+              if (!isTurbo) return;
+            }
+          }
+        }
+
+        // 1b. Turbo forex majors: same gates, TwelveData spots, chain-capped.
+        if (isTurbo) {
+          const fxState = useDesk.getState();
+          const fxBook = fxState[fxState.mode];
+          const fxFloor = Math.max(45, fxState.memory.minScore - 15);
+          if (fxBook.positions.length < fxState.riskSettings.maxPositions) {
+            for (const pair of FX_PAIRS) {
+              const id = `fx:${pair.replace("/", "")}`;
+              const price = fxState.fxPrices[id];
+              if (!(price > 0)) continue;
+              if (fxBook.positions.some((p) => p.tokenId === id)) continue;
+              if (fibBlocked(pair)) continue;
+              const fxCand: Candidate = {
+                id,
+                symbol: pair,
+                name: `${pair} · FX major`,
+                address: pair,
+                chain: "fx",
+                venue: "fx",
+                priceUsd: price,
+                change24h: 0.4,
+                volume24h: 5_000_000,
+                liquidityUsd: 50_000_000,
+                score: 72,
+                pairAgeHours: null,
+                url: null,
+                flags: [],
+                rationale: ["FX major · TwelveData spot · turbo hunt"],
+              };
+              const fxVerdict = evaluateRiskAndSize(
+                fxBook,
+                fxCand,
+                fxState.riskSettings,
+                fxFloor,
+                Date.now(),
+                mathOverlays(fxBook),
+              );
+              if (!fxVerdict.allowed || fxVerdict.notional <= 0) continue;
+              const fxResult = enter(fxBook, fxCand, Date.now(), fxFloor, {
+                notional: fxVerdict.notional,
+                stop: fxVerdict.stopPrice,
+                target: fxVerdict.targetPrice,
+              });
+              if (!fxResult.ok) continue;
+              const fxExec: TapeExecution = {
+                id: `entry-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                hash: makeHash("fx"),
+                ts: Date.now(),
+                symbol: pair,
+                venue: "FX Spot",
+                side: "BUY",
+                price,
+                qty: fxVerdict.qty,
+                notional: fxVerdict.notional,
+                latencyMs: 40,
+                slippageBps: 0.2,
+                type: "BOT_ENTRY",
+                avenue: "SPOT_MOMENTUM",
+                note: `Turbo FX BUY ${pair} · $${fxVerdict.notional.toFixed(2)} (R:R ${fxVerdict.riskRewardRatio}R)`,
+                atr: fxVerdict.atr,
+                riskReward: fxVerdict.riskRewardRatio,
+              };
+              const fxNote = `Turbo FX: ${pair} $${fxVerdict.notional.toFixed(2)} @ ${price.toFixed(4)}`;
+              const afterFx = useDesk.getState();
+              set({
+                [fxState.mode]: fxResult.book,
+                note: fxNote,
+                log: pushLog(afterFx.log, fxNote),
+                executions: [fxExec, ...afterFx.executions].slice(0, 100),
+                turboEntries: afterFx.turboEntries + 1,
+              });
+              break; // one FX entry per cycle
             }
           }
         }
 
         // 2. Otherwise pick from market tape
-        const pick = chooseEntry(currentBook, s.tape, s.memory.minScore);
-        if (!pick) return;
+        {
+          const live = useDesk.getState();
+          const tapeBook = live[live.mode];
+          if (tapeBook.positions.length >= live.riskSettings.maxPositions) return;
+          const turboNow = live.riskSettings.sizingProfile === "TURBO";
+          const floorNow = turboNow ? Math.max(45, live.memory.minScore - 15) : live.memory.minScore;
+          const pick = chooseEntry(tapeBook, live.tape, floorNow);
+          if (!pick || fibBlocked(pick.symbol)) return;
 
-        // Run through the quantitative risk engine
-        const verdict = evaluateRiskAndSize(
-          currentBook,
-          pick,
-          s.riskSettings,
-          s.memory.minScore,
-          Date.now(),
-        );
+          // Run through the quantitative risk engine
+          const verdict = evaluateRiskAndSize(
+            tapeBook,
+            pick,
+            live.riskSettings,
+            floorNow,
+            Date.now(),
+            mathOverlays(tapeBook),
+          );
 
-        if (!verdict.allowed || verdict.notional <= 0) return;
+          if (!verdict.allowed || verdict.notional <= 0) return;
 
-        // Execute with risk-engine volatility-adjusted sizing and brackets
-        const result = enter(currentBook, pick, Date.now(), s.memory.minScore, {
-          notional: verdict.notional,
-          stop: verdict.stopPrice,
-          target: verdict.targetPrice,
-        });
+          // Execute with risk-engine volatility-adjusted sizing and brackets
+          const result = enter(tapeBook, pick, Date.now(), floorNow, {
+            notional: verdict.notional,
+            stop: verdict.stopPrice,
+            target: verdict.targetPrice,
+          });
 
-        if (!result.ok) return;
+          if (!result.ok) return;
 
         const venueName = venueFor(pick);
         const hashStr = pick.chain === "solana" ? makeSolHash() : makeHash();
@@ -601,12 +909,16 @@ export const useDesk = create<DeskState>()(
         const edge = assessEdge(pick);
         const noteLine = `${edge.stance === "EARLY" ? "Early position" : "Risk-sized buy"}: ${pick.symbol} $${verdict.notional.toFixed(2)} on ${venueName}. ${edge.why}`;
 
+        // Fresh state: a turbo avenue entry may have landed above in this cycle.
+        const fresh = useDesk.getState();
         set({
           [targetKey]: result.book,
           note: noteLine,
-          log: pushLog(s.log, noteLine),
-          executions: [exec, ...s.executions].slice(0, 100),
+          log: pushLog(fresh.log, noteLine),
+          executions: [exec, ...fresh.executions].slice(0, 100),
+          turboEntries: fresh.turboEntries + (turboNow ? 1 : 0),
         });
+        }
       },
 
       manualEnter: (c: Candidate) => {
@@ -614,20 +926,28 @@ export const useDesk = create<DeskState>()(
         if (s.mode !== "demo") {
           return { ok: false, note: "Live execution is unavailable; this desk only supports paper simulation." };
         }
+        if (s.turboPhase === "cooling") {
+          return { ok: false, note: "Turbo cooling — new entries resume when the cooldown lapses (or bypass it)." };
+        }
         const targetKey = s.mode;
         const currentBook = s[targetKey];
+        const isTurbo = s.riskSettings.sizingProfile === "TURBO";
+        const floor = isTurbo
+          ? Math.max(45, Math.min(s.memory.minScore, c.score) - 15)
+          : Math.min(s.memory.minScore, c.score);
 
         // Evaluate sizing with risk engine
         const verdict = evaluateRiskAndSize(
           currentBook,
           c,
           s.riskSettings,
-          Math.min(s.memory.minScore, c.score),
+          floor,
           Date.now(),
+          mathOverlays(currentBook),
         );
 
         const notional = verdict.allowed ? verdict.notional : 20;
-        const result = enter(currentBook, c, Date.now(), Math.min(s.memory.minScore, c.score), {
+        const result = enter(currentBook, c, Date.now(), floor, {
           notional,
           stop: verdict.stopPrice,
           target: verdict.targetPrice,
@@ -662,6 +982,7 @@ export const useDesk = create<DeskState>()(
           note,
           log: pushLog(s.log, note),
           executions: [exec, ...s.executions].slice(0, 100),
+          turboEntries: s.turboEntries + (isTurbo && s.turboPhase === "running" ? 1 : 0),
         });
         return { ok: true, note, verdict };
       },
@@ -800,28 +1121,6 @@ export const useDesk = create<DeskState>()(
           };
         }),
 
-      simulateBatchTicks: (count = 5) => {
-        if (!get().power || get().mode !== "demo") return;
-        for (let i = 0; i < count; i++) {
-          const s = get();
-          const targetKey = s.mode;
-          const currentBook = s[targetKey];
-          const prices: Record<string, number> = {};
-          currentBook.positions.forEach((p) => {
-            // Skew slightly positive for disciplined setups (win rate ~65%)
-            const drift = Math.random() > 0.35 ? 1 + (0.015 + Math.random() * 0.035) : 1 - (0.012 + Math.random() * 0.025);
-            prices[p.tokenId] = Math.max(0.000001, p.mark * drift);
-          });
-          s.tape.forEach((c) => {
-            const drift = 1 + (Math.random() - 0.47) * 0.03;
-            prices[c.id] = Math.max(0.000001, c.priceUsd * drift);
-          });
-          get().tick(prices);
-          if (get().power) {
-            get().autoStep();
-          }
-        }
-      },
     }),
     {
       name: "monroe-sniper-v4",
@@ -845,6 +1144,13 @@ export const useDesk = create<DeskState>()(
         dbLastWriteAt: s.dbLastWriteAt,
         dbGrossWin: s.dbGrossWin,
         dbGrossLoss: s.dbGrossLoss,
+        turboPhase: s.turboPhase,
+        turboStartedAt: s.turboStartedAt,
+        turboEndsAt: s.turboEndsAt,
+        turboCooldownUntil: s.turboCooldownUntil,
+        turboPrevProfile: s.turboPrevProfile,
+        turboEntries: s.turboEntries,
+        turboReport: s.turboReport,
         botStartedAt: s.botStartedAt,
       }),
       skipHydration: true,

@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import {
   ArrowDownRight,
   ArrowUpRight,
+  ExternalLink,
   History,
   Search,
 } from "lucide-react";
@@ -9,9 +10,13 @@ import { pct } from "@/lib/sniper/format";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
 import { useSniper } from "@/lib/sniper/store";
 import { useDesk } from "@/lib/desk-store";
+import { getTradeLearningEvents, type TradeLearningEvent } from "@/lib/trade-memory.functions";
 import { type QuoteSignal, type Side } from "@/lib/sniper/types";
-import { Card, Label } from "@/components/ui";
+import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
+
+const EXIT_PAGE_SIZE = 13;
+const ARCHIVE_PAGE_SIZE = 50;
 
 export function SignalsView() {
   const sniperBook = useSniper((s) => s.book);
@@ -237,6 +242,33 @@ export function SignalsView() {
       return true;
     });
   }, [exitReports, outcomeFilter, symbolSearch]);
+
+  // The live report breathes: newest 13 only, full history lives in the archive.
+  const visibleExits = filteredExits.slice(0, EXIT_PAGE_SIZE);
+
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archivePage, setArchivePage] = useState(0);
+  const [archiveRows, setArchiveRows] = useState<TradeLearningEvent[]>([]);
+  const [archiveTotal, setArchiveTotal] = useState(0);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  const openArchive = (page: number) => {
+    setArchiveOpen(true);
+    setArchivePage(page);
+    setArchiveBusy(true);
+    setArchiveError(null);
+    getTradeLearningEvents({ data: { limit: ARCHIVE_PAGE_SIZE, offset: page * ARCHIVE_PAGE_SIZE } })
+      .then((res) => {
+        setArchiveRows(res.events);
+        setArchiveTotal(res.total);
+      })
+      .catch((error: unknown) => {
+        setArchiveError(error instanceof Error ? error.message : "Archive unavailable");
+        setArchiveRows([]);
+      })
+      .finally(() => setArchiveBusy(false));
+  };
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -568,10 +600,19 @@ export function SignalsView() {
               <div className="flex items-center gap-2">
                 <ArrowDownRight className="size-4 text-amber-400" />
                 <h3 className="text-sm font-bold text-cream uppercase tracking-wider">
-                  Trade Exit Report ({filteredExits.length})
+                  Trade Exit Report ({Math.min(visibleExits.length, EXIT_PAGE_SIZE)} of {filteredExits.length})
                 </h3>
               </div>
-              <span className="text-[11px] text-faint">Realized Returns & Verified Exit Reasons</span>
+              <div className="flex items-center gap-2">
+                <span className="hidden text-[11px] text-faint sm:inline">Realized Returns & Verified Exit Reasons</span>
+                <Button
+                  variant="ghost"
+                  onClick={() => openArchive(0)}
+                  className="h-8 border border-line px-2.5 text-xs text-brass hover:border-brass"
+                >
+                  <ExternalLink className="mr-1 size-3.5" /> Full report
+                </Button>
+              </div>
             </div>
 
             {filteredExits.length === 0 ? (
@@ -593,7 +634,7 @@ export function SignalsView() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line/30">
-                    {filteredExits.map((x) => {
+                    {visibleExits.map((x) => {
                       const nairobiTime = formatNairobiTime(undefined, x.ts);
                       const isWin = x.outcome === "WIN";
                       return (
@@ -649,6 +690,88 @@ export function SignalsView() {
                 </table>
               </div>
             )}
+            {filteredExits.length > EXIT_PAGE_SIZE && (
+              <p className="mt-2 text-[11px] text-faint">
+                Showing the latest {EXIT_PAGE_SIZE} of {filteredExits.length} exits — open the full report for the complete database archive.
+              </p>
+            )}
+          </div>
+        )}
+
+        {archiveOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 p-4 backdrop-blur-sm">
+            <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-2xl">
+              <div className="flex items-center justify-between border-b border-line p-4">
+                <div>
+                  <h3 className="text-base font-bold text-cream">Full Exit Archive</h3>
+                  <p className="text-xs text-faint">
+                    Every persisted close, newest first · {archiveTotal} total
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setArchiveOpen(false)}
+                  className="rounded-lg p-1.5 text-faint hover:bg-panel-2 hover:text-cream"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">
+                {archiveBusy ? (
+                  <p className="py-8 text-center text-xs text-faint">Loading archive…</p>
+                ) : archiveError ? (
+                  <p className="py-8 text-center text-xs text-loss">{archiveError}</p>
+                ) : archiveRows.length === 0 ? (
+                  <p className="py-8 text-center text-xs text-faint">No persisted closes yet.</p>
+                ) : (
+                  <table className="w-full text-left font-mono text-xs">
+                    <thead className="border-b border-line text-[10px] tracking-wider text-faint uppercase">
+                      <tr>
+                        <th className="pb-2 font-normal">Closed</th>
+                        <th className="pb-2 font-normal">Symbol</th>
+                        <th className="pb-2 font-normal">Venue</th>
+                        <th className="pb-2 font-normal">Reason</th>
+                        <th className="pb-2 text-right font-normal">Net PnL</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-line/30">
+                      {archiveRows.map((t) => (
+                        <tr key={t.id} className="hover:bg-panel-2/50">
+                          <td className="py-2 text-faint">{new Date(t.closedAt).toLocaleString()}</td>
+                          <td className="py-2 font-bold text-cream">{t.symbol}</td>
+                          <td className="py-2 text-faint">{t.venue}</td>
+                          <td className="py-2 text-faint">{t.reason}</td>
+                          <td className={cn("py-2 text-right font-bold", t.pnl >= 0 ? "text-gain" : "text-loss")}>
+                            {t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <div className="flex items-center justify-between border-t border-line p-3">
+                <Button
+                  variant="ghost"
+                  disabled={archivePage === 0 || archiveBusy}
+                  onClick={() => openArchive(archivePage - 1)}
+                  className="h-9 text-xs"
+                >
+                  ← Newer
+                </Button>
+                <span className="text-xs text-faint">
+                  Page {archivePage + 1} of {Math.max(1, Math.ceil(archiveTotal / ARCHIVE_PAGE_SIZE))}
+                </span>
+                <Button
+                  variant="ghost"
+                  disabled={archiveBusy || (archivePage + 1) * ARCHIVE_PAGE_SIZE >= archiveTotal}
+                  onClick={() => openArchive(archivePage + 1)}
+                  className="h-9 text-xs"
+                >
+                  Older →
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </Card>

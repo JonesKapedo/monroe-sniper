@@ -25,13 +25,15 @@ import { LoginView } from "@/components/login-view";
 import { useDyorStore } from "@/lib/dyor/store";
 import { equity } from "@/lib/paper";
 import { Button } from "@/components/ui";
+import { Money } from "@/components/money";
 import { Mascot } from "@/components/mascot";
 import { defaultSettings } from "@/lib/sniper/types";
 import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 import { getDbHealth, getTradeLearningEvents } from "@/lib/trade-memory.functions";
 
-import { loadFeeds } from "@/lib/market.functions";
+import { loadFeeds, loadFxSpot } from "@/lib/market.functions";
+import { FX_PAIRS } from "@/lib/fx/twelvedata";
 
 const NAV = [
   { to: "/", label: "Desk", short: "Desk", icon: LayoutDashboard },
@@ -78,6 +80,24 @@ export function Frame({ children }: { children: ReactNode }) {
             const prices: Record<string, number> = {};
             for (const c of combined) {
               prices[c.id] = c.priceUsd;
+            }
+            // FX spots mark open forex paper positions (turbo scans FX too).
+            const fxSymbols = [...current.demo.positions, ...current.live.positions]
+              .map((p) => p.tokenId)
+              .filter((id) => id.startsWith("fx:"));
+            const wantFx =
+              fxSymbols.length > 0 ||
+              (current.power && current.riskSettings.sizingProfile === "TURBO");
+            if (wantFx) {
+              try {
+                const pairs = [...new Set(fxSymbols.map((id) => `${id.slice(3, 6)}/${id.slice(6)}`))];
+                if (!pairs.length) pairs.push(...FX_PAIRS);
+                const fx = await loadFxSpot({ data: { pairs } });
+                Object.assign(prices, fx.prices);
+                current.setFxPrices(fx.prices);
+              } catch {
+                // FX marks are best-effort; crypto marks still flow.
+              }
             }
             if (current.power) current.tick(prices);
             else if (current.demo.positions.length > 0) current.tick(prices, true);
@@ -203,6 +223,7 @@ function Shell({ children }: { children: ReactNode }) {
 
   const activeBook = mode === "live" ? live : demo;
   const activeEq = equity(activeBook);
+  const turboRunning = useDesk((s) => s.turboPhase) === "running";
   const nairobi = formatNairobiTime(botStartedAt, nowTs);
   const readiness = getReadiness ? getReadiness() : null;
   const [showLiveModal, setShowLiveModal] = useState(false);
@@ -223,7 +244,7 @@ function Shell({ children }: { children: ReactNode }) {
         <div className="border-b border-line px-5 py-5">
           <div className="flex items-center justify-between">
             <p className="flex items-center gap-1.5 text-xs tracking-widest text-brass uppercase">
-              {appearance.showMascot ? <Mascot className="size-8 shrink-0" /> : null}
+              {appearance.showMascot ? <Mascot className="size-8 shrink-0" turbo={turboRunning} /> : null}
               Monroe
             </p>
             <span
@@ -382,7 +403,7 @@ function Shell({ children }: { children: ReactNode }) {
               <span className="text-[10px] tracking-wider text-faint uppercase">
                 Paper balance:
               </span>{" "}
-              <span className="text-sm font-semibold text-cream">${activeEq.toFixed(2)}</span>
+              <Money value={activeEq} kind="balance" className="text-sm font-semibold" />
             </div>
             <DbBadge />
 

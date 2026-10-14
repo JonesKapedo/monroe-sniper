@@ -4,6 +4,7 @@ import { useMascot } from "@/lib/mascot";
 import { useDesk } from "@/lib/desk-store";
 import { equity, exposure } from "@/lib/paper";
 import { Button, Card, Label } from "@/components/ui";
+import { Money } from "@/components/money";
 import { cn } from "@/lib/cn";
 import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
 
@@ -68,24 +69,22 @@ export function WalletView() {
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Paper account summary">
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">PAPER EQUITY</p>
-          <p className="num mt-1 text-2xl font-bold">${totalEquity.toFixed(2)}</p>
+          <p className="num mt-1 text-2xl font-bold"><Money value={totalEquity} kind="balance" /></p>
           <p className="mt-1 text-[11px] text-faint">Simulated balance</p>
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">AVAILABLE</p>
-          <p className="num mt-1 text-2xl font-bold text-gain">${demo.cash.toFixed(2)}</p>
+          <p className="num mt-1 text-2xl font-bold text-gain"><Money value={demo.cash} kind="balance" className="text-gain" /></p>
           <p className="mt-1 text-[11px] text-faint">Paper cash</p>
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">EXPOSURE</p>
-          <p className="num mt-1 text-2xl font-bold">${currentExposure.toFixed(2)}</p>
+          <p className="num mt-1 text-2xl font-bold"><Money value={currentExposure} kind="balance" /></p>
           <p className="mt-1 text-[11px] text-faint">{demo.positions.length} paper positions</p>
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">REALIZED P&L</p>
-          <p className={cn("num mt-1 text-2xl font-bold", demo.dayPnl >= 0 ? "text-gain" : "text-loss")}>
-            {demo.dayPnl >= 0 ? "+" : ""}${demo.dayPnl.toFixed(2)}
-          </p>
+          <p className="num mt-1 text-2xl font-bold"><Money value={demo.dayPnl} kind="delta" /></p>
           <p className="mt-1 text-[11px] text-faint">{demo.trades.length} paper closes</p>
         </Card>
       </section>

@@ -41,6 +41,9 @@ export interface AvenueOpportunity {
   disciplineNotes: string[];
   confidenceScore: number; // 0-100
   discoveredAt: number;
+  // Live-price anchor: base symbol on the market tape whose quote marks this
+  // avenue's positions. Absent for synthetic launches (they drift simulated).
+  anchorSymbol?: string;
 }
 
 export interface DisciplineRules {

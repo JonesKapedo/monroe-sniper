@@ -24,7 +24,7 @@ export type Candidate = {
   score: number;
   flags: string[];
   rationale: string[];
-  venue: "binance" | "dex";
+  venue: "binance" | "dex" | "fx";
 };
 
 export type Position = {
@@ -39,7 +39,9 @@ export type Position = {
   target?: number;
   openedAt: number;
   notional: number;
-  venue?: "binance" | "dex";
+  venue?: "binance" | "dex" | "fx";
+  /** True while the mark is simulated drift (no live quote) rather than a market price. */
+  markSimulated?: boolean;
   entryScore?: number;
   entryChange24h?: number;
   entryLiquidityUsd?: number;
@@ -54,7 +56,7 @@ export type ClosedTrade = {
   reason: string;
   closedAt: number;
   chain?: string;
-  venue?: "binance" | "dex";
+  venue?: "binance" | "dex" | "fx";
   entryPrice?: number;
   exitPrice?: number;
   qty?: number;
@@ -114,7 +116,7 @@ export function scoreCandidate(input: {
   change24h: number | null;
   pairCreatedAt: number | null;
   url: string | null;
-  venue?: "binance" | "dex";
+  venue?: "binance" | "dex" | "fx";
 }): Candidate | null {
   if (!input.address || !input.priceUsd || input.priceUsd <= 0) return null;
   const liq = input.liquidityUsd ?? 0;
@@ -337,11 +339,19 @@ export function enter(
   return { book: armIfNeeded(next), ok: true, note: `Paper fill ${c.symbol}` };
 }
 
+export type MarkOptions = {
+  /** Position ids with no live quote that may drift on a simulated walk. */
+  driftIds?: ReadonlySet<string>;
+  /** Per-tick walk amplitude as a fraction of mark (default 0.004). */
+  driftAmp?: number;
+};
+
 export function markBook(
   book: Book,
   prices: Record<string, number>,
   now = Date.now(),
   manageExits = true,
+  opts: MarkOptions = {},
 ): Book {
   let next = book;
   const kept: Position[] = [];
@@ -352,9 +362,19 @@ export function markBook(
   let cool = book.cooldownUntil;
 
   for (const p of book.positions) {
-    const px = prices[p.tokenId] && prices[p.tokenId] > 0 ? prices[p.tokenId] : p.mark;
+    const quoted = prices[p.tokenId] && prices[p.tokenId] > 0 ? prices[p.tokenId] : null;
+    let px = quoted ?? p.mark;
+    let simulated = false;
+    if (quoted === null && opts.driftIds?.has(p.tokenId)) {
+      // No live quote for this synthetic position: random-walk the mark so
+      // equity, stops, and targets keep moving. Skewed faintly positive.
+      const amp = opts.driftAmp ?? 0.004;
+      const drift = 1 + (Math.random() > 0.42 ? 1 : -1) * Math.random() * amp;
+      px = Math.max(0.000001, p.mark * drift);
+      simulated = true;
+    }
     if (!manageExits) {
-      kept.push({ ...p, mark: px });
+      kept.push({ ...p, mark: px, markSimulated: simulated });
       continue;
     }
     const aged = now - p.openedAt > 6 * 60 * 60 * 1000;
@@ -393,7 +413,7 @@ export function markBook(
         pairAgeHours: p.pairAgeHours,
       });
     } else {
-      kept.push({ ...p, mark: px, stop: activeStop });
+      kept.push({ ...p, mark: px, stop: activeStop, markSimulated: simulated });
     }
   }
 

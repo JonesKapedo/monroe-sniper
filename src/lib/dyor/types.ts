@@ -47,7 +47,7 @@ export type EvaluatedInstrument = {
   name: string;
   chain: string;
   address: string;
-  venue: "binance" | "dex" | "cross";
+  venue: "binance" | "dex" | "cross" | "fx";
   status: InstrumentStatus;
   userNote?: string;
   addedAt: number;

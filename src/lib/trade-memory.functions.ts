@@ -257,6 +257,9 @@ export type TradeLearningEvent = {
   qty: number;
   pnl: number;
   score: number;
+  change24h: number;
+  liquidityUsd: number;
+  volume24h: number;
   mode: string;
   reason: string;
   openedAt: number;
@@ -265,10 +268,11 @@ export type TradeLearningEvent = {
 
 /** Most recent persisted closes, newest first — powers the Learn history + merged readiness. */
 export const getTradeLearningEvents = createServerFn({ method: "POST" })
-  .validator((input: { limit?: number }) => ({
+  .validator((input: { limit?: number; offset?: number }) => ({
     limit: Math.max(1, Math.min(200, Math.floor(Number(input?.limit) || 40))),
+    offset: Math.max(0, Math.min(100_000, Math.floor(Number(input?.offset) || 0))),
   }))
-  .handler(async ({ data }): Promise<{ events: TradeLearningEvent[]; source: "neon" | "pglite" }> => {
+  .handler(async ({ data }): Promise<{ events: TradeLearningEvent[]; total: number; source: "neon" | "pglite" }> => {
     const sql = await getSql();
     const rows = await sql<{
       id: string;
@@ -280,18 +284,25 @@ export const getTradeLearningEvents = createServerFn({ method: "POST" })
       qty: number | string;
       pnl: number | string;
       score: number | string;
+      change_24h: number | string;
+      liquidity_usd: number | string;
+      volume_24h: number | string;
       mode: string;
       reason: string;
       opened_at: number | string;
       closed_at: number | string;
     }>`
       SELECT id, symbol, chain, venue, entry_price, exit_price, qty, pnl, score,
-        mode, reason, opened_at, closed_at
+        change_24h, liquidity_usd, volume_24h, mode, reason, opened_at, closed_at
       FROM trade_learning_events
       ORDER BY closed_at DESC
-      LIMIT ${data.limit}
+      LIMIT ${data.limit} OFFSET ${data.offset}
+    `;
+    const totals = await sql<{ total: number | string }>`
+      SELECT COUNT(*)::INTEGER AS total FROM trade_learning_events
     `;
     return {
+      total: Number(totals[0]?.total ?? 0),
       source: dbSource,
       events: rows.map((r) => ({
         id: String(r.id),
@@ -303,6 +314,9 @@ export const getTradeLearningEvents = createServerFn({ method: "POST" })
         qty: Number(r.qty),
         pnl: Number(r.pnl),
         score: Number(r.score),
+        change24h: Number(r.change_24h),
+        liquidityUsd: Number(r.liquidity_usd),
+        volume24h: Number(r.volume_24h),
         mode: String(r.mode),
         reason: String(r.reason),
         openedAt: Number(r.opened_at),

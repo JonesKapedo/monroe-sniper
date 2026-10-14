@@ -2,11 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Activity, CandlestickChart, CircleAlert, Radio } from "lucide-react";
 import { Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { loadKlines } from "@/lib/market.functions";
+import { loadDexCandles, loadFxCandles, loadKlines, loadTokenTicks, resolveChartPool, type ChartPool } from "@/lib/market.functions";
+import { FX_PAIRS } from "@/lib/fx/twelvedata";
+import { candleDurationMs, mergeTickIntoCandles } from "@/lib/charts/geckoterminal";
 import { equity, type Position } from "@/lib/paper";
+import { scanAllAvenues } from "@/lib/avenues/engine";
 import { useDesk } from "@/lib/desk-store";
 import type { Candle } from "@/lib/market-candles";
-import { solanaSwapCandles, type SolanaSwap } from "@/lib/solana-swaps";
+import { SOL_MINT, solanaSwapCandles, type SolanaSwap } from "@/lib/solana-swaps";
 
 type Timeframe = "1m" | "5m" | "15m" | "1h";
 type ChartSource = "solana-dex" | "cex";
@@ -129,16 +132,25 @@ export function TapeView() {
   const [timeframe, setTimeframe] = useState<Timeframe>("5m");
   const [cexCandles, setCexCandles] = useState<Candle[]>([]);
   const [solanaSwaps, setSolanaSwaps] = useState<SolanaSwap[]>([]);
+  // Multi-source DEX chart: GeckoTerminal history, Jupiter live ticks, Helius tape.
+  const [chartToken, setChartToken] = useState("SOL");
+  const [chartPool, setChartPool] = useState<ChartPool | null>(null);
+  const [dexHistory, setDexHistory] = useState<Candle[]>([]);
+  const [tickNote, setTickNote] = useState<string | null>(null);
+  const [heliusPairs, setHeliusPairs] = useState<{ dexId: string; pairAddress: string }[]>([]);
   const [feedNote, setFeedNote] = useState("Checking Helius market feed…");
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("checking");
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const disciplineRules = useDesk((state) => state.disciplineRules);
 
   useEffect(() => {
     if (chartSource !== "cex") return;
     let current = true;
     const refresh = async () => {
       try {
-        const result = await loadKlines({ data: { symbol: selectedPair, interval: timeframe } });
+        const result = selectedPair.includes("/")
+          ? await loadFxCandles({ data: { pair: selectedPair, interval: timeframe } })
+          : await loadKlines({ data: { symbol: selectedPair, interval: timeframe } });
         if (!current) return;
         setCexCandles(result.candles);
         setFeedNote(result.note);
@@ -162,8 +174,25 @@ export function TapeView() {
     if (chartSource !== "solana-dex") return;
     let current = true;
     let stream: EventSource | null = null;
+    let retryTimer = 0;
+    let retries = 0;
     setStreamStatus("checking");
     setFeedNote("Checking server-side Helius connection…");
+
+    const scheduleReconnect = () => {
+      if (!current) return;
+      retries += 1;
+      const delayMs = Math.min(30_000, 5_000 * 2 ** Math.min(retries, 3));
+      setStreamStatus("reconnecting");
+      setFeedNote(`Solana tape disconnected · retrying in ${Math.round(delayMs / 1000)}s`);
+      window.clearTimeout(retryTimer);
+      retryTimer = window.setTimeout(() => {
+        if (!current) return;
+        stream?.close();
+        stream = null;
+        void connect();
+      }, delayMs);
+    };
 
     const connect = async () => {
       try {
@@ -174,6 +203,7 @@ export function TapeView() {
           throw new Error("error" in body ? body.error : "Helius stream is unavailable.");
         }
         if (!current || !("pairs" in body)) return;
+        setHeliusPairs(body.pairs);
         setStreamStatus("connecting");
         const venueNames = [...new Set(body.pairs.map((pair) => pair.dexId))].join(" + ");
         setFeedNote(`Opening confirmed ${venueNames} SOL/USDC swap stream…`);
@@ -181,11 +211,13 @@ export function TapeView() {
         stream = new EventSource("/api/solana-swaps");
         stream.addEventListener("ready", () => {
           if (!current) return;
+          retries = 0;
           setStreamStatus("waiting");
           setFeedNote(`Connected to Solana mainnet · ${venueNames} · Waiting for confirmed swaps`);
         });
         stream.addEventListener("swap", (event) => {
           if (!current) return;
+          retries = 0;
           const swap = JSON.parse((event as MessageEvent<string>).data) as SolanaSwap;
           setSolanaSwaps((previous) =>
             [...previous.filter((item) => item.signature !== swap.signature), swap]
@@ -202,15 +234,16 @@ export function TapeView() {
             fatal: boolean;
             message: string;
           };
-          setStreamStatus((previous) =>
-            detail.fatal ? "reconnecting" : previous === "live" ? "live" : "waiting",
-          );
+          if (detail.fatal) {
+            scheduleReconnect();
+            return;
+          }
+          setStreamStatus((previous) => (previous === "live" ? "live" : "waiting"));
           setFeedNote(detail.message);
         });
         stream.onerror = () => {
           if (!current) return;
-          setStreamStatus("reconnecting");
-          setFeedNote("Solana feed disconnected · retrying automatically");
+          scheduleReconnect();
         };
       } catch (error) {
         if (!current) return;
@@ -222,15 +255,118 @@ export function TapeView() {
     void connect();
     return () => {
       current = false;
+      window.clearTimeout(retryTimer);
       stream?.close();
     };
   }, [chartSource]);
 
-  const dexCandles = useMemo(
+  // Resolve the deepest pool for the selected token (Helius pairs win for SOL).
+  useEffect(() => {
+    if (chartSource !== "solana-dex") return;
+    let current = true;
+    if (chartToken === "SOL" && heliusPairs.length > 0) {
+      const raydium = heliusPairs.find((p) => p.dexId === "raydium") ?? heliusPairs[0];
+      setChartPool({
+        poolAddress: raydium.pairAddress,
+        baseSymbol: "SOL",
+        chain: "solana",
+        liquidityUsd: null,
+        label: `SOL/USDC · ${raydium.dexId}`,
+      });
+      return () => {
+        current = false;
+      };
+    }
+    setChartPool(null);
+    setDexHistory([]);
+    void resolveChartPool({ data: { symbol: chartToken } }).then((res) => {
+      if (!current) return;
+      setChartPool(res.pool);
+      if (!res.pool) setFeedNote(res.note);
+    });
+    return () => {
+      current = false;
+    };
+  }, [chartSource, chartToken, heliusPairs]);
+
+  // GeckoTerminal history for the resolved pool, refreshed on a cadence.
+  useEffect(() => {
+    if (chartSource !== "solana-dex" || !chartPool) return;
+    let current = true;
+    const refresh = async () => {
+      try {
+        const result = await loadDexCandles({
+          data: { poolAddress: chartPool.poolAddress, interval: timeframe },
+        });
+        if (!current || !result.candles.length) return;
+        setDexHistory(result.candles);
+        setLastUpdated(Date.now());
+      } catch {
+        // History is best-effort; Helius swaps remain as fallback candles.
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 20_000);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+    };
+  }, [chartSource, chartPool, timeframe]);
+
+  // Jupiter live tick extends the current SOL candle between history polls.
+  useEffect(() => {
+    if (chartSource !== "solana-dex" || chartToken !== "SOL") {
+      setTickNote(null);
+      return;
+    }
+    let current = true;
+    const refresh = async () => {
+      try {
+        const res = await loadTokenTicks({ data: { mints: [SOL_MINT] } });
+        if (!current) return;
+        const tick = res.ticks[0];
+        setTickNote(res.ticks.length ? `Jupiter live $${tick.usdPrice.toFixed(2)}` : null);
+        if (!tick) return;
+        setDexHistory((prev) =>
+          mergeTickIntoCandles(prev, tick.usdPrice, Date.now(), candleDurationMs(timeframe)),
+        );
+      } catch {
+        // Ticks are best-effort; history still stands.
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 15_000);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+    };
+  }, [chartSource, chartToken, timeframe]);
+
+  const tokenOptions = useMemo(() => {
+    const bases = new Set<string>(["SOL"]);
+    for (const p of positions) {
+      const base = p.symbol.toUpperCase().split(/[/:_\- ]/)[0];
+      if (base) bases.add(base);
+    }
+    for (const a of scanAllAvenues(demo, disciplineRules)) {
+      if (a.anchorSymbol) bases.add(a.anchorSymbol.toUpperCase());
+    }
+    return [...bases].slice(0, 8);
+  }, [positions, demo, disciplineRules]);
+
+  const swapCandles = useMemo(
     () => solanaSwapCandles(solanaSwaps, timeframe),
     [solanaSwaps, timeframe],
   );
-  const candles = chartSource === "solana-dex" ? dexCandles : cexCandles;
+  const candles = chartSource === "solana-dex" ? (dexHistory.length ? dexHistory : swapCandles) : cexCandles;
+  const candleSource =
+    chartSource === "solana-dex"
+      ? dexHistory.length
+        ? "GeckoTerminal history"
+        : swapCandles.length
+          ? "Helius swaps"
+          : null
+      : null;
 
   const currentCandle = candles.at(-1);
   const previousCandle = candles.at(-2);
@@ -238,10 +374,14 @@ export function TapeView() {
     currentCandle && previousCandle?.close
       ? ((currentCandle.close - previousCandle.close) / previousCandle.close) * 100
       : 0;
-  const relevantPositions = positions.filter(
-    (position) =>
-      chartSource === "cex" && position.venue === "binance" && matchesPair(position, selectedPair),
-  );
+  const relevantPositions =
+    chartSource === "solana-dex"
+      ? positions.filter((position) => position.symbol.toUpperCase().includes(chartToken))
+      : positions.filter(
+          (position) =>
+            (position.venue === "binance" && matchesPair(position, selectedPair)) ||
+            (selectedPair.includes("/") && position.symbol === selectedPair),
+        );
   const closedExecutions = executions.filter((execution) => execution.type !== "MARKET_FLOW");
   const wins = trades.filter((trade) => trade.pnl > 0).length;
 
@@ -336,7 +476,7 @@ export function TapeView() {
             </div>
             <p className="mt-1 text-xs text-faint">
               {chartSource === "solana-dex"
-                ? "SOL/USDC · Raydium + PumpSwap · confirmed on-chain swaps"
+                ? `${chartPool ? chartPool.label : "Resolving deepest pool…"}${candleSource ? ` · ${candleSource}` : ""}${tickNote ? ` · ${tickNote}` : ""}`
                 : `${selectedPair} · public ${feedNote}`}
               {chartSource === "cex" &&
               positions.some(
@@ -427,7 +567,7 @@ export function TapeView() {
               </button>
             </div>
             {chartSource === "cex"
-              ? PAIRS.map((pair) => (
+              ? [...PAIRS, ...FX_PAIRS].map((pair) => (
                   <button
                     key={pair}
                     type="button"
@@ -440,10 +580,25 @@ export function TapeView() {
                         : "border border-line bg-panel-2 text-faint hover:text-cream",
                     )}
                   >
-                    {pair.replace("USDT", "/USDT")}
+                    {pair.includes("/") ? pair : pair.replace("USDT", "/USDT")}
                   </button>
                 ))
-              : null}
+              : tokenOptions.map((token) => (
+                  <button
+                    key={token}
+                    type="button"
+                    aria-pressed={chartToken === token}
+                    onClick={() => setChartToken(token)}
+                    className={cn(
+                      "min-h-9 rounded-lg px-2.5 text-xs font-semibold",
+                      chartToken === token
+                        ? "bg-brass text-ink"
+                        : "border border-line bg-panel-2 text-faint hover:text-cream",
+                    )}
+                  >
+                    {token}
+                  </button>
+                ))}
           </div>
           <div
             className="flex rounded-lg border border-line bg-panel-2 p-0.5 text-xs"
@@ -470,7 +625,7 @@ export function TapeView() {
           <div className="relative min-w-0 overflow-hidden rounded-lg border border-line bg-ink p-2">
             <svg
               role="img"
-              aria-label={`${chartSource === "solana-dex" ? "SOL/USDC Solana DEX" : selectedPair} ${timeframe} real market candlestick chart`}
+              aria-label={`${chartSource === "solana-dex" ? `${chartPool ? chartPool.label : chartToken} Solana DEX` : selectedPair} ${timeframe} real market candlestick chart`}
               className="block h-64 w-full sm:h-80"
               viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
               preserveAspectRatio="none"
@@ -621,7 +776,7 @@ export function TapeView() {
               </span>
             </div>
             {chartSource === "solana-dex" ? (
-              <ol className="mt-3 grid gap-2 sm:grid-cols-2" aria-label="Recent confirmed swaps">
+              <ol className="mt-3 grid gap-2 sm:grid-cols-2" aria-label="Recent confirmed SOL/USDC swaps (tape)">
                 {solanaSwaps
                   .slice(-4)
                   .reverse()
