@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chooseEntry, emptyBook, enter, entryVerdict, equity, markBook, sampleTape, setKill, simulateBuy, type Position } from "./paper.ts";
+import { bucketId, chooseEntry, emptyBook, emptyBucketBook, enter, entryVerdict, equity, floorFor, learnBuckets, markBook, sampleTape, setKill, simulateBuy, type Position } from "./paper.ts";
 
 describe("paper desk", () => {
   it("blocks a thin fresh name", () => {
@@ -112,6 +112,32 @@ describe("paper desk", () => {
     const before = equity(book);
     const after = markBook(book, {}, Date.now(), true);
     assert.equal(equity(after), before);
+  });
+
+  it("keeps venue, reason, and symbol evidence in separate buckets", () => {
+    let book = emptyBucketBook();
+    book = learnBuckets(book, "dex", "TARGET", "BONK", 10);
+    book = learnBuckets(book, "dex", "TARGET", "BONK", 12);
+    book = learnBuckets(book, "dex", "STOP", "BONK", -8);
+    book = learnBuckets(book, "binance", "TARGET", "SOL", 5);
+    assert.equal(book[bucketId({ venue: "dex", reason: "TARGET" })]?.seen, 2);
+    assert.equal(book[bucketId({ venue: "dex", reason: "STOP" })]?.seen, 1);
+    assert.equal(book[bucketId({ venue: "binance", reason: "TARGET" })]?.seen, 1);
+    assert.equal(book[bucketId({ venue: "dex", reason: "TARGET", symbol: "BONK" })]?.seen, 2);
+    // Demo and live never share a counter.
+    const live = learnBuckets(book, "dex", "TARGET", "BONK", 9, "live");
+    assert.equal(live[bucketId({ venue: "dex", reason: "TARGET" })]?.seen, 2);
+    assert.equal(live[bucketId({ venue: "dex", reason: "TARGET", mode: "live" })]?.seen, 1);
+  });
+
+  it("gates on the most specific bucket with a voice", () => {
+    let book = emptyBucketBook();
+    for (let i = 0; i < 5; i += 1) book = learnBuckets(book, "dex", "TARGET", "BONK", 10);
+    const global = { seen: 0, wins: 0, losses: 0, realized: 0, minScore: 62 };
+    // Symbol bucket (5 wins → floor 60) outranks the aggregate.
+    assert.equal(floorFor(book, global, "dex", "TARGET", "BONK"), 60);
+    // A reason with no evidence falls back to global.
+    assert.equal(floorFor(book, global, "dex", "STOP", "WIF"), 62);
   });
 
   it("vetoes verified hard-rejects no matter the score", () => {

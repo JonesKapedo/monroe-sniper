@@ -3,9 +3,10 @@ import { equity, exposure } from "../paper";
 import { auditAcademicSafeguards } from "./investopedia-mistakes-guard";
 import { fibExtensions, snapToFib } from "../math/fib";
 import { isCorrelatedDuplicate, setupVector, winnerResemblance, type SetupVector } from "../math/vectors";
+import { selectModel, type RiskModelProfile } from "./risk-models";
 
 export type SizingModel = "VOLATILITY_PARITY" | "FRACTIONAL_KELLY" | "FIXED_FRACTION";
-export type SizingProfile = "CONSERVATIVE" | "OPTIMUM_SWEET_SPOT" | "AGGRESSIVE" | "TURBO";
+export type SizingProfile = "CONSERVATIVE" | "OPTIMUM_SWEET_SPOT" | "AGGRESSIVE" | "TURBO" | "[paranoid]" | "[elvis]" | "gradient" | "[degen]";
 export type VolatilityRegime = "LOW" | "NORMAL" | "ELEVATED" | "EXTREME";
 
 /** Optional geometric overlays — absent means classic evaluation. */
@@ -123,7 +124,17 @@ export function evaluateRiskAndSize(
   minScore = 62,
   now = Date.now(),
   math?: RiskMathOverlays,
+  modelId: RiskModelProfile["id"] = "[paranoid]",
 ): SizingVerdict {
+  const profile = selectModel(modelId) ?? selectModel("[paranoid]");
+  const convictionForModel = (
+    gradientEdge: number,
+    seen: number,
+  ): number => {
+    const clamped = Math.max(-1, Math.min(1, gradientEdge / 12));
+    const confidence = Math.min(1, seen / profile.confidenceRamp);
+    return 1.0 + clamped * profile.convictionScale * confidence;
+  };
   const checks: RiskCheck[] = [];
   const reasons: string[] = [];
 
@@ -135,9 +146,33 @@ export function evaluateRiskAndSize(
   const cooling = book.cooldownUntil !== null && now < book.cooldownUntil;
 
   // 1. Estimate asset-specific volatility and ATR
-  const { volatility, atr, regime } = estimateVolatility(candidate);
+const { volatility, atr, regime } = estimateVolatility(candidate);
 
-  // 2. Calculate volatility-adjusted Stop Loss & Take Profit
+// Model-profile minimum-edge gate — profiles have distinct thresholds; below
+// the threshold the candidate is rejected regardless of score or other gates.
+const effectiveEdge = gradientEdge !== undefined ? Math.max(-1, Math.min(1, gradientEdge / 12)) : 0;
+if (effectiveEdge < profile.minEdge) {
+  return {
+    allowed: false,
+    notional: 0,
+    qty: 0,
+    entryPrice: candidate.priceUsd,
+    stopPrice: candidate.priceUsd,
+    targetPrice: candidate.priceUsd,
+    stopLossPct: 0,
+    takeProfitPct: 0,
+    riskRewardRatio: 0,
+    riskAmount: 0,
+    valueAtRisk95: 0,
+    volatility: regime,
+    volatilityRegime: regime,
+    valueAtRisk95: 0,
+    checks: [],
+    reasons: [`edge-below-${profile.id}`],
+  };
+}
+
+// Apply conviction scaling from the model profile when gradient edge is available.
   // Dynamic Stop distance: ATR * atrMultiplier, clamped between 2% and 12%
   const calculatedStopPct = Math.max(
     0.02,
@@ -182,33 +217,38 @@ export function evaluateRiskAndSize(
   // Winner resemblance tunes conviction: proven shapes size up slightly,
   // alien shapes size down — never a veto, never a pass.
   const resemblance = winnerResemblance(candidateVector, math?.winnerVectors ?? []);
-  const conviction = Math.min(1.35, Math.max(0.65, (candidate.score / 75) * (0.9 + 0.2 * resemblance)));
+  const rawConviction = Math.min(1.35, Math.max(0.65, (candidate.score / 75) * (0.9 + 0.2 * resemblance)));
+  const gradientEdgeFromSettings = settings.riskSettings.gradientEdge ?? 0;
+  const seenFromMemory = s?.memory?.seen ?? 0;
+  const modelConviction = gradientEdgeFromSettings !== 0 ? convictionForModel(gradientEdgeFromSettings, seenFromMemory) : 1.0;
+  const conviction = Math.min(1.35, Math.max(0.65, rawConviction * modelConviction));
   const openSlots = Math.max(1, settings.maxPositions - book.positions.length);
   const cashPerSlot = book.cash / openSlots;
 
-  // Dynamic max idea ceiling tuned to optimum compounding corridor
+  // Dynamic max idea ceiling tuned to the active risk-model profile.
   const profileMaxIdea =
-    settings.sizingProfile === "TURBO" ? 0.45 :
-    settings.sizingProfile === "AGGRESSIVE" ? 0.35 :
-    settings.sizingProfile === "CONSERVATIVE" ? 0.18 : 0.28;
+    profile.id === "[degen]" ? 0.55 :
+    profile.id === "[elvis]" ? 0.40 :
+    profile.id === "[paranoid]" ? 0.15 : 0.30; // gradient
   const maxIdeaCash = Math.max(
     currentEquity <= 250 ? Math.min(book.cash, 35) : 0,
     currentEquity * profileMaxIdea * conviction,
   );
   const maxBookExposure =
-    settings.sizingProfile === "TURBO" ? 0.9 :
-    settings.sizingProfile === "AGGRESSIVE" ? 0.85 :
-    settings.sizingProfile === "CONSERVATIVE" ? 0.50 : 0.75;
+    profile.id === "[degen]" ? 0.85 :
+    profile.id === "[elvis]" ? 0.70 :
+    profile.id === "[paranoid]" ? 0.40 : 0.65; // gradient
   const bookCapRemaining = Math.max(0, currentEquity * maxBookExposure - currentExposure);
 
   let rawSize = 0;
 
   if (settings.sizingModel === "VOLATILITY_PARITY") {
     // Risk exactly `riskPerTrade` of equity if stop loss is hit
+    // Model-profile risk fractions replace the old sizingProfile buckets.
     const riskFraction =
-      settings.sizingProfile === "TURBO" ? 0.05 :
-      settings.sizingProfile === "AGGRESSIVE" ? 0.035 :
-      settings.sizingProfile === "CONSERVATIVE" ? 0.015 : settings.riskPerTrade;
+      profile.id === "[degen]" ? 0.05 :
+      profile.id === "[elvis]" ? 0.035 :
+      profile.id === "[paranoid]" ? 0.015 : settings.riskPerTrade; // gradient
     const dollarRiskBudget = Math.max(
       currentEquity <= 250 ? 1.5 : 0,
       currentEquity * riskFraction * conviction,
@@ -223,8 +263,12 @@ export function evaluateRiskAndSize(
     const quarterKelly = Math.max(0.08, Math.min(0.32, fullKelly * 0.25 * conviction));
     rawSize = currentEquity * quarterKelly;
   } else {
-    // Fixed fraction with conviction scaling
-    rawSize = currentEquity * settings.riskPerTrade * 5 * conviction;
+    // Fixed fraction with conviction scaling — use model-profile risk fraction.
+    const baseRiskFraction =
+      profile.id === "[degen]" ? 0.05 :
+      profile.id === "[elvis]" ? 0.035 :
+      profile.id === "[paranoid]" ? 0.015 : settings.riskPerTrade; // gradient
+    rawSize = currentEquity * baseRiskFraction * 5 * conviction;
   }
 
   // Ensure minimum viable sizing on small balances so user is not starved in micro pennies

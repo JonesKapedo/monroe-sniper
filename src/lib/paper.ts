@@ -571,6 +571,100 @@ export function emptyMemory(): Memory {
   return { seen: 0, wins: 0, losses: 0, realized: 0, minScore: MIN_SCORE };
 }
 
+/**
+ * Keyed learning buckets. The global Memory averages every venue, reason,
+ * and symbol into one scalar; buckets keep (venue × reason) plus per-symbol
+ * evidence so a winning SOL basis and a losing fresh-dex punt stop
+ * cancelling each other out.
+ */
+export type BucketKey = {
+  venue: string;
+  reason: string;
+  /** Per-symbol bucket; absent means the venue × reason aggregate. */
+  symbol?: string;
+  /** Demo and live accumulators never share a counter. */
+  mode?: string;
+};
+
+export function bucketId(key: BucketKey): string {
+  const parts = [key.venue || "unknown", key.reason || "ANY"];
+  if (key.symbol) parts.push(key.symbol.toUpperCase());
+  if (key.mode && key.mode !== "demo") parts.push(key.mode.toUpperCase());
+  return parts.join("/");
+}
+
+/** Max per-symbol buckets retained; lowest-seen pruned first. */
+export const MAX_SYMBOL_BUCKETS = 24;
+
+export type BucketBook = Record<string, Memory>;
+
+export function emptyBucketBook(): BucketBook {
+  return {};
+}
+
+function bucketLearn(memory: Memory, pnl: number): Memory {
+  const wins = memory.wins + (pnl > 0 ? 1 : 0);
+  const losses = memory.losses + (pnl < 0 ? 1 : 0);
+  const seen = memory.seen + 1;
+  const realized = memory.realized + pnl;
+  let minScore = memory.minScore;
+  if (seen >= 4) {
+    const winRate = wins / seen;
+    if (winRate < 0.4 || realized < 0) minScore = Math.min(85, 62 + 2 * (seen - 3));
+    else if (winRate > 0.55 && realized > 0) minScore = Math.max(55, 62 - (seen - 3));
+    else minScore = 62;
+  }
+  return { seen, wins, losses, realized, minScore };
+}
+
+/** Fold one teachable close into its venue × reason and symbol buckets. */
+export function learnBuckets(
+  book: BucketBook,
+  venue: string,
+  reason: string,
+  symbol: string,
+  pnl: number,
+  mode = "demo",
+): BucketBook {
+  const next: BucketBook = { ...book };
+  const aggregateId = bucketId({ venue, reason, mode });
+  const prev = next[aggregateId] ?? emptyMemory();
+  next[aggregateId] = { ...bucketLearn(prev, pnl) };
+  const symbolId = bucketId({ venue, reason, symbol, mode });
+  const prevSym = next[symbolId] ?? emptyMemory();
+  next[symbolId] = { ...bucketLearn(prevSym, pnl) };
+  // Prune per-symbol buckets beyond cap (aggregates are never pruned).
+  const symbolIds = Object.keys(next).filter((id) => id.split("/").length >= 3);
+  if (symbolIds.length > MAX_SYMBOL_BUCKETS) {
+    symbolIds
+      .sort((a, b) => (next[a]?.seen ?? 0) - (next[b]?.seen ?? 0))
+      .slice(0, symbolIds.length - MAX_SYMBOL_BUCKETS)
+      .forEach((id) => {
+        delete next[id];
+      });
+  }
+  return next;
+}
+
+/**
+ * Score floor for a candidate: the symbol bucket when it has a voice
+ * (seen ≥ 3), else the venue × reason bucket (seen ≥ 4), else the global.
+ */
+export function floorFor(
+  buckets: BucketBook,
+  global: Memory,
+  venue: string,
+  reason: string,
+  symbol: string,
+  mode = "demo",
+): number {
+  const sym = buckets[bucketId({ venue, reason, symbol, mode })];
+  if (sym && sym.seen >= 3) return sym.minScore;
+  const agg = buckets[bucketId({ venue, reason, mode })];
+  if (agg && agg.seen >= 4) return agg.minScore;
+  return global.minScore;
+}
+
 /** Nudge the score floor from closed-trade evidence. History is the only teacher.
  * Mirrors the trade_learning_state CASE in trade-memory.functions.ts exactly so
  * the local estimate and the database aggregate never disagree. */
@@ -624,4 +718,83 @@ export function withdraw(book: Book, amount: number): { book: Book; ok: boolean;
   const after = { ...book, cash: book.cash - amount };
   after.peakEquity = Math.max(equity(after), Math.max(0, book.peakEquity - amount));
   return { book: after, ok: true, note: "Withdrawal posted to the ledger" };
+}
+
+/** Persist-then-commit: writes the current bucket state to the DB and
+ *  schedules a reconciliation on the next boot so the DB aggregate is
+ *  always consistent with the live bucketBook.  Returns the bucketBook
+ *  unchanged for call-site convenience. */
+export function persistBuckets(
+  buckets: BucketBook,
+  writeCb: (key: string, memory: Memory) => Promise<void>,
+  mode = "demo"
+): BucketBook {
+  // Fire‑and‑forget each bucket to the DB.
+  const promises = Object.entries(buckets).map(([key, mem]) =>
+    writeCb(key, { ...mem, minScore: Math.max(0, Math.min(85, mem.minScore)) })
+  );
+  // Don't block the desk; just ensure we don't drop in-flight writes.
+  Promise.allSettled(promises).then(() => {
+    // Reconcile on the next event‑loop tick so the DB aggregate reflects
+    // whatever local buckets survived pruning.
+    setTimeout(reconcileBuckets, 0, buckets, writeCb, mode);
+  });
+  return buckets;
+}
+
+/**
+ * Reconcile the DB-backed memory rows with the in‑memory bucketBook.
+ * Any DB row not present locally is removed; any local bucket that has
+ * grown is upserted.  After this run the local and DB states are identical.
+ */
+async function reconcileBuckets(
+  local: BucketBook,
+  writeCb: (key: string, memory: Memory) => Promise<void>,
+  mode = "demo"
+): Promise<void> {
+  // Read every key that exists in the DB (the gate supplies the reader).
+  const dbKeys = await readAllBucketKeys(mode);
+  // Keep only keys that are also in the local bucketBook.
+  const toKeep = new Set(Object.keys(local));
+  for (const key of dbKeys) {
+    if (!toKeep.has(key)) {
+      // DB row has no local counterpart → remove it (stale from prune).
+      await deleteBucketKey(key, mode);
+    }
+  }
+  // Upsert every local bucket so the DB always has the latest.
+  for (const [key, mem] of Object.entries(local)) {
+    await upsertBucketKey(key, mem, mode);
+  }
+}
+
+/** Read every bucket key that exists in the DB for the given mode. */
+async function readAllBucketKeys(mode: string): Promise<string[]> {
+  // Gate‑wrapped DB call – the gate injects the correct Neon connection.
+  const supa = await import("@/lib/supabase");
+  const db: any = (supa as any).getDb ? (supa as any).getDb() : (await supa).getSupabase();
+  const { data } = await db
+    .from("learning_buckets")
+    .select("key")
+    .eq("mode", mode);
+  return (data || []).map((r: any) => r.key);
+}
+
+/** Delete a single bucket key from the DB. */
+async function deleteBucketKey(key: string, mode: string): Promise<void> {
+  // @ts-ignore: dynamic import pattern established elsewhere in this file
+  const { getDb } = await import("@/lib/supabase");
+  const db = getDb();
+  await db.from("learning_buckets").delete().eq("key", key).eq("mode", mode);
+}
+
+/** Upsert a single bucket key into the DB. */
+async function upsertBucketKey(key: string, mem: Memory, mode: string): Promise<void> {
+  // @ts-ignore: dynamic import pattern established elsewhere in this file
+  const { getDb } = await import("@/lib/supabase");
+  const db = getDb();
+  const { error } = await db
+    .from("learning_buckets")
+    .upsert({ key, minScore: mem.minScore, seen: mem.seen, wins: mem.wins, losses: mem.losses, realized: mem.realized, mode });
+  if (error) console.error("[learnBuckets] upsert error", error);
 }

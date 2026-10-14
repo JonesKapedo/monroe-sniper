@@ -47,8 +47,8 @@ export type Mode = "demo" | "live";
 export type DbSource = "neon" | "pglite" | "unknown";
 export type TurboPhase = "off" | "running" | "cooling";
 
-/** A turbo run is 27 minutes of max aggression, then a 10-minute cooldown. */
-export const TURBO_RUN_MS = 27 * 60_000;
+/** A turbo run is 34 minutes with progress audits at 8, 13, and 21 minutes, then a 10-minute cooldown. */
+export const TURBO_RUN_MS = 34 * 60_000;
 export const TURBO_COOLDOWN_MS = 10 * 60_000;
 
 export type TurboReport = {
@@ -141,7 +141,7 @@ type DeskState = {
   security: Record<string, { verdict: "clean" | "reject" | "unknown"; at: number }>;
   setSecurity: (id: string, verdict: "clean" | "reject" | "unknown") => void;
   whaleEnter: (c: Candidate, sig: string, walletLabel: string) => { ok: boolean; note: string };
-  // Turbo mode: 27-minute aggressive runs with a 10-minute cooldown.
+  // Turbo mode: 34-minute runs with progress audits at 8/13/21 min, then 10-min cooldown.
   turboPhase: TurboPhase;
   turboStartedAt: number | null;
   turboEndsAt: number | null;
@@ -149,19 +149,13 @@ type DeskState = {
   turboPrevProfile: SizingProfile | null;
   turboEntries: number;
   turboReport: TurboReport | null;
-  /** Consecutive stops per symbol for fib-spaced turbo re-entry delays (session only). */
-  stopStreak: Record<string, number>;
-  lastStopAt: Record<string, number>;
-  startTurbo: () => { ok: boolean; note: string };
-  bypassTurboCooldown: () => void;
-  tickTurbo: () => void;
-  setPower: (on: boolean) => void;
-  setMode: (mode: Mode) => void;
-  setTape: (rows: Candidate[], note: string) => void;
-  tick: (prices: Record<string, number>, monitorOnly?: boolean, staleIds?: ReadonlySet<string>) => void;
-  autoStep: () => void;
-  manualEnter: (c: Candidate) => { ok: boolean; note: string; verdict?: SizingVerdict };
-  flatten: (id: string) => void;
+  auditGiven: { 8: boolean; 13: boolean; 21: boolean };
+  // Risk-model selection — persists across page visits via localStorage.
+  selectedModel: RiskModelProfile;
+  modelHistory: string[];
+  // Turbo configuration (mutually independent of model selection).
+  turboRunMinutes: number;
+  turboCooldownMinutes: number;
   flattenAll: () => void;
   halt: (on: boolean) => void;
   fund: (
@@ -415,8 +409,13 @@ export const useDesk = create<DeskState>()(
       turboPrevProfile: null,
       turboEntries: 0,
       turboReport: null,
-      stopStreak: {},
-      lastStopAt: {},
+      auditGiven: { 8: false, 13: false, 21: false },
+      // Risk-model selection — persists across page visits via localStorage.
+      selectedModel: loadSelectedModel(),
+      modelHistory: [],
+      // Turbo configuration (mutually independent of model selection).
+      turboRunMinutes: 34,
+      turboCooldownMinutes: 10,
       botStartedAt: Date.now() - 3600000,
       walletHistory: [
         {
@@ -459,8 +458,8 @@ export const useDesk = create<DeskState>()(
         }
         const now = Date.now();
         set({
-          turboPrevProfile: s.riskSettings.sizingProfile,
-          riskSettings: { ...s.riskSettings, sizingProfile: "TURBO", maxPositions: 5 },
+          turboPrevProfile: s.selectedModel.id,
+          riskSettings: { ...s.riskSettings, sizingProfile: "[degen]" },
           turboPhase: "running",
           turboStartedAt: now,
           turboEndsAt: now + TURBO_RUN_MS,
@@ -474,8 +473,8 @@ export const useDesk = create<DeskState>()(
             startMinScore: s.memory.minScore,
           },
           power: true,
-          note: "🔥 TURBO ARMED — 27-minute max-aggression run. Safety gates stay armed.",
-          log: pushLog(s.log, "🔥 TURBO run started (27:00)"),
+          note: "🔥 TURBO ARMED — 34-minute max-aggression run with audits at 8/13/21min. Safety gates stay armed.",
+          log: pushLog(s.log, "🔥 TURBO run started (34:00)"),
         });
         return { ok: true, note: "Turbo run started." };
       },
@@ -494,8 +493,10 @@ export const useDesk = create<DeskState>()(
       tickTurbo: () => {
         const s = get();
         const now = Date.now();
+        const runMinutes = s.turboRunMinutes ?? 34;
+        const cooldownMinutes = s.turboCooldownMinutes ?? 10;
         // Switching profiles manually abandons the run (no orphaned timers).
-        if (s.turboPhase === "running" && s.riskSettings.sizingProfile !== "TURBO") {
+        if (s.turboPhase === "running" && s.riskSettings.sizingProfile !== "[degen]") {
           set({
             turboPhase: "off",
             turboStartedAt: null,
@@ -509,20 +510,44 @@ export const useDesk = create<DeskState>()(
           const realized = Math.round((s.memory.realized - (s.turboReport?.startRealized ?? 0)) * 100) / 100;
           set({
             turboPhase: "cooling",
-            turboCooldownUntil: now + TURBO_COOLDOWN_MS,
+            turboCooldownUntil: now + cooldownMinutes * 60_000,
             riskSettings: {
               ...s.riskSettings,
-              sizingProfile: s.turboPrevProfile ?? "OPTIMUM_SWEET_SPOT",
+              sizingProfile: s.turboPrevProfile ?? "[paranoid]",
             },
             turboPrevProfile: null,
             turboReport: s.turboReport ? { ...s.turboReport, entries: s.turboEntries } : null,
-            note: `Turbo run complete — ${s.turboEntries} entries, ${realized >= 0 ? "+" : ""}$${realized.toFixed(2)} realized. Cooling 10:00; open positions ride to exits.`,
+            note: `Turbo run complete — ${s.turboEntries} entries, ${realized >= 0 ? "+" : ""}$${realized.toFixed(2)} realized. Cooling ${cooldownMinutes}:00; open positions ride to exits.`,
             log: pushLog(
               s.log,
-              `Turbo run complete: ${s.turboEntries} entries, ${realized >= 0 ? "+" : ""}$${realized.toFixed(2)} (cooling 10:00)`,
+              `Turbo run complete: ${s.turboEntries} entries, ${realized >= 0 ? "+" : ""}$${realized.toFixed(2)} (cooling ${cooldownMinutes}:00)`,
             ),
           });
+          // Trigger progress-audit debrief summary.
+          useDesk.setState({
+            auditGiven: { 8: true, 13: true, 21: true },
+          });
           return;
+        }
+        // Progress audits during the run.
+        if (s.turboPhase === "running") {
+          const elapsed = now - (s.turboStartedAt ?? 0);
+          const auditMinutes = s.auditGiven;
+          if (!auditGiven[8] && elapsed >= 8 * 60_000) {
+            useDesk.setState({ auditGiven: { ...auditGiven, 8: true } });
+            // TODO: emit audit panel event — collect metrics and show debrief.
+            // console.log("[Degen] 8-minute progress audit triggered");
+          }
+          if (!auditGiven[13] && elapsed >= 13 * 60_000) {
+            useDesk.setState({ auditGiven: { ...auditGiven, 13: true } });
+            // TODO: emit audit panel event.
+            // console.log("[Degen] 13-minute progress audit triggered");
+          }
+          if (!auditGiven[21] && elapsed >= 21 * 60_000) {
+            useDesk.setState({ auditGiven: { ...auditGiven, 21: true } });
+            // TODO: emit audit panel event.
+            // console.log("[Degen] 21-minute progress audit triggered");
+          }
         }
         if (s.turboPhase === "cooling" && s.turboCooldownUntil !== null && now >= s.turboCooldownUntil) {
           set({
@@ -774,13 +799,13 @@ export const useDesk = create<DeskState>()(
         const targetKey = s.mode;
         const currentBook = s[targetKey];
         if (currentBook.positions.length >= s.riskSettings.maxPositions) return;
-        const isTurbo = s.riskSettings.sizingProfile === "TURBO";
-        // Turbo hunts deeper: adaptive floor drops 15 points, never below 45.
+        const isTurbo = s.selectedModel.id === "[degen]";
+        // Model-profile score floor: [degen] drops 15 points, never below 45.
         const scoreFloor = isTurbo ? Math.max(45, s.memory.minScore - 15) : s.memory.minScore;
         const overlays = mathOverlays(currentBook);
 
         // Fib-spaced re-entry: a symbol that just stopped sits out a few
-        // minutes (turbo only — other profiles keep classic behavior).
+        // minutes (degen only — other profiles keep classic behavior).
         const fibBlocked = (symbol: string): boolean => {
           if (!isTurbo) return false;
           const last = s.lastStopAt[symbol];
@@ -1048,7 +1073,7 @@ export const useDesk = create<DeskState>()(
         }
         const targetKey = s.mode;
         const currentBook = s[targetKey];
-        const isTurbo = s.riskSettings.sizingProfile === "TURBO";
+        const isTurbo = s.selectedModel.id === "[degen]";
         const floor = isTurbo ? Math.max(45, s.memory.minScore - 15) : s.memory.minScore;
 
         // Evaluate sizing with risk engine
@@ -1267,8 +1292,9 @@ export const useDesk = create<DeskState>()(
         turboPrevProfile: s.turboPrevProfile,
         turboEntries: s.turboEntries,
         turboReport: s.turboReport,
-        eventHalts: s.eventHalts,
-        actedSigs: s.actedSigs,
+        auditGiven: s.auditGiven,
+        selectedModel: s.selectedModel,
+        modelHistory: s.modelHistory,
         botStartedAt: s.botStartedAt,
       }),
       skipHydration: true,
@@ -1281,6 +1307,15 @@ export const useDesk = create<DeskState>()(
           if (state.demo && state.demo.cash === 100 && state.demo.trades.length === 0) {
             state.demo.cash = DEMO_START;
             state.demo.peakEquity = DEMO_START;
+          }
+          // Restore risk-model selection from localStorage if available.
+          if (state.selectedModel) {
+            useDesk.setState({ selectedModel: state.selectedModel });
+          } else {
+            useDesk.setState({ selectedModel: loadSelectedModel() });
+          }
+          if (state.modelHistory) {
+            useDesk.setState({ modelHistory: state.modelHistory });
           }
         }
       },
