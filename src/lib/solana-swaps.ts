@@ -185,6 +185,9 @@ export type SolanaDexPair = SolanaPair & {
   quoteToken: { address: string; symbol: string };
 };
 
+/** Solana venues the tape subscribes to, in priority order. */
+export const SOLANA_DEX_ALLOWLIST: readonly string[] = ["raydium", "pumpswap", "orca", "meteora"];
+
 export function selectSolUsdcPairs(input: unknown): SolanaDexPair[] {
   if (!Array.isArray(input)) return [];
   const pairs = input.flatMap((item): SolanaDexPair[] => {
@@ -198,7 +201,7 @@ export function selectSolUsdcPairs(input: unknown): SolanaDexPair[] {
     const priceUsd = positiveNumber(pair.priceUsd);
     const liquidityUsd = positiveNumber(pair.liquidity?.usd);
     if (
-      !["raydium", "pumpswap"].includes(dexId) ||
+      !SOLANA_DEX_ALLOWLIST.includes(dexId) ||
       !pairAddress ||
       !priceUsd ||
       !liquidityUsd ||
@@ -223,7 +226,7 @@ export function selectSolUsdcPairs(input: unknown): SolanaDexPair[] {
   });
 
   const selected = new Map<string, SolanaDexPair>();
-  for (const dexId of ["raydium", "pumpswap"]) {
+  for (const dexId of SOLANA_DEX_ALLOWLIST) {
     const best = pairs
       .filter((pair) => pair.dexId === dexId)
       .sort((a, b) => b.liquidityUsd - a.liquidityUsd)[0];

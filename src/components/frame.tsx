@@ -13,11 +13,12 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
-import { catchUpTicks } from "@/lib/sniper/catchup";
+import { catchUpTicks, unreplayedMs } from "@/lib/sniper/catchup";
 import { sessionClock } from "@/lib/sniper/format";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
 import { hashPin } from "@/lib/sniper/wallet";
 import { useSniper } from "@/lib/sniper/store";
+import { useFeedHealth } from "@/lib/feeds/status";
 import { useDesk } from "@/lib/desk-store";
 import { useSupabaseGate } from "@/lib/supabase-gate";
 import { getSupabase } from "@/lib/supabase";
@@ -32,10 +33,12 @@ import { defaultSettings } from "@/lib/sniper/types";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 import { getDbHealth, getTradeLearningEvents } from "@/lib/trade-memory.functions";
 
-import { loadFeeds, loadFxSpot, loadPerpFunding } from "@/lib/market.functions";
+import { loadFeeds, loadFxSpot, loadPerpFunding, verifyInstrument } from "@/lib/market.functions";
 import { loadCorpEvents } from "@/lib/events.functions";
 import { listWhaleWatches, refreshWhaleMoves } from "@/lib/whales.functions";
 import { FX_PAIRS } from "@/lib/fx/twelvedata";
+
+const EMPTY_FX_STALE: ReadonlySet<string> = new Set<string>();
 
 const NAV = [
   { to: "/", label: "Desk", short: "Desk", icon: LayoutDashboard },
@@ -57,6 +60,10 @@ export function Frame({ children }: { children: ReactNode }) {
     let cancel = false;
     let timer = 0;
     let tickCount = 0;
+    // Last-known good marks: on total feed outage the desk still ticks these
+    // (display refresh + time stops) instead of freezing mid-risk.
+    let lastPrices: Record<string, number> = {};
+    let lastHadPrices = false;
     const loop = async () => {
       if (cancel) return;
       const sniperBook = useSniper.getState().book;
@@ -65,8 +72,16 @@ export function Frame({ children }: { children: ReactNode }) {
       tickCount++;
 
       if (desk.power) {
-        const due = catchUpTicks(Date.now(), sniperBook.lastWall, sniperBook.settings.scanSeconds);
+        const at = Date.now();
+        const due = catchUpTicks(at, sniperBook.lastWall, sniperBook.settings.scanSeconds);
         if (due > 0) useSniper.getState().runTicks(due);
+        const droppedMs = unreplayedMs(at, sniperBook.lastWall, sniperBook.settings.scanSeconds, due);
+        if (droppedMs > 60_000) {
+          const droppedMin = (droppedMs / 60000).toFixed(1);
+          useDesk.setState((prev) => ({
+            log: [`Catch-up replayed ${due} ticks; ${droppedMin} min of sim history discarded (cap hit).`, ...prev.log].slice(0, 50),
+          }));
+        }
       } else {
         useSniper.getState().runTicks(0);
       }
@@ -76,6 +91,22 @@ export function Frame({ children }: { children: ReactNode }) {
         try {
           const feeds = await loadFeeds({ data: {} });
           const combined = [...feeds.binance, ...feeds.dex];
+          if (!combined.length) {
+            // Total outage: keep ticking last-known marks so time stops still
+            // fire and the book never freezes mid-risk. Stops/targets hold
+            // automatically — markBook only exits stale positions on time.
+            if (lastHadPrices) {
+              const current = useDesk.getState();
+              if (current.power) current.tick({ ...lastPrices }, false);
+              else if (current.demo.positions.length > 0) current.tick({ ...lastPrices }, true);
+              useFeedHealth.getState().setRows([
+                { id: "binance", label: "Binance", state: "down", detail: "Outage — last-known marks" },
+                { id: "dex", label: "DEX", state: "down", detail: "Outage — last-known marks" },
+                { id: "coingecko", label: "CoinGecko", state: "down", detail: "Outage — last-known marks" },
+                { id: "coinmarketcap", label: "CoinMarketCap", state: "down", detail: "Outage — last-known marks" },
+              ]);
+            }
+          }
           if (combined.length) {
             const current = useDesk.getState();
             current.setTape(combined, feeds.note);
@@ -84,25 +115,37 @@ export function Frame({ children }: { children: ReactNode }) {
               prices[c.id] = c.priceUsd;
             }
             // FX spots mark open forex paper positions (turbo scans FX too).
+            // Pair ids resolve through the FX registry — never string slices.
+            const fxIdForPair = (pair: (typeof FX_PAIRS)[number]) => `fx:${pair.replace("/", "")}`;
             const fxSymbols = [...current.demo.positions, ...current.live.positions]
               .map((p) => p.tokenId)
               .filter((id) => id.startsWith("fx:"));
             const wantFx =
               fxSymbols.length > 0 ||
               (current.power && current.riskSettings.sizingProfile === "TURBO");
+            let fxStale: ReadonlySet<string> = EMPTY_FX_STALE;
             if (wantFx) {
               try {
-                const pairs = [...new Set(fxSymbols.map((id) => `${id.slice(3, 6)}/${id.slice(6)}`))];
+                const wanted = new Set<string>();
+                for (const id of fxSymbols) {
+                  const found = FX_PAIRS.find((p) => fxIdForPair(p) === id);
+                  if (found) wanted.add(found);
+                }
+                const pairs = [...wanted];
                 if (!pairs.length) pairs.push(...FX_PAIRS);
                 const fx = await loadFxSpot({ data: { pairs } });
                 Object.assign(prices, fx.prices);
                 current.setFxPrices(fx.prices);
+                // Daily refs are display-only: positions on them hold stale.
+                if (fx.daily.length) fxStale = new Set(fx.daily);
               } catch {
                 // FX marks are best-effort; crypto marks still flow.
               }
             }
-            if (current.power) current.tick(prices);
-            else if (current.demo.positions.length > 0) current.tick(prices, true);
+            if (current.power) current.tick(prices, false, fxStale);
+            else if (current.demo.positions.length > 0) current.tick(prices, true, fxStale);
+            lastPrices = prices;
+            lastHadPrices = true;
           }
         } catch {
           // Graceful fallback during momentary rate limit
@@ -119,6 +162,40 @@ export function Frame({ children }: { children: ReactNode }) {
             if (res.rows.length) useDesk.getState().setPerpFunding(res.rows);
           })
           .catch(() => undefined);
+      }
+
+      // Security sweep (~2 min): verify the top tape candidates so entries
+      // respect live honeypot/mint/freeze/tax evidence, not just scores.
+      if (tickCount % 60 === 0) {
+        void (async () => {
+          try {
+            const st = useDesk.getState();
+            const now = Date.now();
+            const fresh = (id: string) => {
+              const row = st.security[id];
+              return row && now - row.at < 600_000;
+            };
+            const targets = st.tape
+              .filter((c) => c.venue === "dex" && !fresh(c.id))
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 3);
+            for (const c of targets) {
+              const res = await verifyInstrument({ data: { chain: c.chain, address: c.address } });
+              const sec = res.security;
+              const reject =
+                sec !== null &&
+                (sec.honeypot === true ||
+                  sec.ownerCanMint === true ||
+                  sec.ownerCanFreeze === true ||
+                  sec.lpLocked === false ||
+                  (sec.buyTax ?? 0) > 0.15 ||
+                  (sec.sellTax ?? 0) > 0.15);
+              useDesk.getState().setSecurity(c.id, sec === null ? "unknown" : reject ? "reject" : "clean");
+            }
+          } catch {
+            // Verification is best-effort; unscored names stay gated by score.
+          }
+        })();
       }
 
       // Corporate-event radar (~5 min): HALT symbols veto new bot entries.

@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { binanceExecutionStatus } from "./feeds/execution";
 import type { FeedHealth } from "./feeds/status";
 import { scoreCandidate, type Candidate } from "./paper";
+import { createCache, fetchCached } from "./cache";
 import { fetchGeckoCandles, type DexTimeframe } from "./charts/geckoterminal";
 import { fetchJupiterTicks, type JupiterTick } from "./charts/jupiter";
 import { FX_PAIRS, fetchFrankfurterSpot, fetchTwelveCandles, fxIntervalFor } from "./fx/twelvedata";
@@ -49,6 +50,28 @@ function fromPair(p: Pair): Candidate | null {
   });
 }
 
+async function pullProfile(
+  chainId: string,
+  tokenAddress: string,
+  ms = 4000,
+): Promise<Pair[]> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const nested = await fetch(
+      `https://api.dexscreener.com/token-pairs/v1/${encodeURIComponent(chainId)}/${encodeURIComponent(tokenAddress)}`,
+      { headers: { Accept: "application/json" }, signal: ctrl.signal },
+    );
+    if (!nested.ok) return [];
+    const data = (await nested.json()) as { pairs?: Pair[] } | Pair[];
+    return Array.isArray(data) ? data : (data.pairs ?? []);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function pull(url: string): Promise<Pair[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 6000);
@@ -59,22 +82,16 @@ async function pull(url: string): Promise<Pair[]> {
     });
     if (!res.ok) throw new Error(`Market feed HTTP ${res.status}`);
     const body = (await res.json()) as { pairs?: Pair[] } | Pair[];
-    if (Array.isArray(body)) {
-      const pairs: Pair[] = [];
-      for (const profile of body.slice(0, 8) as { chainId?: string; tokenAddress?: string }[]) {
-        if (!profile.chainId || !profile.tokenAddress) continue;
-        const nested = await fetch(
-          `https://api.dexscreener.com/token-pairs/v1/${encodeURIComponent(profile.chainId)}/${encodeURIComponent(profile.tokenAddress)}`,
-          { headers: { Accept: "application/json" }, signal: ctrl.signal },
-        );
-        if (!nested.ok) continue;
-        const data = (await nested.json()) as { pairs?: Pair[] } | Pair[];
-        const list = Array.isArray(data) ? data : (data.pairs ?? []);
-        pairs.push(...list);
-      }
-      return pairs;
-    }
-    return body.pairs ?? [];
+    if (!Array.isArray(body)) return body.pairs ?? [];
+    // Token-profile listings fan out in parallel with per-request budgets so
+    // one slow pair cannot time-out the whole batch (shared 6s timer above).
+    const profiles = body.slice(0, 8) as { chainId?: string; tokenAddress?: string }[];
+    const settled = await Promise.all(
+      profiles
+        .filter((p) => p.chainId && p.tokenAddress)
+        .map((p) => pullProfile(p.chainId as string, p.tokenAddress as string)),
+    );
+    return settled.flat();
   } finally {
     clearTimeout(timer);
   }
@@ -99,18 +116,21 @@ function binanceRows(rows: { symbol?: string; lastPrice?: string; quoteVolume?: 
   const out: Candidate[] = [];
   for (const row of rows) {
     const symbol = (row.symbol ?? "").replace("USDT", "");
+    // NOTE: quoteVolume is flow, not pool depth — depth stays unknown rather
+    // than posing flow as liquidity (that corrupted volatility and sizing).
     const c = scoreCandidate({
       symbol,
       name: `${symbol} / USDT`,
       chain: "binance",
       address: row.symbol ?? symbol,
       priceUsd: num(row.lastPrice),
-      liquidityUsd: num(row.quoteVolume),
+      liquidityUsd: null,
       volume24h: num(row.quoteVolume),
       change24h: num(row.priceChangePercent),
       pairCreatedAt: null,
       url: row.symbol ? `https://www.binance.com/en/trade/${row.symbol}` : null,
       venue: "binance",
+      liquidityUnknown: true,
     });
     if (c) out.push(c);
   }
@@ -136,7 +156,7 @@ type GeckoCoin = {
   price_change_percentage_24h?: number;
 };
 
-const cache = new Map<string, { at: number; pack: FeedPack }>();
+const feedCache = createCache<FeedPack>(100);
 const CACHE_MS = 12_000;
 
 async function getJson<T>(url: string, headers?: Record<string, string>, ms = 5000): Promise<T> {
@@ -212,10 +232,8 @@ export const loadFeeds = createServerFn({ method: "POST" })
   }))
   .handler(async ({ data }): Promise<FeedPack> => {
     const key = data.query || "*";
-    const hit = cache.get(key);
-    if (hit && Date.now() - hit.at < CACHE_MS) return hit.pack;
-
-    const symbols = encodeURIComponent(JSON.stringify([...BINANCE]));
+    return fetchCached(feedCache, key, CACHE_MS, async () => {
+      const symbols = encodeURIComponent(JSON.stringify([...BINANCE]));
     const dexUrl = data.query
       ? `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(data.query)}`
       : "https://api.dexscreener.com/token-profiles/latest/v1";
@@ -253,29 +271,21 @@ export const loadFeeds = createServerFn({ method: "POST" })
     const reference = [...gecko, ...cmc.rows].slice(0, 16);
     const executionNote = binanceExecutionStatus().note;
     const note = health.map((row) => `${row.label} ${row.state}`).join(" · ");
-    const pack: FeedPack = { binance, dex, reference, health, note, executionNote };
-    cache.set(key, { at: Date.now(), pack });
-    return pack;
+      return { binance, dex, reference, health, note, executionNote };
+    });
   });
 
 const INTERVALS = new Set(["1m", "5m", "15m", "1h"]);
-const candleCache = new Map<string, { at: number; result: { candles: Candle[]; note: string } }>();
+const candleCache = createCache<{ candles: Candle[]; note: string }>(200);
 const CANDLE_CACHE_MS = 12_000;
 
-export const loadKlines = createServerFn({ method: "POST" })
-  .validator((input: { symbol?: string; interval?: string }) => {
-    const symbol = String(input?.symbol ?? "BTCUSDT").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
-    const interval = INTERVALS.has(String(input?.interval)) ? String(input?.interval) : "5m";
-    return { symbol: symbol || "BTCUSDT", interval };
-  })
-  .handler(async ({ data }): Promise<{ candles: Candle[]; note: string }> => {
-    const cacheKey = `${data.symbol}:${data.interval}`;
-    const cached = candleCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < CANDLE_CACHE_MS) return cached.result;
-
+async function loadKlinesBody(
+  symbol: string,
+  interval: string,
+): Promise<{ candles: Candle[]; note: string }> {
     try {
       const rows = await getJson<number[][]>(
-        `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(data.symbol)}&interval=${data.interval}&limit=48`,
+        `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=48`,
       );
       const candles: Candle[] = rows
         .map((row) => ({
@@ -296,15 +306,13 @@ export const loadKlines = createServerFn({ method: "POST" })
             bar.high >= bar.low,
         );
       if (!candles.length) throw new Error("Binance returned no usable candles");
-      const result = { candles, note: `Binance ${data.symbol} ${data.interval}` };
-      candleCache.set(cacheKey, { at: Date.now(), result });
-      return result;
+      return { candles, note: `Binance ${symbol} ${interval}` };
     } catch (binanceError) {
       const binanceMessage =
         binanceError instanceof Error ? binanceError.message : "Klines unavailable";
-      const pair = krakenPairFor(data.symbol);
-      const interval = krakenIntervalFor(data.interval);
-      if (!pair || interval === null) {
+      const pair = krakenPairFor(symbol);
+      const kInterval = krakenIntervalFor(interval);
+      if (!pair || kInterval === null) {
         return {
           candles: [],
           note: `Binance unavailable (${binanceMessage}); no alternate feed for this pair`,
@@ -313,16 +321,14 @@ export const loadKlines = createServerFn({ method: "POST" })
 
       try {
         const payload = await getJson<{ error?: unknown; result?: Record<string, unknown> }>(
-          `https://api.kraken.com/0/public/OHLC?pair=${encodeURIComponent(pair)}&interval=${interval}`,
+          `https://api.kraken.com/0/public/OHLC?pair=${encodeURIComponent(pair)}&interval=${kInterval}`,
         );
         const candles = parseKrakenCandles(payload);
         if (!candles.length) throw new Error(`Kraken returned no usable candles for ${pair}`);
-        const result = {
+        return {
           candles,
-          note: `Kraken ${pair} ${data.interval} · Binance unavailable (${binanceMessage})`,
+          note: `Kraken ${pair} ${interval} · Binance unavailable (${binanceMessage})`,
         };
-        candleCache.set(cacheKey, { at: Date.now(), result });
-        return result;
       } catch (krakenError) {
         const krakenMessage =
           krakenError instanceof Error ? krakenError.message : "Klines unavailable";
@@ -332,6 +338,19 @@ export const loadKlines = createServerFn({ method: "POST" })
         };
       }
     }
+}
+
+export const loadKlines = createServerFn({ method: "POST" })
+  .validator((input: { symbol?: string; interval?: string }) => {
+    const symbol = String(input?.symbol ?? "BTCUSDT").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
+    const interval = INTERVALS.has(String(input?.interval)) ? String(input?.interval) : "5m";
+    return { symbol: symbol || "BTCUSDT", interval };
+  })
+  .handler(async ({ data }): Promise<{ candles: Candle[]; note: string }> => {
+    const cacheKey = `${data.symbol}:${data.interval}`;
+    return fetchCached(candleCache, cacheKey, CANDLE_CACHE_MS, () =>
+      loadKlinesBody(data.symbol, data.interval),
+    );
   });
 
 export const scanMarket = createServerFn({ method: "POST" })
@@ -422,7 +441,7 @@ export const searchInstruments = createServerFn({ method: "POST" })
   });
 
 const DEX_INTERVALS = new Set(["1m", "5m", "15m", "1h"]);
-const dexCandleCache = new Map<string, { at: number; result: { candles: Candle[]; note: string } }>();
+const dexCandleCache = createCache<{ candles: Candle[]; note: string }>(200);
 const DEX_CANDLE_CACHE_MS = 20_000;
 
 /** DEX candles for any Solana pool via GeckoTerminal (free, no key). */
@@ -437,21 +456,19 @@ export const loadDexCandles = createServerFn({ method: "POST" })
       return { candles: [], note: "No pool selected — pick a token to chart its deepest pool" };
     }
     const cacheKey = `${data.poolAddress}:${data.interval}`;
-    const cached = dexCandleCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < DEX_CANDLE_CACHE_MS) return cached.result;
-    try {
-      const candles = await fetchGeckoCandles(data.poolAddress, data.interval);
-      if (!candles.length) throw new Error("GeckoTerminal returned no usable candles for this pool");
-      const result = { candles, note: `GeckoTerminal ${data.poolAddress.slice(0, 6)}… ${data.interval}` };
-      dexCandleCache.set(cacheKey, { at: Date.now(), result });
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "DEX candles unavailable";
-      return { candles: [], note: message };
-    }
+    return fetchCached(dexCandleCache, cacheKey, DEX_CANDLE_CACHE_MS, async () => {
+      try {
+        const candles = await fetchGeckoCandles(data.poolAddress, data.interval);
+        if (!candles.length) throw new Error("GeckoTerminal returned no usable candles for this pool");
+        return { candles, note: `GeckoTerminal ${data.poolAddress.slice(0, 6)}… ${data.interval}` };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "DEX candles unavailable";
+        return { candles: [], note: message };
+      }
+    });
   });
 
-const tickCache = new Map<string, { at: number; result: { ticks: JupiterTick[]; note: string } }>();
+const tickCache = createCache<{ ticks: JupiterTick[]; note: string }>(200);
 const TICK_CACHE_MS = 5_000;
 
 /** Live batch price ticks for Solana mints via Jupiter Lite (free, no key). */
@@ -466,23 +483,21 @@ export const loadTokenTicks = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<{ ticks: JupiterTick[]; note: string }> => {
     if (!data.mints.length) return { ticks: [], note: "No tracked mints" };
     const cacheKey = [...data.mints].sort().join(",");
-    const cached = tickCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < TICK_CACHE_MS) return cached.result;
-    try {
-      const ticks = await fetchJupiterTicks(data.mints);
-      const result = {
-        ticks,
-        note: ticks.length ? `Jupiter live · ${ticks.length}/${data.mints.length} mints` : "Jupiter returned no prices",
-      };
-      tickCache.set(cacheKey, { at: Date.now(), result });
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Jupiter ticks unavailable";
-      return { ticks: [], note: message };
-    }
+    return fetchCached(tickCache, cacheKey, TICK_CACHE_MS, async () => {
+      try {
+        const ticks = await fetchJupiterTicks(data.mints);
+        return {
+          ticks,
+          note: ticks.length ? `Jupiter live · ${ticks.length}/${data.mints.length} mints` : "Jupiter returned no prices",
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Jupiter ticks unavailable";
+        return { ticks: [], note: message };
+      }
+    });
   });
 
-const poolCache = new Map<string, { at: number; result: ChartPool | null }>();
+const poolCache = createCache<{ pool: ChartPool | null; note: string }>(200);
 const POOL_CACHE_MS = 5 * 60_000;
 
 export type ChartPool = {
@@ -503,35 +518,32 @@ export const resolveChartPool = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<{ pool: ChartPool | null; note: string }> => {
     const want = data.symbol;
     if (!want) return { pool: null, note: "No symbol" };
-    const cached = poolCache.get(want);
-    if (cached && Date.now() - cached.at < POOL_CACHE_MS) {
-      return { pool: cached.result, note: cached.result ? `Cached ${cached.result.label}` : `No pool found for ${want}` };
-    }
-    try {
-      const metrics = await dexSearch(want);
-      const match = metrics.find(
-        (m) => m.symbol.split(/[/:_\-]/)[0] === want && m.pairAddress && m.chain !== "binance" && m.chain !== "coingecko" && m.chain !== "coinmarketcap",
-      );
-      const pool: ChartPool | null = match?.pairAddress
-        ? {
-            poolAddress: match.pairAddress,
-            baseSymbol: match.symbol.split(/[/:_\-]/)[0],
-            mint: match.address,
-            chain: match.chain,
-            liquidityUsd: match.liquidityUsd,
-            label: `${match.symbol} · ${match.chain}`,
-          }
-        : null;
-      poolCache.set(want, { at: Date.now(), result: pool });
-      return { pool, note: pool ? `Deepest ${pool.label} pool` : `No DEX pool found for ${want}` };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Pool lookup failed";
-      return { pool: null, note: message };
-    }
+    return fetchCached(poolCache, want, POOL_CACHE_MS, async () => {
+      try {
+        const metrics = await dexSearch(want);
+        const match = metrics.find(
+          (m) => m.symbol.split(/[/:_\-]/)[0] === want && m.pairAddress && m.chain !== "binance" && m.chain !== "coingecko" && m.chain !== "coinmarketcap",
+        );
+        const pool: ChartPool | null = match?.pairAddress
+          ? {
+              poolAddress: match.pairAddress,
+              baseSymbol: match.symbol.split(/[/:_\-]/)[0],
+              mint: match.address,
+              chain: match.chain,
+              liquidityUsd: match.liquidityUsd,
+              label: `${match.symbol} · ${match.chain}`,
+            }
+          : null;
+        return { pool, note: pool ? `Deepest ${pool.label} pool` : `No DEX pool found for ${want}` };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Pool lookup failed";
+        return { pool: null, note: message };
+      }
+    });
   });
 
 const FX_INTERVALS = new Set(["1m", "5m", "15m", "1h"]);
-const fxCandleCache = new Map<string, { at: number; result: { candles: Candle[]; note: string } }>();
+const fxCandleCache = createCache<{ candles: Candle[]; note: string }>(100);
 const FX_CANDLE_CACHE_MS = 60_000;
 
 /** FX intraday candles via TwelveData (server key). Paper trading only. */
@@ -548,25 +560,23 @@ export const loadFxCandles = createServerFn({ method: "POST" })
       return { candles: [], note: "FX candles need TWELVEDATA_API_KEY on the host (free tier)" };
     }
     const cacheKey = `${data.pair}:${data.interval}`;
-    const cached = fxCandleCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < FX_CANDLE_CACHE_MS) return cached.result;
-    try {
-      const candles = await fetchTwelveCandles(
-        data.pair,
-        fxIntervalFor(data.interval as "1m" | "5m" | "15m" | "1h"),
-        apiKey,
-      );
-      if (!candles.length) throw new Error("TwelveData returned no usable candles");
-      const result = { candles, note: `TwelveData ${data.pair} ${data.interval}` };
-      fxCandleCache.set(cacheKey, { at: Date.now(), result });
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "FX candles unavailable";
-      return { candles: [], note: message };
-    }
+    return fetchCached(fxCandleCache, cacheKey, FX_CANDLE_CACHE_MS, async () => {
+      try {
+        const candles = await fetchTwelveCandles(
+          data.pair,
+          fxIntervalFor(data.interval as "1m" | "5m" | "15m" | "1h"),
+          apiKey,
+        );
+        if (!candles.length) throw new Error("TwelveData returned no usable candles");
+        return { candles, note: `TwelveData ${data.pair} ${data.interval}` };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "FX candles unavailable";
+        return { candles: [], note: message };
+      }
+    });
   });
 
-const fxSpotCache = new Map<string, { at: number; prices: Record<string, number> }>();
+const fxSpotCache = createCache<{ prices: Record<string, number>; live: string[]; daily: string[]; note: string }>(100);
 const FX_SPOT_CACHE_MS = 30_000;
 
 /**
@@ -581,14 +591,13 @@ export const loadFxSpot = createServerFn({ method: "POST" })
       .slice(0, 8);
     return { pairs };
   })
-  .handler(async ({ data }): Promise<{ prices: Record<string, number>; note: string }> => {
-    if (!data.pairs.length) return { prices: {}, note: "No FX pairs requested" };
+  .handler(async ({ data }): Promise<{ prices: Record<string, number>; live: string[]; daily: string[]; note: string }> => {
+    if (!data.pairs.length) return { prices: {}, live: [], daily: [], note: "No FX pairs requested" };
     const cacheKey = [...data.pairs].sort().join(",");
-    const cached = fxSpotCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < FX_SPOT_CACHE_MS) {
-      return { prices: cached.prices, note: "FX spots (cached)" };
-    }
-    const prices: Record<string, number> = {};
+    return fetchCached(fxSpotCache, cacheKey, FX_SPOT_CACHE_MS, async () => {
+      const prices: Record<string, number> = {};
+      const live: string[] = [];
+      const daily: string[] = [];
     const apiKey = process.env.TWELVEDATA_API_KEY?.trim();
     if (apiKey) {
       const settled = await Promise.allSettled(
@@ -596,10 +605,16 @@ export const loadFxSpot = createServerFn({ method: "POST" })
       );
       settled.forEach((r, i) => {
         const last = r.status === "fulfilled" ? r.value.at(-1) : undefined;
-        if (last) prices[`fx:${data.pairs[i].replace("/", "")}`] = last.close;
+        const key = `fx:${data.pairs[i].replace("/", "")}`;
+        if (last) {
+          prices[key] = last.close;
+          live.push(key);
+        }
       });
     }
     // Frankfurter fills whatever TwelveData missed (free, keyless, daily ref).
+    // Daily refs ride the shared prices map but are flagged, so exits never
+    // fire on a 24h-old print. XAU has no fiat quote: honestly no mark.
     await Promise.all(
       data.pairs.map(async (pair) => {
         const key = `fx:${pair.replace("/", "")}`;
@@ -608,6 +623,7 @@ export const loadFxSpot = createServerFn({ method: "POST" })
         const direct = await fetchFrankfurterSpot(base, quote);
         if (direct !== null && direct > 0) {
           prices[key] = direct;
+          daily.push(key);
           return;
         }
         // Cross via USD when the direct quote is unavailable.
@@ -615,11 +631,19 @@ export const loadFxSpot = createServerFn({ method: "POST" })
           fetchFrankfurterSpot(base, "USD"),
           fetchFrankfurterSpot(quote, "USD"),
         ]);
-        if (baseUsd !== null && quoteUsd !== null && quoteUsd > 0) prices[key] = baseUsd / quoteUsd;
+        if (baseUsd !== null && quoteUsd !== null && quoteUsd > 0) {
+          prices[key] = baseUsd / quoteUsd;
+          daily.push(key);
+        }
       }),
     );
-    fxSpotCache.set(cacheKey, { at: Date.now(), prices });
-    return { prices, note: `FX spots · ${Object.keys(prices).length}/${data.pairs.length} pairs` };
+    return {
+      prices,
+      live,
+      daily,
+      note: `FX spots · ${live.length} live, ${daily.length} daily ref, ${Object.keys(prices).length}/${data.pairs.length} pairs`,
+    };
+    });
   });
 
 let perpFundingCache: { at: number; rows: PerpFunding[] } | null = null;

@@ -31,6 +31,15 @@ describe("avenue anchors", () => {
     assert.ok(!anchors.has("ipo-base-fairlaunch"));
   });
 
+  it("caps playbooks below auto-entry and hides unfunded perps without live data", () => {
+    const cold = scanAllAvenues(emptyBook());
+    for (const a of cold) {
+      assert.ok(a.confidenceScore < 80, `${a.id} must not auto-fire without live data`);
+      assert.equal(a.disciplineApproved, false);
+      assert.equal(a.liveData, false);
+    }
+  });
+
   it("hydrates perp quotes with live funding and flags them", () => {
     const avenues = scanAllAvenues(emptyBook());
     const before = avenues.find((a) => a.id === "perp-sol-funding");
@@ -41,9 +50,18 @@ describe("avenue anchors", () => {
     assert.equal(sol?.priceA, 190.5);
     assert.equal(sol?.fundingRate8h, 0.00008);
     assert.equal(sol?.liveData, true);
-    assert.equal(before?.liveData, undefined);
-    // Non-perps and unmatched coins are untouched.
+    assert.equal(before?.liveData, false);
+    // Non-perps stay playbook-flagged.
     const arb = hydrated.find((a) => a.id === "arb-bonk-sol");
-    assert.equal(arb?.liveData, undefined);
+    assert.equal(arb?.liveData, false);
+  });
+
+  it("auto-entry reads only live-validated avenues", () => {
+    const hot = scanAllAvenues(emptyBook(), undefined, Date.now(), {
+      funding: [{ coin: "SOL", markPx: 190.5, funding1h: 0.00001, openInterest: 1000 }],
+    });
+    const auto = hot.filter((a) => a.disciplineApproved && a.confidenceScore >= 80);
+    assert.ok(auto.length > 0);
+    assert.ok(auto.every((a) => a.liveData === true));
   });
 });

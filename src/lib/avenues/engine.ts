@@ -56,12 +56,27 @@ export const defaultDisciplineRules: DisciplineRules = {
 /**
  * Generates and evaluates the current universe of money-making opportunities across all avenues.
  */
+export type AvenueLive = {
+  /** Live Hyperliquid funding rows; absence means playbook mode. */
+  funding?: PerpFunding[];
+};
+
+/**
+ * Generates the opportunity universe. PERPS hydrate from live funding when
+ * provided; every other category is an unverifiable playbook — capped below
+ * the auto-entry threshold and flagged, so the bot can never auto-fire on
+ * numbers no feed confirmed.
+ */
 export function scanAllAvenues(
   book: Book,
   rules: DisciplineRules = defaultDisciplineRules,
   now: number = Date.now(),
+  live: AvenueLive = {},
 ): AvenueOpportunity[] {
   const currentEquity = equity(book);
+  const fundingByCoin = new Map(
+    (live.funding ?? []).map((r) => [normCoin(r.coin), r]),
+  );
 
   // 1. Perpetuals & Funding Rate Opportunities
   const perpSetups: AvenueOpportunity[] = [
@@ -297,9 +312,44 @@ export function scanAllAvenues(
     },
   ];
 
-  // Combine and sort by confidence score
+  // Combine, validate against live data, then sort by confidence score
   const all = [...perpSetups, ...arbSetups, ...earlyIpoSetups, ...yieldSetups];
-  return all.sort((a, b) => b.confidenceScore - a.confidenceScore);
+  const validated = all.map((a) => {
+    if (a.category === "PERPS") {
+      const row = fundingByCoin.get(normCoin(a.symbol.split("-")[0]));
+      if (row) {
+        const rate8h = funding8hRate(row.funding1h);
+        const apr = fundingAprPct(row.funding1h);
+        const aprAbs = Math.abs(apr ?? 0);
+        return {
+          ...a,
+          priceA: row.markPx ?? a.priceA,
+          fundingRate8h: rate8h ?? a.fundingRate8h,
+          fundingApr: apr ?? a.fundingApr,
+          confidenceScore: Math.round(Math.min(96, 70 + Math.min(26, aprAbs * 1.2))),
+          liveData: true,
+        };
+      }
+      return {
+        ...a,
+        confidenceScore: Math.min(a.confidenceScore, 79),
+        disciplineApproved: false,
+        liveData: false,
+        disciplineNotes: [...a.disciplineNotes, "No live funding — hidden from auto-entry until Hyperliquid responds."],
+      };
+    }
+    // ARBITRAGE / EARLY_IPO / YIELD_BASIS: spreads, locks, and yields cannot
+    // be verified live by any feed in this architecture. They stay visible
+    // for manual review but can never auto-fire.
+    return {
+      ...a,
+      confidenceScore: Math.min(a.confidenceScore, 79),
+      disciplineApproved: false,
+      liveData: false,
+      disciplineNotes: [...a.disciplineNotes, "Playbook values — unverifiable live, manual entry only."],
+    };
+  });
+  return validated.sort((a, b) => b.confidenceScore - a.confidenceScore);
 }
 
 function tapeBaseOf(symbol: string): string {

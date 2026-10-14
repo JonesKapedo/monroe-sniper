@@ -20,7 +20,32 @@ export interface NairobiTimeInfo {
 }
 
 /**
- * Returns a Date object adjusted to Nairobi EAT wall-clock time
+ * EAT wall-clock fields for a timestamp, read straight from formatToParts.
+ * Never round-trips through `new Date(localeString)` — that parses in the
+ * HOST timezone and shifts every field off-host.
+ */
+export function eatDayParts(timestamp: number): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .formatToParts(new Date(timestamp))
+    .reduce<Record<string, string>>((acc, p) => {
+      acc[p.type] = p.value;
+      return acc;
+    }, {});
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+  };
+}
+
+/**
+ * Returns EAT wall-clock fields as a Date-like (display only).
+ * @deprecated Prefer eatDayParts() — this reparses in host TZ off-host.
  */
 export function getNairobiDate(timestamp: number = Date.now()): Date {
   // Using Intl timezone conversion for accurate wall-clock representation
@@ -38,8 +63,6 @@ export function formatNairobiTime(
   startTimestamp?: number,
   currentTimestamp: number = Date.now(),
 ): NairobiTimeInfo {
-  const nairobiNow = getNairobiDate(currentTimestamp);
-  
   // Format date parts using Africa/Nairobi
   const formatter = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Africa/Nairobi",
@@ -68,27 +91,24 @@ export function formatNairobiTime(
   const timeString = `${hour}:${minute}:${second} EAT`;
 
   // Calculate day counter starting with today as Day 1
+  // (EAT calendar days via formatToParts — host-TZ independent).
   let dayNumber = 1;
   let activeSinceDate = dateString;
 
   if (startTimestamp && startTimestamp <= currentTimestamp) {
-    const startDate = getNairobiDate(startTimestamp);
-    const startYear = startDate.getFullYear();
-    const startMonth = startDate.getMonth();
-    const startDay = startDate.getDate();
+    const start = eatDayParts(startTimestamp);
+    const current = eatDayParts(currentTimestamp);
 
-    const startUtcMidnight = Date.UTC(startYear, startMonth, startDay);
-    const currentUtcMidnight = Date.UTC(
-      nairobiNow.getFullYear(),
-      nairobiNow.getMonth(),
-      nairobiNow.getDate(),
-    );
+    const startEATMidnight = Date.UTC(start.year, start.month - 1, start.day);
+    // EAT midnight in UTC is 21:00Z the prior day; day differences are exact
+    // either way since both sides share the same constant shift.
+    const currentEATMidnight = Date.UTC(current.year, current.month - 1, current.day);
 
-    const diffDays = Math.floor((currentUtcMidnight - startUtcMidnight) / (24 * 60 * 60 * 1000));
+    const diffDays = Math.floor((currentEATMidnight - startEATMidnight) / (24 * 60 * 60 * 1000));
     dayNumber = Math.max(1, diffDays + 1);
 
     const pad = (n: number) => String(n).padStart(2, "0");
-    activeSinceDate = `${startYear}-${pad(startMonth + 1)}-${pad(startDay)}`;
+    activeSinceDate = `${start.year}-${pad(start.month)}-${pad(start.day)}`;
   }
 
   const dayLabel = `Day ${dayNumber} Active`;

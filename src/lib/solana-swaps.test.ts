@@ -111,14 +111,14 @@ test("selects only the most liquid direct SOL/USDC Raydium and PumpSwap pools", 
     {
       ...pair,
       dexId: "orca",
-      pairAddress: "unsupported",
+      pairAddress: "orca-pool",
       liquidity: { usd: 1000 },
       priceUsd: "200",
     },
   ]);
   assert.deepEqual(
     pools.map((pool) => pool.pairAddress),
-    ["bigger", "pump"],
+    ["bigger", "pump", "orca-pool"],
   );
   assert.equal(pools[1]?.baseToken.address, SOL_MINT);
   assert.equal(pools[1]?.quoteToken.address, USDC_MINT);

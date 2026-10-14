@@ -26,8 +26,8 @@ function finitePositive(value: unknown): number | null {
 
 /**
  * Parse a GeckoTerminal OHLCV payload. Rows are
- * [unixSeconds, open, high, low, close, volume]; high/low are normalized so a
- * misordered row can never invert the chart.
+ * [unixSeconds, open, high, low, close, volume]. Inverted rows (high < low)
+ * are rejected like every other feed — never silently normalized.
  */
 export function parseGeckoOhlcv(payload: unknown): Candle[] {
   const root = payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
@@ -44,13 +44,25 @@ export function parseGeckoOhlcv(payload: unknown): Candle[] {
     const l = finitePositive(low);
     const c = finitePositive(close);
     if (time === null || o === null || h === null || l === null || c === null) continue;
-    candles.push({ time, open: o, high: Math.max(h, l, o, c), low: Math.min(h, l, o, c), close: c });
+    if (h < l) continue;
+    candles.push({ time, open: o, high: h, low: l, close: c });
   }
   return candles.sort((a, b) => a.time - b.time).slice(-200);
 }
 
 export function candleDurationMs(timeframe: DexTimeframe): number {
   return DURATION_MS[timeframe];
+}
+
+/**
+ * True when the newest candle is older than two full buckets — the chart is
+ * showing history, not the market. Callers badge this instead of implying
+ * live coverage.
+ */
+export function detectChartGap(candles: Candle[], nowMs: number, durationMs: number): boolean {
+  if (!candles.length || !(durationMs > 0)) return false;
+  const last = candles[candles.length - 1];
+  return nowMs - last.time > durationMs * 2;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { geckoOhlcvUrl, mergeTickIntoCandles, parseGeckoOhlcv } from "./geckoterminal.ts";
+import { detectChartGap, geckoOhlcvUrl, mergeTickIntoCandles, parseGeckoOhlcv } from "./geckoterminal.ts";
 import { parseJupiterPrices } from "./jupiter.ts";
 
 describe("geckoterminal", () => {
@@ -27,12 +27,18 @@ describe("geckoterminal", () => {
     assert.equal(candles[1].close, 106.82);
   });
 
-  it("normalizes inverted high/low instead of inverting the chart", () => {
+  it("rejects inverted high/low rows like every other feed", () => {
     const candles = parseGeckoOhlcv({
       data: { attributes: { ohlcv_list: [[1791977100, 100, 90, 110, 105, 10]] } },
     });
-    assert.equal(candles[0].high, 110);
-    assert.equal(candles[0].low, 90);
+    assert.equal(candles.length, 0);
+  });
+
+  it("flags charts older than two buckets as gapped", () => {
+    const candles = [{ time: 600_000, open: 1, high: 1, low: 1, close: 1 }];
+    assert.equal(detectChartGap(candles, 600_000 + 60_000 * 2 + 1, 60_000), true);
+    assert.equal(detectChartGap(candles, 600_000 + 60_000, 60_000), false);
+    assert.equal(detectChartGap([], Date.now(), 60_000), false);
   });
 
   it("drops malformed rows and non-object payloads", () => {

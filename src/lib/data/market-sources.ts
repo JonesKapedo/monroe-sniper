@@ -26,8 +26,10 @@ export type ProviderStatus = {
 export type ScanResult = { opportunities: OpportunitySignal[]; providers: ProviderStatus[]; scannedAt: number; query: string };
 
 const TTL = 30_000;
+const NEGATIVE_TTL = 20_000;
 const cache = new Map<string, { expires: number; value: unknown }>();
 const pending = new Map<string, Promise<unknown>>();
+const negative = new Map<string, { expires: number; message: string }>();
 const num = (v: unknown): number | null => {
   if (v === null || v === undefined || v === "") return null;
   const n = typeof v === "number" ? v : Number(v);
@@ -40,6 +42,9 @@ const clamp = (n: number, min = 0, max = 100) => Math.max(min, Math.min(max, Num
 async function json<T>(url: string, ttl = TTL): Promise<T> {
   const old = cache.get(url);
   if (old && old.expires > Date.now()) return old.value as T;
+  const neg = negative.get(url);
+  if (neg && neg.expires > Date.now()) throw new Error(neg.message);
+  if (neg) negative.delete(url);
   const existing = pending.get(url);
   if (existing) return existing as Promise<T>;
   const task = (async () => {
@@ -59,6 +64,10 @@ async function json<T>(url: string, ttl = TTL): Promise<T> {
         return value;
       } catch (error) { last = error; if (!attempt) await new Promise(r => setTimeout(r, 200)); }
       finally { clearTimeout(timer); }
+    }
+    if (last instanceof Error && /(429|5\d\d|abort|timeout|rate limit)/i.test(last.message)) {
+      negative.set(url, { expires: Date.now() + NEGATIVE_TTL, message: last.message });
+      while (negative.size > 120) { const first = negative.keys().next().value; if (first === undefined) break; negative.delete(first); }
     }
     throw last instanceof Error ? last : new Error("Market-data request failed");
   })();

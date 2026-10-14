@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useFeedHealth } from "@/lib/feeds/status";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
-import { scanAllAvenues, hydrateAvenuesWithFunding } from "@/lib/avenues/engine";
+import { scanAllAvenues } from "@/lib/avenues/engine";
 import type { AvenueCategory, AvenueOpportunity } from "@/lib/avenues/types";
 import {
   equity,
@@ -103,7 +103,7 @@ export function Desk() {
   const wins = book.trades.filter((t) => t.pnl > 0).length;
   const hitRate = book.trades.length > 0 ? (wins / book.trades.length) * 100 : 0;
   const perpFunding = useDesk((s) => s.perpFunding);
-  const avenues = hydrateAvenuesWithFunding(scanAllAvenues(book, disciplineRules, nowTs), perpFunding);
+  const avenues = scanAllAvenues(book, disciplineRules, nowTs, { funding: perpFunding });
 
   const scan = useCallback(async (q: string) => {
     setBusy(true);

@@ -34,7 +34,6 @@ import {
   defaultDisciplineRules,
   avenueAnchorPrice,
   avenueAnchors,
-  hydrateAvenuesWithFunding,
   scanAllAvenues,
   calculatePaperReadiness,
 } from "./avenues/engine";
@@ -138,6 +137,9 @@ type DeskState = {
   setEventHalts: (symbols: string[]) => void;
   /** Whale signals already acted on (no double-copying). */
   actedSigs: string[];
+  /** Verified security verdicts by candidate id (10-min TTL, refreshed by sweep). */
+  security: Record<string, { verdict: "clean" | "reject" | "unknown"; at: number }>;
+  setSecurity: (id: string, verdict: "clean" | "reject" | "unknown") => void;
   whaleEnter: (c: Candidate, sig: string, walletLabel: string) => { ok: boolean; note: string };
   // Turbo mode: 27-minute aggressive runs with a 10-minute cooldown.
   turboPhase: TurboPhase;
@@ -156,7 +158,7 @@ type DeskState = {
   setPower: (on: boolean) => void;
   setMode: (mode: Mode) => void;
   setTape: (rows: Candidate[], note: string) => void;
-  tick: (prices: Record<string, number>, monitorOnly?: boolean) => void;
+  tick: (prices: Record<string, number>, monitorOnly?: boolean, staleIds?: ReadonlySet<string>) => void;
   autoStep: () => void;
   manualEnter: (c: Candidate) => { ok: boolean; note: string; verdict?: SizingVerdict };
   flatten: (id: string) => void;
@@ -246,6 +248,16 @@ function telegramAlert(text: string): void {
   }
 }
 
+/** Cached security verdict with a 10-minute TTL; missing/stale reads unknown. */
+export function securityVerdictOf(
+  security: Record<string, { verdict: "clean" | "reject" | "unknown"; at: number }>,
+  id: string,
+): "clean" | "reject" | "unknown" {
+  const row = security[id];
+  if (!row || Date.now() - row.at > 600_000) return "unknown";
+  return row.verdict;
+}
+
 /** True when a corporate-event HALT covers this symbol. */
 export function isHalted(symbol: string, halts: string[]): boolean {
   const base = symbol.toUpperCase().split(/[/:_\- ]/)[0];
@@ -257,13 +269,15 @@ function absorb(
   prices: Record<string, number>,
   memory: Memory,
   monitorOnly = false,
-  driftIds: ReadonlySet<string> = EMPTY_SET,
+  staleIds: ReadonlySet<string> = EMPTY_SET,
 ): { book: Book; memory: Memory; newTrades: typeof book.trades } {
   const priorIds = new Set(book.trades.map((trade) => trade.id));
-  const next = markBook(book, prices, Date.now(), !monitorOnly, { driftIds });
+  const next = markBook(book, prices, Date.now(), !monitorOnly, { staleIds });
   let mem = memory;
   const newTrades = next.trades.filter((trade) => !priorIds.has(trade.id));
   for (const trade of newTrades) {
+    // Stale-mark closes and operator MANUAL flattens carry no edge signal.
+    if (trade.simulated || trade.reason === "MANUAL") continue;
     mem = learn(mem, trade.pnl);
   }
   return { book: next, memory: mem, newTrades };
@@ -271,6 +285,10 @@ function absorb(
 
 function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>): void {
   for (const { trade, mode } of records) {
+    if (trade.simulated || trade.reason === "MANUAL") {
+      console.info(`[trade-learning] Skipped non-learning close: ${trade.symbol} (${trade.reason}${trade.simulated ? ", no live quote" : ""})`);
+      continue;
+    }
     void saveTradeLearning({
       data: {
         id: trade.id,
@@ -387,6 +405,7 @@ export const useDesk = create<DeskState>()(
       dbGrossLoss: 0,
       fxPrices: {},
       perpFunding: [],
+      security: {},
       eventHalts: [],
       actedSigs: [],
       turboPhase: "off",
@@ -528,6 +547,11 @@ export const useDesk = create<DeskState>()(
 
       setPerpFunding: (rows) => set({ perpFunding: rows }),
 
+      setSecurity: (id, verdict) =>
+        set((prev) => ({
+          security: { ...prev.security, [id]: { verdict, at: Date.now() } },
+        })),
+
       setEventHalts: (symbols) =>
         set({ eventHalts: [...new Set(symbols.map((x) => x.toUpperCase()))].slice(0, 30) }),
 
@@ -652,20 +676,21 @@ export const useDesk = create<DeskState>()(
         // browser or a fresh device still counts the database's history, so
         // every close keeps moving the readiness bar.
         const seenIds = new Set(book.trades.map((t) => t.id));
+        const teachable = (pnl: number, simulated?: boolean, reason?: string) =>
+          !simulated && reason !== "MANUAL";
         const history = [
-          ...book.trades.map((t) => ({ pnl: t.pnl })),
+          ...book.trades.filter((t) => teachable(t.pnl, t.simulated, t.reason)).map((t) => ({ pnl: t.pnl })),
           ...s.dbEvents.filter((e) => !seenIds.has(e.id)).map((e) => ({ pnl: e.pnl })),
         ];
         return calculatePaperReadiness(book, history);
       },
 
-      tick: (prices, monitorOnly = false) => {
+      tick: (prices, monitorOnly = false, staleIds: ReadonlySet<string> = EMPTY_SET) => {
         const s = get();
         // Enrich the feed map so every open position has a price: avenue
         // positions resolve through their anchor symbol, anything still
         // unpriced falls back to labeled simulated drift inside markBook.
         const enriched: Record<string, number> = { ...prices };
-        const driftIds = new Set<string>();
         const openPositions = [...s.demo.positions, ...s.live.positions];
         if (openPositions.some((p) => !(enriched[p.tokenId] > 0))) {
           const anchors = avenueAnchors(s.demo, s.disciplineRules);
@@ -674,11 +699,12 @@ export const useDesk = create<DeskState>()(
             const anchor = anchors.get(p.tokenId);
             const px = anchor ? avenueAnchorPrice(anchor, s.tape) : null;
             if (px !== null) enriched[p.tokenId] = px;
-            else driftIds.add(p.tokenId);
+            // Otherwise the position holds its last mark flagged stale:
+            // no drift, no stop/target on invented prices, no learning.
           }
         }
-        const demoAbs = absorb(s.demo, enriched, s.memory, monitorOnly, driftIds);
-        const liveAbs = absorb(s.live, enriched, demoAbs.memory, monitorOnly, driftIds);
+        const demoAbs = absorb(s.demo, enriched, s.memory, monitorOnly, staleIds);
+        const liveAbs = absorb(s.live, enriched, demoAbs.memory, monitorOnly, staleIds);
         const closedTrades = [
           ...demoAbs.newTrades.map((trade) => ({ trade, mode: "demo" as const })),
           ...liveAbs.newTrades.map((trade) => ({ trade, mode: "live" as const })),
@@ -772,10 +798,9 @@ export const useDesk = create<DeskState>()(
         }
 
         // 1. Check all money-making avenues (Perps, Arbitrage, Early IPOs, Yield Basis)
-        const avenues = hydrateAvenuesWithFunding(
-          scanAllAvenues(currentBook, s.disciplineRules),
-          s.perpFunding,
-        );
+        const avenues = scanAllAvenues(currentBook, s.disciplineRules, Date.now(), {
+          funding: s.perpFunding,
+        });
         const unheldAvenue = avenues.find(
           (a) =>
             !currentBook.positions.some((p) => p.tokenId === a.id) &&
@@ -786,7 +811,7 @@ export const useDesk = create<DeskState>()(
         );
 
         // If an avenue setup is available, execute with disciplined parameters
-        if (unheldAvenue && Math.random() > 0.35) {
+        if (unheldAvenue) {
           const aveCand: Candidate = {
             id: unheldAvenue.id,
             symbol: unheldAvenue.symbol,
@@ -945,7 +970,9 @@ export const useDesk = create<DeskState>()(
           if (tapeBook.positions.length >= live.riskSettings.maxPositions) return;
           const turboNow = live.riskSettings.sizingProfile === "TURBO";
           const floorNow = turboNow ? Math.max(45, live.memory.minScore - 15) : live.memory.minScore;
-          const pick = chooseEntry(tapeBook, live.tape, floorNow);
+          const pick = chooseEntry(tapeBook, live.tape, floorNow, Date.now(), (id) =>
+            securityVerdictOf(live.security, id),
+          );
           if (!pick || fibBlocked(pick.symbol) || isHalted(pick.symbol, live.eventHalts)) return;
 
           // Run through the quantitative risk engine
@@ -1016,12 +1043,13 @@ export const useDesk = create<DeskState>()(
         if (s.turboPhase === "cooling") {
           return { ok: false, note: "Turbo cooling — new entries resume when the cooldown lapses (or bypass it)." };
         }
+        if (securityVerdictOf(s.security, c.id) === "reject") {
+          return { ok: false, note: "Blocked: live security audit hard-rejected this token (honeypot, mint/freeze authority, unlocked LP, or >15% tax)." };
+        }
         const targetKey = s.mode;
         const currentBook = s[targetKey];
         const isTurbo = s.riskSettings.sizingProfile === "TURBO";
-        const floor = isTurbo
-          ? Math.max(45, Math.min(s.memory.minScore, c.score) - 15)
-          : Math.min(s.memory.minScore, c.score);
+        const floor = isTurbo ? Math.max(45, s.memory.minScore - 15) : s.memory.minScore;
 
         // Evaluate sizing with risk engine
         const verdict = evaluateRiskAndSize(

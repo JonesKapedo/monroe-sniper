@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { fxIntervalFor, parseFrankfurterSpot, parseTwelveCandles } from "./twelvedata.ts";
+import { etWallToUtcMs, fxIntervalFor, parseFrankfurterSpot, parseTwelveCandles } from "./twelvedata.ts";
 
 describe("fx feeds", () => {
   it("maps chart timeframes to TwelveData intervals", () => {
@@ -19,6 +19,14 @@ describe("fx feeds", () => {
     assert.equal(candles.length, 2);
     assert.ok(candles[0].time < candles[1].time);
     assert.equal(candles[1].close, 1.1015);
+  });
+
+  it("resolves ET wall time to true UTC (EDT and EST)", () => {
+    // July: EDT (UTC-4) → 12:00 ET == 16:00Z
+    assert.equal(etWallToUtcMs("2026-07-13 12:00:00"), Date.UTC(2026, 6, 13, 16, 0, 0));
+    // January: EST (UTC-5) → 12:00 ET == 17:00Z
+    assert.equal(etWallToUtcMs("2026-01-13 12:00:00"), Date.UTC(2026, 0, 13, 17, 0, 0));
+    assert.equal(etWallToUtcMs("not a date"), null);
   });
 
   it("rejects TwelveData error payloads and bad rows", () => {

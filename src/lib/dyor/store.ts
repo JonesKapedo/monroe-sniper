@@ -67,7 +67,7 @@ const INITIAL_INSTRUMENTS: EvaluatedInstrument[] = [
     tags: ["Layer-1", "Tier-1 CEX", "Raydium Deep Pool"],
     honeypotMultiSource: [
       {
-        source: "GoPlus Security Engine",
+        source: "Seed sample (unverified)",
         isHoneypot: false,
         buyTaxPct: 0,
         sellTaxPct: 0,
@@ -83,7 +83,7 @@ const INITIAL_INSTRUMENTS: EvaluatedInstrument[] = [
         details: "Clean standard SPL program. No malicious owner authorities or hidden balance drains.",
       },
       {
-        source: "Honeypot.is / RugCheck V2",
+        source: "Seed sample (unverified)",
         isHoneypot: false,
         buyTaxPct: 0,
         sellTaxPct: 0,
@@ -99,7 +99,7 @@ const INITIAL_INSTRUMENTS: EvaluatedInstrument[] = [
         details: "Immutable metadata, decentralized pool distribution, 0% trade slippage penalties.",
       },
       {
-        source: "CertiK Skynet Sentinel",
+        source: "Seed sample (unverified)",
         isHoneypot: false,
         buyTaxPct: 0,
         sellTaxPct: 0,
@@ -186,7 +186,7 @@ const INITIAL_INSTRUMENTS: EvaluatedInstrument[] = [
     tags: ["DEX Aggregator", "Perps Protocol", "Active Governance"],
     honeypotMultiSource: [
       {
-        source: "GoPlus Security Engine",
+        source: "Seed sample (unverified)",
         isHoneypot: false,
         buyTaxPct: 0,
         sellTaxPct: 0,
@@ -202,7 +202,7 @@ const INITIAL_INSTRUMENTS: EvaluatedInstrument[] = [
         details: "Clean token program. DAO timelock protection active on treasury mint authorities.",
       },
       {
-        source: "RugCheck V2 Pro",
+        source: "Seed sample (unverified)",
         isHoneypot: false,
         buyTaxPct: 0,
         sellTaxPct: 0,
@@ -270,7 +270,7 @@ const INITIAL_INSTRUMENTS: EvaluatedInstrument[] = [
     venue: "dex",
     status: "BLACKLISTED",
     userNote: "Auto-blacklisted by multi-source honeypot gate. Malicious transfer tax and blacklist authority.",
-    autoBlacklistedReason: "Detected 99% hidden sell tax and owner blacklist function via GoPlus & RugCheck.",
+    autoBlacklistedReason: "Seed sample blacklist example (unverified).",
     addedAt: Date.now() - 86400000 * 2,
     updatedAt: Date.now() - 150000,
     overallSafetyScore: 8,
@@ -278,7 +278,7 @@ const INITIAL_INSTRUMENTS: EvaluatedInstrument[] = [
     tags: ["HONEYPOT", "Predatory Tax", "Sybil Botnet"],
     honeypotMultiSource: [
       {
-        source: "GoPlus Security Engine",
+        source: "Seed sample (unverified)",
         isHoneypot: true,
         buyTaxPct: 2,
         sellTaxPct: 99,
@@ -294,7 +294,7 @@ const INITIAL_INSTRUMENTS: EvaluatedInstrument[] = [
         details: "CRITICAL: Malicious code pattern! Owner can modify fee to 99% and freeze any buyer's token account.",
       },
       {
-        source: "RugCheck V2 Pro",
+        source: "Seed sample (unverified)",
         isHoneypot: true,
         buyTaxPct: 0,
         sellTaxPct: 99,

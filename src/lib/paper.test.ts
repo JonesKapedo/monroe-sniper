@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { emptyBook, enter, entryVerdict, equity, markBook, sampleTape, setKill, simulateBuy, type Position } from "./paper.ts";
+import { chooseEntry, emptyBook, enter, entryVerdict, equity, markBook, sampleTape, setKill, simulateBuy, type Position } from "./paper.ts";
 
 describe("paper desk", () => {
   it("blocks a thin fresh name", () => {
@@ -89,34 +89,40 @@ describe("paper desk", () => {
     };
   }
 
-  it("leaves an unpriced avenue position frozen unless drift is allowed", () => {
+  it("holds unpriced positions stale: no drift, no stop/target on invented prices", () => {
     const book = { ...emptyBook(), positions: [avenuePosition()] };
-    const kept = markBook(book, {}, Date.now(), true);
-    assert.equal(kept.positions[0]?.mark, 0.042);
-    assert.ok(!kept.positions[0]?.markSimulated);
+    const held = markBook(book, {}, Date.now(), true);
+    assert.equal(held.positions[0]?.mark, 0.042);
+    assert.equal(held.positions[0]?.markSimulated, true);
+    assert.equal(held.trades.length, 0);
   });
 
-  it("walks an unpriced avenue mark and flags it simulated", () => {
-    const book = { ...emptyBook(), positions: [avenuePosition()] };
-    const drifted = markBook(book, {}, Date.now(), true, {
-      driftIds: new Set(["ipo-pump-grad-sol"]),
-      driftAmp: 0.5,
-    });
-    const pos = drifted.positions[0];
-    // Either still open with a moved, flagged mark, or closed by a barrier.
-    const moved = pos ? pos.mark !== 0.042 && pos.markSimulated === true : true;
-    const closed = drifted.trades.length === 1;
-    assert.ok(moved || closed);
+  it("flags stale closes simulated and keeps them out of learning counters", () => {
+    const aged = { ...avenuePosition(), openedAt: Date.now() - 7 * 60 * 60 * 1000 };
+    const book = { ...emptyBook(), positions: [aged] };
+    const closed = markBook(book, {}, Date.now(), true);
+    assert.equal(closed.trades.length, 1);
+    assert.equal(closed.trades[0]?.simulated, true);
+    assert.equal(closed.dayPnl, 0);
+    assert.equal(closed.consecutiveLosses, 0);
   });
 
-  it("moves book equity when avenue marks move", () => {
+  it("keeps book equity frozen while marks are stale", () => {
     const book = { ...emptyBook(), positions: [avenuePosition()] };
     const before = equity(book);
-    const after = markBook(book, {}, Date.now(), true, {
-      driftIds: new Set(["ipo-pump-grad-sol"]),
-      driftAmp: 0.5,
-    });
-    assert.ok(equity(after) !== before || after.trades.length > 0);
+    const after = markBook(book, {}, Date.now(), true);
+    assert.equal(equity(after), before);
+  });
+
+  it("vetoes verified hard-rejects no matter the score", () => {
+    const book = emptyBook();
+    const tape = sampleTape();
+    const open = chooseEntry(book, tape, 0, Date.now(), () => "unknown");
+    assert.ok(open);
+    const blocked = chooseEntry(book, tape, 0, Date.now(), (id) =>
+      id === open.id ? "reject" : "unknown",
+    );
+    assert.ok(!blocked || blocked.id !== open.id);
   });
 
   it("clears the simulated flag once a live quote returns", () => {

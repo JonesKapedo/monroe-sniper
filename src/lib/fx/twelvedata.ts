@@ -14,6 +14,41 @@ function finitePositive(value: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function nyOffsetMs(t: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(t));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const wall = Date.UTC(
+    Number(get("year")),
+    Number(get("month")) - 1,
+    Number(get("day")),
+    Number(get("hour")) % 24,
+    Number(get("minute")),
+    Number(get("second")),
+  );
+  return wall - t;
+}
+
+/**
+ * TwelveData datetimes are America/New_York wall time with no offset.
+ * Date.parse would read them as server-local — resolve to true UTC instead.
+ */
+export function etWallToUtcMs(wall: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(wall.trim());
+  if (!m) return null;
+  const [, Y, Mo, D, h, mi, s] = m;
+  const guess = Date.UTC(+Y, +Mo - 1, +D, +h, +mi, +s);
+  return guess - nyOffsetMs(guess - nyOffsetMs(guess));
+}
+
 /** Parse a TwelveData time_series payload into candles, newest last. */
 export function parseTwelveCandles(payload: unknown): Candle[] {
   const root = payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
@@ -22,12 +57,12 @@ export function parseTwelveCandles(payload: unknown): Candle[] {
   for (const row of values) {
     if (row === null || typeof row !== "object") continue;
     const r = row as Record<string, unknown>;
-    const time = typeof r.datetime === "string" ? Date.parse(r.datetime) : NaN;
+    const time = typeof r.datetime === "string" ? etWallToUtcMs(r.datetime) : null;
     const o = finitePositive(r.open);
     const h = finitePositive(r.high);
     const l = finitePositive(r.low);
     const c = finitePositive(r.close);
-    if (!Number.isFinite(time) || o === null || h === null || l === null || c === null) continue;
+    if (time === null || o === null || h === null || l === null || c === null) continue;
     candles.push({ time, open: o, high: Math.max(h, l, o, c), low: Math.min(h, l, o, c), close: c });
   }
   return candles.sort((a, b) => a.time - b.time).slice(-120);

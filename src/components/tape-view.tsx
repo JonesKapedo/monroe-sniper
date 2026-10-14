@@ -4,7 +4,7 @@ import { Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { loadDexCandles, loadFxCandles, loadKlines, loadTokenTicks, resolveChartPool, type ChartPool } from "@/lib/market.functions";
 import { FX_PAIRS } from "@/lib/fx/twelvedata";
-import { candleDurationMs, mergeTickIntoCandles } from "@/lib/charts/geckoterminal";
+import { candleDurationMs, detectChartGap, mergeTickIntoCandles } from "@/lib/charts/geckoterminal";
 import { equity, type Position } from "@/lib/paper";
 import { scanAllAvenues } from "@/lib/avenues/engine";
 import { useDesk } from "@/lib/desk-store";
@@ -369,6 +369,8 @@ export function TapeView() {
     [solanaSwaps, timeframe],
   );
   const candles = chartSource === "solana-dex" ? (dexHistory.length ? dexHistory : swapCandles) : cexCandles;
+  const chartGapped =
+    candles.length > 0 && detectChartGap(candles, Date.now(), candleDurationMs(timeframe));
   const candleSource =
     chartSource === "solana-dex"
       ? dexHistory.length
@@ -501,7 +503,7 @@ export function TapeView() {
             </div>
             <p className="mt-1 text-xs text-faint">
               {chartSource === "solana-dex"
-                ? `${chartPool ? chartPool.label : "Resolving deepest pool…"}${candleSource ? ` · ${candleSource}` : ""}${tickNote ? ` · ${tickNote}` : ""}`
+                ? `${chartPool ? chartPool.label : "Resolving deepest pool…"}${candleSource ? ` · ${candleSource}` : ""}${tickNote ? ` · ${tickNote}` : ""}${chartGapped ? " · data gap (showing history)" : ""}`
                 : `${selectedPair} · public ${feedNote}`}
               {chartSource === "cex" &&
               positions.some(

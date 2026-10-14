@@ -73,7 +73,7 @@ export const Route = createFileRoute("/api/solana-swaps")({
         }
         if (!pairs.length) {
           return jsonResponse(
-            { error: "No liquid SOL/USDC Raydium or PumpSwap pool was found." },
+            { error: "No liquid SOL/USDC pool was found on a supported Solana venue." },
             503,
           );
         }
@@ -92,7 +92,10 @@ export const Route = createFileRoute("/api/solana-swaps")({
         const clientIp = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
         const activeForIp = activeStreams.get(clientIp) ?? 0;
         if (activeForIp >= MAX_STREAMS_PER_IP) {
-          return jsonResponse({ error: "Too many active market streams from this address." }, 429);
+          return Response.json(
+            { error: "Too many active market streams from this address." },
+            { status: 429, headers: { "retry-after": "30", "cache-control": "no-store" } },
+          );
         }
         activeStreams.set(clientIp, activeForIp + 1);
 
@@ -108,6 +111,54 @@ export const Route = createFileRoute("/api/solana-swaps")({
             const subscriptions = new Map<number, SolanaDexPair>();
             const signatures = new Set<string>();
             let transactionLookups = 0;
+            // Bounded decode queue: bursts wait their turn instead of dropping.
+            // A signature joins `signatures` only after decode-or-permanent-
+            // reject, so a queued tick is never silently lost.
+            const decodeQueue: Array<{ signature: string; pair: SolanaDexPair; attempts: number }> = [];
+            const MAX_QUEUED = 200;
+            const remember = (signature: string) => {
+              signatures.add(signature);
+              if (signatures.size > 500)
+                signatures.delete(signatures.values().next().value as string);
+            };
+            const pumpQueue = () => {
+              if (stopped) return;
+              while (transactionLookups < 8 && decodeQueue.length > 0) {
+                const next = decodeQueue.shift();
+                if (!next) break;
+                transactionLookups++;
+                void fetchSwap(next.signature, next.pair)
+                  .then(() => remember(next.signature))
+                  .catch((error) => {
+                    if (next.attempts < 1 && !stopped) {
+                      decodeQueue.push({ ...next, attempts: next.attempts + 1 });
+                    } else {
+                      console.error("[solana-swaps] Transaction lookup failed:", error);
+                      emit("feed-error", {
+                        fatal: false,
+                        message:
+                          error instanceof Error
+                            ? error.message
+                            : "Unable to decode a confirmed Solana swap.",
+                      });
+                      remember(next.signature);
+                    }
+                  })
+                  .finally(() => {
+                    transactionLookups--;
+                    pumpQueue();
+                  });
+              }
+              if (decodeQueue.length >= MAX_QUEUED) {
+                // Shed the oldest waiting (never decoded) rather than the
+                // newest, and say so exactly once per burst.
+                decodeQueue.splice(0, decodeQueue.length - MAX_QUEUED);
+                emit("feed-error", {
+                  fatal: false,
+                  message: "Swap burst exceeded the decode queue; oldest waiting ticks shed.",
+                });
+              }
+            };
             const encoderEvent = (type: string, data: unknown) =>
               encoder.encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
             const emit = (type: string, data: unknown) => {
@@ -204,33 +255,8 @@ export const Route = createFileRoute("/api/solana-swaps")({
                 : undefined;
               if (!signature || !pair || message.params?.result?.value?.err != null) return;
               if (signatures.has(signature)) return;
-              signatures.add(signature);
-              if (signatures.size > 500)
-                signatures.delete(signatures.values().next().value as string);
-              if (transactionLookups >= 8) {
-                emit("feed-error", {
-                  fatal: false,
-                  message:
-                    "Swap throughput exceeded the live decoder capacity; some ticks were skipped.",
-                });
-                return;
-              }
-
-              transactionLookups++;
-              try {
-                await fetchSwap(signature, pair);
-              } catch (error) {
-                console.error("[solana-swaps] Transaction lookup failed:", error);
-                emit("feed-error", {
-                  fatal: false,
-                  message:
-                    error instanceof Error
-                      ? error.message
-                      : "Unable to decode a confirmed Solana swap.",
-                });
-              } finally {
-                transactionLookups--;
-              }
+              decodeQueue.push({ signature, pair, attempts: 0 });
+              pumpQueue();
             };
 
             socket.addEventListener("open", () => {

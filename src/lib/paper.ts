@@ -25,6 +25,8 @@ export type Candidate = {
   flags: string[];
   rationale: string[];
   venue: "binance" | "dex" | "fx";
+  /** Depth unknown (e.g. CEX quote volume is flow, not pool depth). */
+  liquidityUnknown?: boolean;
 };
 
 export type Position = {
@@ -53,6 +55,8 @@ export type ClosedTrade = {
   id: string;
   symbol: string;
   pnl: number;
+  /** True when closed without a live quote — excluded from learning. */
+  simulated?: boolean;
   reason: string;
   closedAt: number;
   chain?: string;
@@ -78,6 +82,8 @@ export type Book = {
   cooldownUntil: number | null;
   kill: boolean;
   killReason: string | null;
+  /** UTC day (YYYY-MM-DD) of the last mark; null rolls the day on next tick. */
+  lastMarkDay?: string | null;
 };
 
 export type GateLine = { id: string; label: string; pass: boolean; detail: string };
@@ -94,6 +100,7 @@ export function emptyBook(cashUsd = DEMO_START): Book {
     cooldownUntil: null,
     kill: false,
     killReason: null,
+    lastMarkDay: null,
   };
 }
 
@@ -117,15 +124,18 @@ export function scoreCandidate(input: {
   pairCreatedAt: number | null;
   url: string | null;
   venue?: "binance" | "dex" | "fx";
+  liquidityUnknown?: boolean;
 }): Candidate | null {
   if (!input.address || !input.priceUsd || input.priceUsd <= 0) return null;
+  const liqUnknown = input.liquidityUnknown === true;
   const liq = input.liquidityUsd ?? 0;
   const vol = input.volume24h ?? 0;
   const chg = input.change24h ?? 0;
   const ageH = input.pairCreatedAt
     ? Math.max(0, (Date.now() - input.pairCreatedAt) / 3_600_000)
     : null;
-  const liqScore = Math.max(0, Math.min(100, (liq / 100_000) * 100));
+  // Unknown depth scores neutral — never fake-deep, never fake-thin.
+  const liqScore = liqUnknown ? 50 : Math.max(0, Math.min(100, (liq / 100_000) * 100));
   const mom = Math.max(0, Math.min(100, 50 + chg * 0.35));
   const novelty = ageH === null ? 30 : Math.max(0, Math.min(100, 100 - ageH * 1.5));
   let score = 0.7 * liqScore + 0.2 * mom + 0.1 * novelty;
@@ -140,7 +150,9 @@ export function scoreCandidate(input: {
     flags.push("EXTREME-MOVE");
     rationale.push("24h move is extreme; treat as unstable");
   }
-  if (liq < MIN_LIQ) {
+  if (liqUnknown) {
+    rationale.push("CEX depth not published; sized on volatility, not pool depth");
+  } else if (liq < MIN_LIQ) {
     flags.push("THIN");
     rationale.push("Liquidity is under $10k");
   }
@@ -166,6 +178,7 @@ export function scoreCandidate(input: {
     flags,
     rationale,
     venue: input.venue ?? "dex",
+    liquidityUnknown: liqUnknown || undefined,
   };
 }
 
@@ -175,7 +188,12 @@ export function impactPct(notional: number, liquidity: number): number {
   return Math.min(0.35, notional / (2 * liquidity));
 }
 
-export function simulateBuy(notional: number, mid: number, liquidity: number) {
+export function simulateBuy(
+  notional: number,
+  mid: number,
+  liquidity: number,
+  opts: { skipDepthCheck?: boolean } = {},
+) {
   const impact = impactPct(notional, liquidity);
   const fee = 0.003;
   const buffer = 0.005;
@@ -185,11 +203,19 @@ export function simulateBuy(notional: number, mid: number, liquidity: number) {
   const qty = Math.max(0, (notional - notional * fee - gas) / fill);
   const reasons: string[] = [];
   if (costPct > 0.06) reasons.push(`Expected cost ${(costPct * 100).toFixed(1)}% is above 6%`);
-  if (liquidity < notional * 8) reasons.push("Pool is thin versus the intended size");
+  if (!opts.skipDepthCheck && liquidity < notional * 8)
+    reasons.push("Pool is thin versus the intended size");
   if (qty <= 0) reasons.push("Nothing left after fees");
   return { fill, qty, impact, costPct, acceptable: reasons.length === 0, reasons };
 }
 
+/**
+ * Tiered portfolio defense (single owner: this Book + risk-engine checks).
+ * 3% intraday (desk breaker) pauses ENTRIES · 8% (risk engine) halts new
+ * risk · 15% drawdown / 5% day (armIfNeeded) kills the book until cleared.
+ * Exits are never blocked by any tier. Readiness 4.5% is display-only
+ * early warning, not a gate.
+ */
 export function portfolioLines(book: Book, now = Date.now()): GateLine[] {
   const eq = equity(book);
   const peak = Math.max(book.peakEquity, eq);
@@ -245,9 +271,9 @@ export function entryVerdict(book: Book, c: Candidate, now = Date.now(), minScor
     },
     {
       id: "liq",
-      label: "Liquidity at least $10k",
-      pass: c.liquidityUsd >= MIN_LIQ,
-      detail: `$${Math.round(c.liquidityUsd).toLocaleString()}`,
+      label: c.liquidityUnknown ? "Depth n/a (CEX majors)" : "Liquidity at least $10k",
+      pass: c.liquidityUnknown === true || c.liquidityUsd >= MIN_LIQ,
+      detail: c.liquidityUnknown ? "CEX depth unpublished" : `$${Math.round(c.liquidityUsd).toLocaleString()}`,
     },
     {
       id: "slots",
@@ -270,7 +296,9 @@ export function entryVerdict(book: Book, c: Candidate, now = Date.now(), minScor
   ];
   const sim =
     lines.every((l) => l.pass) && notional > 0
-      ? simulateBuy(notional, c.priceUsd, c.liquidityUsd)
+      ? simulateBuy(notional, c.priceUsd, c.liquidityUsd, {
+          skipDepthCheck: c.liquidityUnknown === true,
+        })
       : null;
   if (sim && !sim.acceptable) {
     lines.push({
@@ -340,11 +368,17 @@ export function enter(
 }
 
 export type MarkOptions = {
-  /** Position ids with no live quote that may drift on a simulated walk. */
-  driftIds?: ReadonlySet<string>;
-  /** Per-tick walk amplitude as a fraction of mark (default 0.004). */
-  driftAmp?: number;
+  /**
+   * Position ids whose quote is known-stale (e.g. daily refs posing as live).
+   * Treated exactly like a missing quote: hold, flag, no exits, no learning.
+   */
+  staleIds?: ReadonlySet<string>;
 };
+
+/** UTC day stamp for the one true day boundary (docs: all risk days are UTC). */
+export function utcDay(now = Date.now()): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
 
 export function markBook(
   book: Book,
@@ -361,39 +395,44 @@ export function markBook(
   let streak = book.consecutiveLosses;
   let cool = book.cooldownUntil;
 
+  // One day boundary: UTC midnight rolls dayPnl exactly once.
+  const today = utcDay(now);
+  if (book.lastMarkDay !== undefined && book.lastMarkDay !== null && book.lastMarkDay !== today) {
+    day = 0;
+  }
+
   for (const p of book.positions) {
-    const quoted = prices[p.tokenId] && prices[p.tokenId] > 0 ? prices[p.tokenId] : null;
-    let px = quoted ?? p.mark;
-    let simulated = false;
-    if (quoted === null && opts.driftIds?.has(p.tokenId)) {
-      // No live quote for this synthetic position: random-walk the mark so
-      // equity, stops, and targets keep moving. Skewed faintly positive.
-      const amp = opts.driftAmp ?? 0.004;
-      const drift = 1 + (Math.random() > 0.42 ? 1 : -1) * Math.random() * amp;
-      px = Math.max(0.000001, p.mark * drift);
-      simulated = true;
-    }
+    const quote = prices[p.tokenId] && prices[p.tokenId] > 0 ? prices[p.tokenId] : null;
+    // Fail-closed: no (or known-stale) quote → hold the last mark, flag it
+    // stale, and NEVER evaluate stops/targets on it. Only the time stop may
+    // close, and the close is excluded from learning.
+    const stale = quote === null || opts.staleIds?.has(p.tokenId) === true;
+    const px = quote ?? p.mark;
     if (!manageExits) {
-      kept.push({ ...p, mark: px, markSimulated: simulated });
+      kept.push({ ...p, mark: px, markSimulated: stale || undefined });
       continue;
     }
     const aged = now - p.openedAt > 6 * 60 * 60 * 1000;
-    
+
     // Outperformance & Capital Preservation: Trailing Breakeven Ratchet
     // Once position moves +3.0% into profit, raise stop loss above entry price to lock in a risk-free trade
+    // (live quotes only — stale marks never ratchet, stop, or target).
     let activeStop = p.stop;
-    if (px >= p.entryPrice * 1.03 && activeStop < p.entryPrice * 1.008) {
+    if (!stale && px >= p.entryPrice * 1.03 && activeStop < p.entryPrice * 1.008) {
       activeStop = p.entryPrice * 1.008; // Locked in at +0.8% profit
     }
 
-    const stopped = px <= activeStop;
-    const targetHit = px >= (p.target ?? p.entryPrice * 1.06);
+    const stopped = !stale && px <= activeStop;
+    const targetHit = !stale && px >= (p.target ?? p.entryPrice * 1.06);
     if (aged || stopped || targetHit) {
       const pnl = (px - p.entryPrice) * p.qty;
       cash += p.qty * px;
-      day += pnl;
-      streak = pnl < 0 ? streak + 1 : 0;
-      if (streak >= 3) cool = now + 4 * 60 * 60 * 1000;
+      // Stale closes don't move the day/result counters used for learning.
+      if (!stale) {
+        day += pnl;
+        streak = pnl < 0 ? streak + 1 : 0;
+        if (streak >= 3) cool = now + 4 * 60 * 60 * 1000;
+      }
       extraTrades.push({
         id: stamp("tr"),
         symbol: p.symbol,
@@ -411,9 +450,10 @@ export function markBook(
         entryLiquidityUsd: p.entryLiquidityUsd,
         entryVolume24h: p.entryVolume24h,
         pairAgeHours: p.pairAgeHours,
+        simulated: stale || undefined,
       });
     } else {
-      kept.push({ ...p, mark: px, stop: activeStop, markSimulated: simulated });
+      kept.push({ ...p, mark: px, stop: activeStop, markSimulated: stale || undefined });
     }
   }
 
@@ -425,6 +465,7 @@ export function markBook(
     dayPnl: day,
     consecutiveLosses: streak,
     cooldownUntil: cool,
+    lastMarkDay: today,
   };
   const eq = equity(next);
   next.peakEquity = Math.max(book.peakEquity, eq);
@@ -435,7 +476,7 @@ export function closeOne(book: Book, id: string, now = Date.now()): Book {
   const p = book.positions.find((x) => x.id === id);
   if (!p) return book;
   const pnl = (p.mark - p.entryPrice) * p.qty;
-  const streak = pnl < 0 ? book.consecutiveLosses + 1 : 0;
+  const streak = p.markSimulated ? book.consecutiveLosses : pnl < 0 ? book.consecutiveLosses + 1 : 0;
   const next: Book = {
     ...book,
     cash: book.cash + p.qty * p.mark,
@@ -446,6 +487,7 @@ export function closeOne(book: Book, id: string, now = Date.now()): Book {
         symbol: p.symbol,
         pnl,
         reason: "MANUAL",
+        simulated: p.markSimulated,
         closedAt: now,
         chain: p.chain,
         venue: p.venue,
@@ -463,7 +505,7 @@ export function closeOne(book: Book, id: string, now = Date.now()): Book {
     ].slice(0, 40),
     dayPnl: book.dayPnl + pnl,
     consecutiveLosses: streak,
-    cooldownUntil: streak >= 3 ? now + 4 * 60 * 60 * 1000 : book.cooldownUntil,
+    cooldownUntil: streak >= 3 && !p.markSimulated ? now + 4 * 60 * 60 * 1000 : book.cooldownUntil,
   };
   next.peakEquity = Math.max(book.peakEquity, equity(next));
   return armIfNeeded(next);
@@ -547,12 +589,23 @@ export function learn(memory: Memory, pnl: number): Memory {
   return { seen, wins, losses, realized, minScore };
 }
 
-export function chooseEntry(book: Book, tape: Candidate[], minScore: number, now = Date.now()): Candidate | null {
+export type SecurityVerdict = "clean" | "reject" | "unknown";
+
+export function chooseEntry(
+  book: Book,
+  tape: Candidate[],
+  minScore: number,
+  now = Date.now(),
+  securityOf: (id: string) => SecurityVerdict = () => "unknown",
+): Candidate | null {
   const ranked = tape
     .map((c) => ({ c, edge: assessEdge(c) }))
     .filter((row) => row.edge.act)
     .sort((a, b) => b.edge.edge - a.edge.edge || b.c.score - a.c.score);
   for (const row of ranked) {
+    // A verified hard-reject (honeypot, mint/freeze, unlocked LP, >15% tax)
+    // vetoes the entry no matter what the score says.
+    if (securityOf(row.c.id) === "reject") continue;
     if (entryVerdict(book, row.c, now, minScore).allowed) return row.c;
   }
   return null;
@@ -568,5 +621,7 @@ export function deposit(book: Book, amount: number): Book {
 export function withdraw(book: Book, amount: number): { book: Book; ok: boolean; note: string } {
   if (!(amount > 0)) return { book, ok: false, note: "Amount must be positive" };
   if (amount > book.cash + 0.0001) return { book, ok: false, note: "Not enough free cash" };
-  return { book: { ...book, cash: book.cash - amount }, ok: true, note: "Withdrawal posted to the ledger" };
+  const after = { ...book, cash: book.cash - amount };
+  after.peakEquity = Math.max(equity(after), Math.max(0, book.peakEquity - amount));
+  return { book: after, ok: true, note: "Withdrawal posted to the ledger" };
 }

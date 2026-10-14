@@ -7,6 +7,13 @@ const KRAKEN_PAIRS: Record<string, string> = {
   BNBUSDT: "BNBUSDT",
   XRPUSDT: "XRPUSDT",
   DOGEUSDT: "XDGUSDT",
+  // Kraken quotes fiat USD (not USDT) — tracked explicitly in the note.
+  PEPEUSDT: "PEPEUSD",
+  SUIUSDT: "SUIUSD",
+  NEARUSDT: "NEARUSD",
+  AVAXUSDT: "AVAXUSD",
+  LINKUSDT: "LINKUSD",
+  ADAUSDT: "ADAUSD",
 };
 
 const KRAKEN_INTERVALS: Record<string, number> = {
