@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { money, pct } from "@/lib/sniper/format";
+import { isSoundEnabled, playHawkCry, setSoundEnabled } from "@/lib/sound";
 import { kellyFraction } from "@/lib/sniper/risk";
 import { useSniper } from "@/lib/sniper/store";
 import { defaultSettings, SOURCE_META, type SourceId, type ThemeId } from "@/lib/sniper/types";
@@ -23,6 +24,7 @@ export function SettingsView() {
   const updateDisciplineRules = useDesk((s) => s.updateDisciplineRules);
   const deskMode = useDesk((s) => s.mode);
   const deskBook = useDesk((s) => s[s.mode]);
+  const [soundOn, setSoundOn] = useState(() => isSoundEnabled());
 
   const book = useSniper((s) => s.book);
   const update = useSniper((s) => s.updateSettings);
@@ -378,6 +380,39 @@ export function SettingsView() {
           </button>
         </div>
         <p className="mt-2 text-xs text-faint">Saved with this browser’s paper desk.</p>
+      </Card>
+
+      <Card>
+        <Label>Sound</Label>
+        <p className="mt-1 text-xs text-faint">
+          A hawk cries when Live trading engages; a soft chirp answers the return to paper.
+        </p>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Mode sounds</p>
+            <p className="text-xs text-faint">Synthesized on-device, no audio files</p>
+          </div>
+          <button
+            type="button"
+            aria-pressed={soundOn}
+            className={cn(
+              "min-h-11 rounded-full border px-3 text-sm",
+              soundOn ? "border-brass text-brass" : "border-line text-faint",
+            )}
+            onClick={() => {
+              const next = !soundOn;
+              setSoundEnabled(next);
+              setSoundOn(next);
+            }}
+          >
+            {soundOn ? "On" : "Off"}
+          </button>
+        </div>
+        <div className="mt-2">
+          <Button variant="ghost" onClick={() => playHawkCry()} className="text-xs">
+            Preview hawk cry
+          </Button>
+        </div>
       </Card>
     </div>
   );

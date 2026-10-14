@@ -1,12 +1,89 @@
 import { useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, History, LockKeyhole, Wallet } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, History, Wallet } from "lucide-react";
 import { useMascot } from "@/lib/mascot";
 import { useDesk } from "@/lib/desk-store";
 import { equity, exposure } from "@/lib/paper";
 import { Button, Card, Label } from "@/components/ui";
-import { Money } from "@/components/money";
+import { Money, capitalMoodClass } from "@/components/money";
 import { cn } from "@/lib/cn";
-import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
+import { WalletButton } from "@/components/wallet-modal";
+import { useWalletBalances } from "@/lib/wallet/balances";
+import { formatAddress, useSolNetwork } from "@/lib/wallet/config";
+
+function OnchainBalancesCard() {
+  const { address, sol, usdc, loading, error, health, mismatch, expectedAddress, depositNote } =
+    useWalletBalances();
+  const network = useSolNetwork((s) => s.network);
+
+  if (!address) {
+    return (
+      <Card className="flex flex-col gap-2 border-dashed">
+        <div className="flex items-center gap-2">
+          <Wallet className="size-4 text-brass" aria-hidden="true" />
+          <Label>On-chain wallet</Label>
+        </div>
+        <p className="text-xs text-faint">
+          No wallet linked. Connect Phantom or Trust Wallet to see real SOL/USDC balances here
+          (read-only — the desk still cannot move funds).
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Wallet className="size-4 text-gain" aria-hidden="true" />
+          <Label>On-chain wallet</Label>
+          <span className="font-mono text-xs text-cream">{formatAddress(address)}</span>
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
+              network === "mainnet-beta" ? "bg-loss/20 text-loss" : "bg-panel-2 text-faint",
+            )}
+          >
+            {network === "mainnet-beta" ? "mainnet" : "devnet"}
+          </span>
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
+              health === "live" ? "bg-gain/20 text-gain" : "bg-warn/20 text-warn",
+            )}
+          >
+            RPC {health}
+          </span>
+        </div>
+      </div>
+      {mismatch && (
+        <p className="rounded-lg border border-loss/40 bg-loss/10 p-2.5 text-xs text-loss">
+          Different wallet than expected ({expectedAddress ? formatAddress(expectedAddress) : "unknown"}).
+          If you did not switch wallets yourself, disconnect immediately.
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-[10px] tracking-wider text-faint uppercase">Real SOL</p>
+          <p className="num mt-1 text-2xl font-bold text-cream">
+            {loading ? "…" : sol !== null ? `${sol.toFixed(4)}` : "—"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] tracking-wider text-faint uppercase">Real USDC</p>
+          <p className="num mt-1 text-2xl font-bold text-cream">
+            {loading ? "…" : usdc !== null ? `$${usdc.toFixed(2)}` : "—"}
+          </p>
+        </div>
+      </div>
+      {depositNote && <p className="text-xs text-gain">{depositNote}</p>}
+      {error && <p className="text-xs text-loss">{error}</p>}
+      <p className="text-[11px] text-faint">
+        Read-only link. Deposits are manual transfers you make in your wallet; the desk detects
+        new balance and sizes paper risk against it. Trading stays paper-only.
+      </p>
+    </Card>
+  );
+}
 
 export function WalletView() {
   const demo = useDesk((state) => state.demo);
@@ -16,7 +93,6 @@ export function WalletView() {
   const [amount, setAmount] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [showLiveStatus, setShowLiveStatus] = useState(false);
 
   const amountValue = Number(amount);
   const amountIsValid = Number.isFinite(amountValue) && amountValue > 0;
@@ -56,30 +132,31 @@ export function WalletView() {
             </span>
           </div>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-faint">
-            No wallet or broker is connected. Adjustments on this page change only the paper-trading balance;
-            no real deposits, withdrawals, or on-chain transfers occur.
+            Paper-trading balance only — no real deposits, withdrawals, or on-chain transfers occur
+            here. Connect your wallet below to link real on-chain balances (read-only).
           </p>
         </div>
-        <Button variant="ghost" onClick={() => setShowLiveStatus(true)} className="min-h-11 shrink-0">
-          <LockKeyhole className="mr-2 size-4" aria-hidden="true" />
-          Live unavailable
-        </Button>
+        <div className="shrink-0">
+          <WalletButton />
+        </div>
       </header>
+
+      <OnchainBalancesCard />
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Paper account summary">
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">PAPER EQUITY</p>
-          <p className="num mt-1 text-2xl font-bold"><Money value={totalEquity} kind="balance" /></p>
+          <p className="num mt-1 text-2xl font-bold"><Money value={totalEquity} kind="balance" className={capitalMoodClass(demo.dayPnl)} /></p>
           <p className="mt-1 text-[11px] text-faint">Simulated balance</p>
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">AVAILABLE</p>
-          <p className="num mt-1 text-2xl font-bold text-gain"><Money value={demo.cash} kind="balance" className="text-gain" /></p>
+          <p className="num mt-1 text-2xl font-bold"><Money value={demo.cash} kind="balance" className={capitalMoodClass(demo.dayPnl)} /></p>
           <p className="mt-1 text-[11px] text-faint">Paper cash</p>
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">EXPOSURE</p>
-          <p className="num mt-1 text-2xl font-bold"><Money value={currentExposure} kind="balance" /></p>
+          <p className="num mt-1 text-2xl font-bold"><Money value={currentExposure} kind="balance" className={capitalMoodClass(demo.dayPnl)} /></p>
           <p className="mt-1 text-[11px] text-faint">{demo.positions.length} paper positions</p>
         </Card>
         <Card>
@@ -207,10 +284,6 @@ export function WalletView() {
         )}
       </Card>
 
-      <LiveModeTransitionModal
-        isOpen={showLiveStatus}
-        onClose={() => setShowLiveStatus(false)}
-      />
     </div>
   );
 }

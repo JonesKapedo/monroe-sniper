@@ -41,6 +41,7 @@ import {
 import { FX_PAIRS } from "./fx/twelvedata";
 import type { PerpFunding } from "./perps/hyperliquid";
 import { useDyorStore } from "./dyor/store";
+import { playHawkCry, playSoftChirp } from "./sound";
 import { assessEdge } from "./intel/emh";
 
 export type Mode = "demo" | "live";
@@ -588,7 +589,16 @@ export const useDesk = create<DeskState>()(
           ),
         })),
 
-      setMode: (mode) =>
+      setMode: (mode) => {
+        // Mode sounds fire only on real transitions: hawk cry into live,
+        // soft chirp back to paper. (Live entry is still locked until the
+        // wallet phases unlock it — the cry is wired and waiting.)
+        const prevMode = get().mode;
+        if (mode === "live" && prevMode === "live") return;
+        if (mode === "demo" && prevMode === "demo") {
+          set({ mode: "demo" });
+          return;
+        }
         set((s) => {
           if (mode === "live") {
             return {
@@ -604,7 +614,10 @@ export const useDesk = create<DeskState>()(
             note: `Switched to paper simulation. Balance: $${s.demo.cash.toFixed(2)}.`,
             log: pushLog(s.log, "Mode switched to DEMO"),
           };
-        }),
+        });
+        if (mode === "live" && get().mode === "live") void playHawkCry();
+        else if (mode === "demo" && prevMode === "live") void playSoftChirp();
+      },
 
       setTape: (rows, note) => {
         set({ tape: rows, note });

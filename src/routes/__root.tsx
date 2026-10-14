@@ -1,6 +1,7 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
+import { SolanaWalletProvider } from "@/components/wallet-modal";
 import { Frame } from "@/components/frame";
 import appCss from "../styles.css?url";
 
@@ -37,9 +38,11 @@ export const Route = createRootRoute({
       <body suppressHydrationWarning>
         <PreviewHostBridge />
         <AuthProvider>
-          <Frame>
-            <Outlet />
-          </Frame>
+          <SolanaWalletProvider>
+            <Frame>
+              <Outlet />
+            </Frame>
+          </SolanaWalletProvider>
         </AuthProvider>
         <Scripts />
       </body>

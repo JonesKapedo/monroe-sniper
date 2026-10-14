@@ -33,9 +33,9 @@ import {
 import { useDesk } from "@/lib/desk-store";
 import { loadFeeds } from "@/lib/market.functions";
 import { Button, Card, Label } from "@/components/ui";
-import { Money } from "@/components/money";
+import { WalletButton } from "@/components/wallet-modal";
+import { Money, capitalMoodClass } from "@/components/money";
 import { cn } from "@/lib/cn";
-import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 
 const money = (n: number) =>
@@ -87,7 +87,6 @@ export function Desk() {
   const [filterVenue, setFilterVenue] = useState<"all" | "binance" | "dex">("all");
   const [avenueFilter, setAvenueFilter] = useState<"ALL" | AvenueCategory>("ALL");
   const [showReadinessModal, setShowReadinessModal] = useState(false);
-  const [showLiveModal, setShowLiveModal] = useState(false);
   const [showStandbyModal, setShowStandbyModal] = useState(false);
 
   // Live ticking clock for Nairobi EAT
@@ -208,13 +207,7 @@ export function Desk() {
             >
               Paper trading
             </button>
-            <button
-              type="button"
-              onClick={() => setShowLiveModal(true)}
-              className="rounded-lg px-3 py-1.5 text-xs font-semibold text-faint transition-colors hover:text-cream"
-            >
-              Live unavailable
-            </button>
+            <WalletButton compact />
           </div>
 
           {/* Arm / Disarm Bot */}
@@ -352,7 +345,7 @@ export function Desk() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard
           label={`${mode.toUpperCase()} EQUITY`}
-          value={<Money value={eq} kind="balance" className="text-lg font-bold sm:text-xl" />}
+          value={<Money value={eq} kind="balance" className={`text-lg font-bold sm:text-xl ${capitalMoodClass(book.dayPnl)}`} />}
           sub="Paper balance"
         />
         <StatCard
@@ -363,7 +356,7 @@ export function Desk() {
         />
         <StatCard
           label="AVAILABLE CASH"
-          value={<Money value={book.cash} kind="balance" className="text-lg font-bold sm:text-xl" />}
+          value={<Money value={book.cash} kind="balance" className={`text-lg font-bold sm:text-xl ${capitalMoodClass(book.dayPnl)}`} />}
           sub={`Risk cap: ${money(eq * 0.6)}`}
         />
         <StatCard
@@ -373,7 +366,7 @@ export function Desk() {
         />
         <StatCard
           label="OPEN RISK"
-          value={<Money value={exp} kind="balance" className="text-lg font-bold sm:text-xl" />}
+          value={<Money value={exp} kind="balance" className={`text-lg font-bold sm:text-xl ${capitalMoodClass(book.dayPnl)}`} />}
           sub={`${book.positions.length}/3 positions held`}
         />
         <StatCard
@@ -1099,11 +1092,6 @@ export function Desk() {
         </div>
       )}
 
-      {/* Live Mode Transition Modal */}
-      <LiveModeTransitionModal
-        isOpen={showLiveModal}
-        onClose={() => setShowLiveModal(false)}
-      />
       <StandbyPositionsModal
         isOpen={showStandbyModal}
         onClose={() => setShowStandbyModal(false)}

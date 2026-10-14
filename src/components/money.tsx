@@ -11,6 +11,19 @@ function format(value: number, kind: "delta" | "balance", decimals: number): str
   return `$${body}`;
 }
 
+export type CapitalMood = "win" | "loss" | "flat";
+
+/** Standing capital mood from the bot's day trend: blue flat, green win, red loss. */
+export function capitalMood(dayPnl: number): CapitalMood {
+  if (!Number.isFinite(dayPnl) || dayPnl === 0) return "flat";
+  return dayPnl > 0 ? "win" : "loss";
+}
+
+export function capitalMoodClass(dayPnl: number): string {
+  const mood = capitalMood(dayPnl);
+  return mood === "win" ? "text-gain" : mood === "loss" ? "text-loss" : "text-sky-400";
+}
+
 /**
  * Money with a pulse: delta values carry sign color + trend icon, balances
  * flash on every move so a live book visibly breathes.

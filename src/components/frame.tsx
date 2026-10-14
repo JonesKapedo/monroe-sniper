@@ -25,10 +25,10 @@ import { LoginView } from "@/components/login-view";
 import { useDyorStore } from "@/lib/dyor/store";
 import { equity } from "@/lib/paper";
 import { Button } from "@/components/ui";
-import { Money } from "@/components/money";
+import { WalletButton, WalletModal } from "@/components/wallet-modal";
+import { Money, capitalMoodClass } from "@/components/money";
 import { Mascot } from "@/components/mascot";
 import { defaultSettings } from "@/lib/sniper/types";
-import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 import { getDbHealth, getTradeLearningEvents } from "@/lib/trade-memory.functions";
 
@@ -269,7 +269,6 @@ function Shell({ children }: { children: ReactNode }) {
   const turboRunning = useDesk((s) => s.turboPhase) === "running";
   const nairobi = formatNairobiTime(botStartedAt, nowTs);
   const readiness = getReadiness ? getReadiness() : null;
-  const [showLiveModal, setShowLiveModal] = useState(false);
   const [showStandbyModal, setShowStandbyModal] = useState(false);
   const requestStandby = () => {
     if (!power) {
@@ -428,17 +427,7 @@ function Shell({ children }: { children: ReactNode }) {
                 </span>
                 <span className="hidden sm:inline">Paper</span>
               </button>
-              <button
-                type="button"
-                aria-label="Live trading unavailable. View connection status."
-                onClick={() => setShowLiveModal(true)}
-                className="min-h-11 rounded-full px-2 py-1 text-[11px] font-medium text-faint transition-colors hover:text-cream sm:px-2.5 sm:text-xs"
-              >
-                <span className="sm:hidden" aria-hidden="true">
-                  Live off
-                </span>
-                <span className="hidden sm:inline">Live unavailable</span>
-              </button>
+              <WalletButton compact />
             </div>
 
             {/* Active Equity Display */}
@@ -446,7 +435,7 @@ function Shell({ children }: { children: ReactNode }) {
               <span className="text-[10px] tracking-wider text-faint uppercase">
                 Paper balance:
               </span>{" "}
-              <Money value={activeEq} kind="balance" className="text-sm font-semibold" />
+              <Money value={activeEq} kind="balance" className={`text-sm font-semibold ${capitalMoodClass(activeBook.dayPnl)}`} />
             </div>
             <DbBadge />
 
@@ -514,7 +503,7 @@ function Shell({ children }: { children: ReactNode }) {
           {locked ? <LockScreen /> : children}
         </main>
 
-        <LiveModeTransitionModal isOpen={showLiveModal} onClose={() => setShowLiveModal(false)} />
+        <WalletModal />
         <StandbyPositionsModal
           isOpen={showStandbyModal}
           onClose={() => setShowStandbyModal(false)}
