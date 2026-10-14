@@ -6,6 +6,41 @@ import type {
 } from "./types";
 import type { Book } from "../paper";
 import { equity, DEMO_START } from "../paper";
+import { funding8hRate, fundingAprPct, type PerpFunding } from "../perps/hyperliquid";
+
+function normCoin(symbol: string): string {
+  return symbol
+    .toUpperCase()
+    .replace(/^[0-9]+/, "")
+    .replace(/^K(?=[A-Z]{2,})/, "");
+}
+
+/**
+ * Overwrite synthetic perp quotes with live Hyperliquid funding and marks.
+ * Rows that match nothing keep clearly-labeled playbook values.
+ */
+export function hydrateAvenuesWithFunding(
+  avenues: AvenueOpportunity[],
+  rows: PerpFunding[],
+): AvenueOpportunity[] {
+  if (!rows.length) return avenues;
+  const byCoin = new Map(rows.map((r) => [normCoin(r.coin), r]));
+  return avenues.map((a) => {
+    if (a.category !== "PERPS") return a;
+    const base = normCoin(a.symbol.split("-")[0]);
+    const row = byCoin.get(base);
+    if (!row) return a;
+    const rate8h = funding8hRate(row.funding1h);
+    const apr = fundingAprPct(row.funding1h);
+    return {
+      ...a,
+      priceA: row.markPx ?? a.priceA,
+      fundingRate8h: rate8h ?? a.fundingRate8h,
+      fundingApr: apr ?? a.fundingApr,
+      liveData: true,
+    };
+  });
+}
 
 export const defaultDisciplineRules: DisciplineRules = {
   maxDailyDrawdownPct: 0.03, // 3.0% max daily drawdown circuit breaker

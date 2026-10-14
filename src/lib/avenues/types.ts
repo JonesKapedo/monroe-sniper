@@ -44,6 +44,8 @@ export interface AvenueOpportunity {
   // Live-price anchor: base symbol on the market tape whose quote marks this
   // avenue's positions. Absent for synthetic launches (they drift simulated).
   anchorSymbol?: string;
+  /** True when quotes were hydrated from a live feed (else playbook values). */
+  liveData?: boolean;
 }
 
 export interface DisciplineRules {

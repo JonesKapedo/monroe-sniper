@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useFeedHealth } from "@/lib/feeds/status";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
-import { scanAllAvenues } from "@/lib/avenues/engine";
+import { scanAllAvenues, hydrateAvenuesWithFunding } from "@/lib/avenues/engine";
 import type { AvenueCategory, AvenueOpportunity } from "@/lib/avenues/types";
 import {
   equity,
@@ -103,7 +103,8 @@ export function Desk() {
   const exp = exposure(book);
   const wins = book.trades.filter((t) => t.pnl > 0).length;
   const hitRate = book.trades.length > 0 ? (wins / book.trades.length) * 100 : 0;
-  const avenues = scanAllAvenues(book, disciplineRules, nowTs);
+  const perpFunding = useDesk((s) => s.perpFunding);
+  const avenues = hydrateAvenuesWithFunding(scanAllAvenues(book, disciplineRules, nowTs), perpFunding);
 
   const scan = useCallback(async (q: string) => {
     setBusy(true);
@@ -525,6 +526,17 @@ export function Desk() {
                             {opp.category}
                           </span>
                           <span className="text-[10px] text-faint">({opp.chain})</span>
+                          <span
+                            className={cn(
+                              "rounded px-1.5 py-0.5 text-[9px] font-bold uppercase",
+                              opp.liveData
+                                ? "bg-gain/20 text-gain"
+                                : "bg-panel-2 text-faint",
+                            )}
+                            title={opp.liveData ? "Live Hyperliquid funding" : "Simulated playbook values"}
+                          >
+                            {opp.liveData ? "Live" : "Playbook"}
+                          </span>
                         </div>
                         <p className="mt-0.5 text-xs font-medium text-cream">{opp.title}</p>
                       </div>

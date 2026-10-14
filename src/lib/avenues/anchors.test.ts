@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { avenueAnchorPrice, avenueAnchors } from "./engine.ts";
+import { avenueAnchorPrice, avenueAnchors, hydrateAvenuesWithFunding, scanAllAvenues } from "./engine.ts";
 import { emptyBook } from "../paper.ts";
 
 const tape = [
@@ -29,5 +29,21 @@ describe("avenue anchors", () => {
     // Synthetic launches stay anchorless (simulated drift).
     assert.ok(!anchors.has("ipo-pump-grad-sol"));
     assert.ok(!anchors.has("ipo-base-fairlaunch"));
+  });
+
+  it("hydrates perp quotes with live funding and flags them", () => {
+    const avenues = scanAllAvenues(emptyBook());
+    const before = avenues.find((a) => a.id === "perp-sol-funding");
+    const hydrated = hydrateAvenuesWithFunding(avenues, [
+      { coin: "SOL", markPx: 190.5, funding1h: 0.00001, openInterest: 1000 },
+    ]);
+    const sol = hydrated.find((a) => a.id === "perp-sol-funding");
+    assert.equal(sol?.priceA, 190.5);
+    assert.equal(sol?.fundingRate8h, 0.00008);
+    assert.equal(sol?.liveData, true);
+    assert.equal(before?.liveData, undefined);
+    // Non-perps and unmatched coins are untouched.
+    const arb = hydrated.find((a) => a.id === "arb-bonk-sol");
+    assert.equal(arb?.liveData, undefined);
   });
 });

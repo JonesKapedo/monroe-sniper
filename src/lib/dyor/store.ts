@@ -9,6 +9,7 @@ import type {
   MarketEvaluation,
 } from "./types";
 import type { Candidate } from "../paper";
+import type { SecurityReport } from "../data/market-sources";
 
 export type DyorState = {
   instruments: EvaluatedInstrument[];
@@ -31,11 +32,18 @@ export type DyorState = {
   // Multi-source scanning & ingestion from live tape/candidates
   ingestCandidate: (candidate: Candidate) => void;
   runDeepEvaluation: (id: string) => void;
+  /** Replace heuristic checks with a real dual-provider security report. */
+  attachSecurity: (id: string, report: SecurityReport) => void;
   triggerGlobalScan: () => void;
 
-  // Profile integrations
-  connectProfile: (provider: ConnectedProfile["provider"], username: string) => void;
+  // Profile integrations (all verified live — no hardcoded connections)
+  stageCredential: (provider: ConnectedProfile["provider"], secret: string, extra?: { chatId?: string; feedUrl?: string }) => void;
+  verifyConnection: (provider: ConnectedProfile["provider"]) => Promise<{ ok: boolean; note: string }>;
   disconnectProfile: (provider: ConnectedProfile["provider"]) => void;
+  /** Pull real X mentions + LunarCrush socials into an instrument's panel. */
+  pullLiveSocials: (id: string) => Promise<{ ok: boolean; note: string }>;
+  /** Verified Telegram bot credentials for trade alerts (browser only). */
+  telegramCreds: () => { token: string; chatId: string } | null;
 
   // Quick reset
   resetDyorCatalog: () => void;
@@ -351,44 +359,67 @@ const INITIAL_PROFILES: ConnectedProfile[] = [
   {
     id: "prof-twitter",
     provider: "X_TWITTER",
-    username: "@MonroeSniperDesk",
-    displayName: "Monroe Alpha Scout",
-    connected: true,
-    connectedAt: Date.now() - 86400000 * 14,
-    scopes: ["tweet.read", "users.read", "follows.read", "search.recent"],
-    syncStatus: "ACTIVE",
-    rateLimitRemaining: 440,
+    username: "",
+    displayName: "X Mentions (bring your own bearer token)",
+    connected: false,
+    scopes: ["search.recent"],
+    syncStatus: "IDLE",
+    rateLimitRemaining: null,
+    verified: false,
+    verifiedAt: null,
+    lastCheckNote: "Needs your X API bearer token — verified live via users/me.",
   },
   {
     id: "prof-decrypt",
     provider: "DECRYPT",
-    username: "decrypt_feed_api",
-    displayName: "Decrypt Wire Newsfeed",
-    connected: true,
-    connectedAt: Date.now() - 86400000 * 5,
-    scopes: ["articles.read", "breaking_news.stream", "market_editorial"],
-    syncStatus: "ACTIVE",
-    rateLimitRemaining: 980,
+    username: "decrypt-builtin-wire",
+    displayName: "Decrypt Wire (built-in, no key)",
+    connected: false,
+    scopes: ["headlines.read"],
+    syncStatus: "IDLE",
+    rateLimitRemaining: null,
+    verified: false,
+    verifiedAt: null,
+    lastCheckNote: "Free RSS wire — verify checks it is reachable right now.",
   },
   {
     id: "prof-telegram",
     provider: "TELEGRAM",
-    username: "@sniper_alpha_signals",
-    displayName: "Telegram Alpha Channels",
+    username: "",
+    displayName: "Telegram Alerts (free bot)",
     connected: false,
-    scopes: ["channels.read", "messages.read"],
+    scopes: ["alerts.send"],
     syncStatus: "IDLE",
-    rateLimitRemaining: 1000,
+    rateLimitRemaining: null,
+    verified: false,
+    verifiedAt: null,
+    lastCheckNote: "Create a bot in BotFather, verify it, get trade alerts.",
   },
   {
     id: "prof-lunarcrush",
     provider: "LUNARCRUSH",
-    username: "lunarcrush_social_v3",
-    displayName: "LunarCrush Social Metrics",
+    username: "",
+    displayName: "LunarCrush Social (free API key)",
     connected: false,
-    scopes: ["social_score.read", "influencer_sentiment.read"],
+    scopes: ["social.read"],
     syncStatus: "IDLE",
-    rateLimitRemaining: 500,
+    rateLimitRemaining: null,
+    verified: false,
+    verifiedAt: null,
+    lastCheckNote: "Free key from lunarcrush.com — verified live before use.",
+  },
+  {
+    id: "prof-rss",
+    provider: "RSS_FEED",
+    username: "",
+    displayName: "Custom RSS Wire (any feed URL)",
+    connected: false,
+    scopes: ["headlines.read"],
+    syncStatus: "IDLE",
+    rateLimitRemaining: null,
+    verified: false,
+    verifiedAt: null,
+    lastCheckNote: "Paste any RSS/Atom URL — verified by fetching it now.",
   },
 ];
 
@@ -472,7 +503,7 @@ export const useDyorStore = create<DyorState>()(
 
         const newHoneypotChecks: HoneypotCheck[] = [
           {
-            source: "GoPlus Security Engine",
+            source: "Heuristic pre-screen (unverified — run Search for a real audit)",
             isHoneypot: isSuspicious,
             buyTaxPct: isSuspicious ? 15 : 0,
             sellTaxPct: isSuspicious ? 99 : 0.5,
@@ -490,7 +521,7 @@ export const useDyorStore = create<DyorState>()(
               : "Standard audited contract bytecode. No malicious freeze or blacklist functions.",
           },
           {
-            source: "RugCheck V2 Sentinel",
+            source: "Heuristic liquidity screen (unverified — run Search for a real audit)",
             isHoneypot: isSuspicious,
             buyTaxPct: 0,
             sellTaxPct: isSuspicious ? 99 : 0,
@@ -634,6 +665,74 @@ export const useDyorStore = create<DyorState>()(
         }, 1200);
       },
 
+      attachSecurity: (id, report) => {
+        const pct = (v: number | null) => (v === null ? 0 : Math.round(v * 1000) / 10);
+        const hardReject =
+          report.honeypot === true ||
+          report.ownerCanMint === true ||
+          report.ownerCanFreeze === true ||
+          report.lpLocked === false ||
+          (report.buyTax ?? 0) > 0.15 ||
+          (report.sellTax ?? 0) > 0.15;
+        const score = report.verified ? 95 : 20;
+        const checks: HoneypotCheck[] = [
+          {
+            source: `GoPlus live audit (${report.providers.includes("GoPlus") ? "responded" : "no data"})`,
+            isHoneypot: report.honeypot === true,
+            buyTaxPct: pct(report.buyTax),
+            sellTaxPct: pct(report.sellTax),
+            transferTaxPct: 0,
+            isMintable: report.ownerCanMint === true,
+            isProxy: false,
+            ownerCanBlacklist: report.ownerCanFreeze === true,
+            canRenounce: report.ownerCanMint === false,
+            liquidityLockedPct: report.lpLocked === true ? 100 : report.lpLocked === false ? 0 : 50,
+            lockDurationDays: 0,
+            score,
+            verdict: report.verified ? "SAFE" : hardReject ? "HONEYPOT_RISK" : "UNVERIFIED",
+            details: report.details.length
+              ? `Live findings: ${report.details.join("; ")}`
+              : "Live audit returned no adverse findings, but evidence is incomplete.",
+          },
+          {
+            source: `honeypot.is live simulation (${report.providers.includes("honeypot.is") ? "responded" : "no data"})`,
+            isHoneypot: report.honeypot === true,
+            buyTaxPct: pct(report.buyTax),
+            sellTaxPct: pct(report.sellTax),
+            transferTaxPct: 0,
+            isMintable: false,
+            isProxy: false,
+            ownerCanBlacklist: report.ownerCanFreeze === true,
+            canRenounce: true,
+            liquidityLockedPct: report.lpLocked === true ? 100 : 0,
+            lockDurationDays: 0,
+            score,
+            verdict: report.verified ? "SAFE" : hardReject ? "HONEYPOT_RISK" : "UNVERIFIED",
+            details:
+              report.honeypot === true
+                ? "Live simulation flags this contract as a honeypot."
+                : "Live simulation results reflected in taxes and flags above.",
+          },
+        ];
+        set((state) => ({
+          instruments: state.instruments.map((inst) =>
+            inst.id === id
+              ? {
+                  ...inst,
+                  honeypotMultiSource: checks,
+                  overallSafetyScore: Math.round(checks.reduce((a, c) => a + c.score, 0) / checks.length),
+                  overallConfidence: report.verified ? 90 : 40,
+                  status: hardReject && inst.status !== "SAVED" ? "BLACKLISTED" : inst.status,
+                  autoBlacklistedReason: hardReject
+                    ? "Live audit hard reject (honeypot, mint/freeze authority, unlocked LP, or >15% tax)"
+                    : inst.autoBlacklistedReason,
+                  updatedAt: Date.now(),
+                }
+              : inst,
+          ),
+        }));
+      },
+
       triggerGlobalScan: () => {
         set({ isScanning: true });
         setTimeout(() => {
@@ -641,20 +740,90 @@ export const useDyorStore = create<DyorState>()(
         }, 1500);
       },
 
-      connectProfile: (provider, username) => {
+      stageCredential: (provider, secret, extra) => {
         set((state) => ({
           connectedProfiles: state.connectedProfiles.map((p) =>
             p.provider === provider
               ? {
                   ...p,
-                  connected: true,
-                  username,
-                  connectedAt: Date.now(),
-                  syncStatus: "ACTIVE",
+                  secret,
+                  chatId: extra?.chatId ?? p.chatId,
+                  feedUrl: extra?.feedUrl ?? p.feedUrl,
+                  verified: false,
+                  connected: false,
+                  syncStatus: "IDLE" as const,
+                  lastCheckNote: "Credential staged — verify to connect.",
                 }
               : p,
           ),
         }));
+      },
+
+      verifyConnection: async (provider) => {
+        const profile = get().connectedProfiles.find((p) => p.provider === provider);
+        if (!profile) return { ok: false, note: "Unknown provider" };
+        set((state) => ({
+          connectedProfiles: state.connectedProfiles.map((p) =>
+            p.provider === provider ? { ...p, syncStatus: "IDLE" as const, lastCheckNote: "Verifying live…" } : p,
+          ),
+        }));
+        try {
+          const mod = await import("../integrations.functions");
+          let ok = false;
+          let note = "";
+          let username = profile.username;
+          if (provider === "X_TWITTER") {
+            const res = await mod.verifyXToken({ data: { token: profile.secret ?? "" } });
+            ok = res.ok;
+            note = res.note;
+            if (res.username) username = res.username;
+          } else if (provider === "TELEGRAM") {
+            const res = await mod.verifyTelegramBot({ data: { token: profile.secret ?? "" } });
+            ok = res.ok;
+            note = res.note;
+            if (res.username) username = res.username;
+          } else if (provider === "LUNARCRUSH") {
+            const res = await mod.verifyLunarcrushKey({ data: { key: profile.secret ?? "" } });
+            ok = res.ok;
+            note = res.note;
+          } else if (provider === "RSS_FEED") {
+            const res = await mod.verifyRssFeed({ data: { url: profile.feedUrl ?? "" } });
+            ok = res.ok;
+            note = res.note;
+          } else if (provider === "DECRYPT") {
+            const res = await mod.loadNewsWire();
+            ok = res.items.length > 0;
+            note = ok ? `Built-in wire reachable — ${res.items.length} live headlines` : "Decrypt wire unreachable right now";
+          } else {
+            return { ok: false, note: "Discord bots are not supported — use Telegram instead" };
+          }
+          const now = Date.now();
+          set((state) => ({
+            connectedProfiles: state.connectedProfiles.map((p) =>
+              p.provider === provider
+                ? {
+                    ...p,
+                    verified: ok,
+                    connected: ok,
+                    username,
+                    verifiedAt: ok ? now : p.verifiedAt,
+                    connectedAt: ok ? now : p.connectedAt,
+                    syncStatus: ok ? ("ACTIVE" as const) : ("ERROR" as const),
+                    lastCheckNote: note,
+                  }
+                : p,
+            ),
+          }));
+          return { ok, note };
+        } catch (error) {
+          const note = error instanceof Error ? error.message : "Verification failed";
+          set((state) => ({
+            connectedProfiles: state.connectedProfiles.map((p) =>
+              p.provider === provider ? { ...p, verified: false, connected: false, syncStatus: "ERROR" as const, lastCheckNote: note } : p,
+            ),
+          }));
+          return { ok: false, note };
+        }
       },
 
       disconnectProfile: (provider) => {
@@ -663,12 +832,95 @@ export const useDyorStore = create<DyorState>()(
             p.provider === provider
               ? {
                   ...p,
+                  verified: false,
                   connected: false,
-                  syncStatus: "IDLE",
+                  secret: undefined,
+                  chatId: undefined,
+                  syncStatus: "IDLE" as const,
+                  lastCheckNote: "Disconnected — credential cleared from this browser.",
                 }
               : p,
           ),
         }));
+      },
+
+      pullLiveSocials: async (id) => {
+        const state = get();
+        const inst = state.instruments.find((i) => i.id === id);
+        if (!inst) return { ok: false, note: "Instrument not found" };
+        const xProf = state.connectedProfiles.find((p) => p.provider === "X_TWITTER" && p.verified);
+        const lcProf = state.connectedProfiles.find((p) => p.provider === "LUNARCRUSH" && p.verified);
+        if (!xProf && !lcProf) {
+          return { ok: false, note: "Verify X or LunarCrush first — no live social source connected" };
+        }
+        try {
+          const mod = await import("../integrations.functions");
+          const scans: SocialScan[] = [];
+          const notes: string[] = [];
+          if (xProf?.secret) {
+            const res = await mod.fetchXSearch({ data: { token: xProf.secret, query: `$${inst.symbol}` } });
+            notes.push(res.note);
+            if (res.mentions.length) {
+              scans.push({
+                platform: "X_TWITTER",
+                handleOrQuery: `$${inst.symbol} · live sample of ${res.mentions.length}`,
+                followerCount: undefined,
+                mentionVelocity24h: res.mentions.length,
+                sentimentScore: 0,
+                sentimentLabel: "NEUTRAL",
+                verified: true,
+                organicEngagementRatio: 0.5,
+                recentHeadlines: res.mentions.map((m) => m.text).slice(0, 4),
+                lastScanTs: Date.now(),
+              });
+            }
+          }
+          if (lcProf?.secret) {
+            const res = await mod.fetchLunarSocial({ data: { key: lcProf.secret, symbol: inst.symbol } });
+            notes.push(res.note);
+            if (res.social) {
+              const s = res.social;
+              const sentimentScore =
+                s.sentimentPct === null ? 0 : s.sentimentPct >= 60 ? 0.6 : s.sentimentPct <= 40 ? -0.6 : 0;
+              scans.push({
+                platform: "X_TWITTER",
+                handleOrQuery: `${inst.symbol} · LunarCrush live`,
+                followerCount: s.socialContributors ?? undefined,
+                mentionVelocity24h: s.socialVolume24h ?? 0,
+                sentimentScore,
+                sentimentLabel: sentimentScore > 0 ? "BULLISH" : sentimentScore < 0 ? "BEARISH" : "NEUTRAL",
+                verified: true,
+                organicEngagementRatio: 0.7,
+                recentHeadlines: [
+                  `Galaxy Score ${s.galaxyScore ?? "—"} · Alt rank ${s.altRank ?? "—"} · 24h social volume ${(s.socialVolume24h ?? 0).toLocaleString()}`,
+                ],
+                lastScanTs: Date.now(),
+              });
+            }
+          }
+          if (!scans.length) return { ok: false, note: notes.join(" · ") || "No live social data returned" };
+          set((prev) => ({
+            instruments: prev.instruments.map((i) =>
+              i.id === id
+                ? {
+                    ...i,
+                    socialIntelligence: [...scans, ...i.socialIntelligence].slice(0, 6),
+                    overallConfidence: Math.min(98, i.overallConfidence + 3),
+                    updatedAt: Date.now(),
+                  }
+                : i,
+            ),
+          }));
+          return { ok: true, note: notes.join(" · ") };
+        } catch (error) {
+          return { ok: false, note: error instanceof Error ? error.message : "Live social pull failed" };
+        }
+      },
+
+      telegramCreds: () => {
+        const p = get().connectedProfiles.find((x) => x.provider === "TELEGRAM");
+        if (!p?.verified || !p.secret || !p.chatId) return null;
+        return { token: p.secret, chatId: p.chatId };
       },
 
       resetDyorCatalog: () => {
@@ -682,6 +934,25 @@ export const useDyorStore = create<DyorState>()(
     }),
     {
       name: "monroe_sniper_dyor_vault_v1",
+      version: 2,
+      // v2: connections must be verified live — drop any previously stored
+      // "connected" flags and fabricated limits from the hardcoded era.
+      migrate: (persisted: unknown) => {
+        const data = (persisted ?? {}) as Record<string, unknown>;
+        const profiles = Array.isArray(data.connectedProfiles) ? data.connectedProfiles : null;
+        if (!profiles) return data;
+        return {
+          ...data,
+          connectedProfiles: (profiles as ConnectedProfile[]).map((p) => ({
+            ...p,
+            verified: false,
+            connected: false,
+            syncStatus: "IDLE" as const,
+            rateLimitRemaining: null,
+            lastCheckNote: "Re-verify to reconnect — connections are now proven live.",
+          })),
+        };
+      },
       skipHydration: true,
       partialize: (state) => ({
         instruments: state.instruments,

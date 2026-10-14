@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ShieldAlert,
   ShieldCheck,
@@ -14,15 +14,169 @@ import {
   AlertTriangle,
   RotateCcw,
   Sparkles,
-  Link as LinkIcon,
   Unlink,
 } from "lucide-react";
 import { useDyorStore } from "@/lib/dyor/store";
+import type { ConnectedProfile } from "@/lib/dyor/types";
+import { loadNewsWire, type NewsItem } from "@/lib/integrations.functions";
 import { useDesk } from "@/lib/desk-store";
-import { searchInstruments } from "@/lib/market.functions";
+import { searchInstruments, verifyInstrument } from "@/lib/market.functions";
 import { getTradeLearningEvents } from "@/lib/trade-memory.functions";
+import { getCorpEvents, loadCorpEvents, type CorpEvent } from "@/lib/events.functions";
+import {
+  addWhaleWatch,
+  getWhaleMoves,
+  listWhaleWatches,
+  removeWhaleWatch,
+  setWhaleFollow,
+  type WhaleMoveRow,
+  type WhaleWatch,
+} from "@/lib/whales.functions";
 import { Card, Label, Button } from "@/components/ui";
 import { cn } from "@/lib/cn";
+
+function ProviderIcon({ provider }: { provider: ConnectedProfile["provider"] }) {
+  if (provider === "X_TWITTER") return <Twitter className="size-5 text-[#1DA1F2]" />;
+  if (provider === "TELEGRAM") return <Radio className="size-5 text-blue-400" />;
+  if (provider === "LUNARCRUSH") return <Sparkles className="size-5 text-purple-400" />;
+  if (provider === "RSS_FEED") return <Share2 className="size-5 text-emerald-400" />;
+  return <FileText className="size-5 text-brass" />;
+}
+
+/** One integration card with real credential fields and live verification. */
+function ProviderCard({ provider }: { provider: ConnectedProfile["provider"] }) {
+  const prof = useDyorStore((s) => s.connectedProfiles.find((p) => p.provider === provider));
+  const stageCredential = useDyorStore((s) => s.stageCredential);
+  const verifyConnection = useDyorStore((s) => s.verifyConnection);
+  const disconnectProfile = useDyorStore((s) => s.disconnectProfile);
+  const [secret, setSecret] = useState(prof?.secret ?? "");
+  const [chatId, setChatId] = useState(prof?.chatId ?? "");
+  const [feedUrl, setFeedUrl] = useState(prof?.feedUrl ?? "");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  if (!prof) return null;
+
+  const needsSecret = provider === "X_TWITTER" || provider === "TELEGRAM" || provider === "LUNARCRUSH";
+  const secretLabel =
+    provider === "X_TWITTER" ? "X bearer token" : provider === "TELEGRAM" ? "Bot token (BotFather)" : "API key (lunarcrush.com)";
+  const canVerify =
+    provider === "DECRYPT" ||
+    (provider === "RSS_FEED" && feedUrl.trim().length > 8) ||
+    (needsSecret && secret.trim().length > 4);
+
+  const onVerify = () => {
+    setBusy(true);
+    setNote(null);
+    stageCredential(provider, secret.trim(), {
+      chatId: chatId.trim() || undefined,
+      feedUrl: feedUrl.trim() || undefined,
+    });
+    verifyConnection(provider)
+      .then((res) => setNote(res.note))
+      .catch((error: unknown) => setNote(error instanceof Error ? error.message : "Verification failed"))
+      .finally(() => setBusy(false));
+  };
+
+  const status = prof.verified && prof.connected ? "verified" : prof.syncStatus === "ERROR" ? "failed" : "off";
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col justify-between rounded-xl border p-4 transition",
+        status === "verified" ? "border-gain/40 bg-gain/5" : status === "failed" ? "border-loss/40 bg-loss/5" : "border-line bg-panel-2",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-3">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-panel border border-line">
+            <ProviderIcon provider={provider} />
+          </div>
+          <div>
+            <h3 className="font-bold text-sm text-cream">{prof.displayName}</h3>
+            <p className="font-mono text-xs text-faint">{prof.username || "Not linked"}</p>
+          </div>
+        </div>
+        <span
+          className={cn(
+            "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase",
+            status === "verified" && "bg-gain/20 text-gain border border-gain/40",
+            status === "failed" && "bg-loss/20 text-loss border border-loss/40",
+            status === "off" && "bg-panel text-faint border border-line",
+          )}
+        >
+          {status === "verified" ? "Verified live" : status === "failed" ? "Failed" : "Disconnected"}
+        </span>
+      </div>
+
+      <p className="mt-2 text-[11px] text-faint">{prof.lastCheckNote ?? note ?? "No live check yet."}</p>
+      {note && <p className="mt-1 text-[11px] text-brass" aria-live="polite">{note}</p>}
+
+      {provider === "DISCORD" ? (
+        <p className="mt-3 rounded-lg border border-line p-2.5 text-[11px] text-faint">
+          Discord bots are not supported — Telegram covers alerts and wires.
+        </p>
+      ) : (
+        <div className="mt-3 flex flex-col gap-2">
+          {needsSecret && (
+            <input
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              placeholder={secretLabel}
+              autoComplete="off"
+              className="field h-10 rounded-lg border border-line bg-panel px-3 font-mono text-xs text-cream outline-none focus:border-brass"
+            />
+          )}
+          {provider === "TELEGRAM" && (
+            <input
+              value={chatId}
+              onChange={(e) => setChatId(e.target.value)}
+              placeholder="Chat ID (message the bot first, then paste the numeric id)"
+              inputMode="numeric"
+              className="field h-10 rounded-lg border border-line bg-panel px-3 font-mono text-xs text-cream outline-none focus:border-brass"
+            />
+          )}
+          {provider === "RSS_FEED" && (
+            <input
+              value={feedUrl}
+              onChange={(e) => setFeedUrl(e.target.value)}
+              placeholder="https://…/feed (RSS or Atom)"
+              inputMode="url"
+              className="field h-10 rounded-lg border border-line bg-panel px-3 font-mono text-xs text-cream outline-none focus:border-brass"
+            />
+          )}
+          <div className="flex gap-2">
+            <Button
+              variant={status === "verified" ? "ghost" : "solid"}
+              onClick={onVerify}
+              disabled={busy || !canVerify}
+              className="h-9 flex-1 text-xs font-semibold"
+            >
+              {busy ? "Verifying live…" : status === "verified" ? "Re-verify" : provider === "DECRYPT" ? "Verify wire" : "Verify & connect"}
+            </Button>
+            {(status === "verified" || prof.secret) && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  disconnectProfile(provider);
+                  setSecret("");
+                  setNote("Disconnected — credential cleared from this browser.");
+                }}
+                className="h-9 border border-line px-3 text-xs text-loss hover:bg-loss/10"
+                title="Disconnect and clear the stored credential"
+              >
+                <Unlink className="size-3.5" />
+              </Button>
+            )}
+          </div>
+          {provider === "TELEGRAM" && status === "verified" && (
+            <p className="text-[11px] text-gain">Trade entries and closes will arrive as Telegram alerts.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function LearnView() {
   const instruments = useDyorStore((s) => s.instruments);
@@ -38,9 +192,9 @@ export function LearnView() {
   const saveInstrument = useDyorStore((s) => s.saveInstrument);
   const blacklistInstrument = useDyorStore((s) => s.blacklistInstrument);
   const runDeepEvaluation = useDyorStore((s) => s.runDeepEvaluation);
+  const pullLiveSocials = useDyorStore((s) => s.pullLiveSocials);
   const triggerGlobalScan = useDyorStore((s) => s.triggerGlobalScan);
-  const connectProfile = useDyorStore((s) => s.connectProfile);
-  const disconnectProfile = useDyorStore((s) => s.disconnectProfile);
+
   const resetCatalog = useDyorStore((s) => s.resetDyorCatalog);
 
   // Desk state integration
@@ -71,8 +225,21 @@ export function LearnView() {
       if (first) {
         api.setSelectedInstrument(first.id);
         api.runDeepEvaluation(first.id);
+        // Replace heuristic checks with a real dual-provider audit.
+        try {
+          const audit = await verifyInstrument({ data: { chain: first.chain, address: first.address } });
+          if (audit.security) {
+            api.attachSecurity(first.id, audit.security);
+            setGlobalNote(`${res.note} · ${audit.note}`);
+          } else {
+            setGlobalNote(`${res.note} · Security: ${audit.note}`);
+          }
+        } catch {
+          setGlobalNote(res.note);
+        }
+      } else {
+        setGlobalNote(res.note);
       }
-      setGlobalNote(res.note);
     } catch {
       setGlobalNote("Search failed — public feeds may be rate-limited. Try again shortly.");
     } finally {
@@ -100,9 +267,114 @@ export function LearnView() {
   };
 
   // Modals / forms
-  const [activeTab, setActiveTab] = useState<"INSTRUMENTS" | "INTEGRATIONS" | "INTELLIGENCE">("INSTRUMENTS");
-  const [connectModalProvider, setConnectModalProvider] = useState<string | null>(null);
-  const [profileInputHandle, setProfileInputHandle] = useState("");
+  const [activeTab, setActiveTab] = useState<"INSTRUMENTS" | "INTEGRATIONS" | "INTELLIGENCE" | "WHALES">("INSTRUMENTS");
+
+  // Event radar (corporate intelligence)
+  const [corpEvents, setCorpEvents] = useState<CorpEvent[]>([]);
+  const [corpNote, setCorpNote] = useState<string | null>(null);
+  const [corpBusy, setCorpBusy] = useState(false);
+  const refreshEvents = useCallback(() => {
+    setCorpBusy(true);
+    loadCorpEvents({ data: { query: "merger", universe: [] } })
+      .then((res) => {
+        setCorpEvents(res.events);
+        useDesk.getState().setEventHalts(res.halts);
+        setCorpNote(res.note);
+      })
+      .catch(() => setCorpNote("Event radar unreachable — cached events shown."))
+      .finally(() => setCorpBusy(false));
+  }, []);
+  useEffect(() => {
+    getCorpEvents()
+      .then((res) => {
+        setCorpEvents(res.events);
+        useDesk.getState().setEventHalts(res.halts);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  // Whale watch
+  const [whales, setWhales] = useState<WhaleWatch[]>([]);
+  const [whaleMoves, setWhaleMoves] = useState<Record<string, WhaleMoveRow[]>>({});
+  const [whaleAddr, setWhaleAddr] = useState("");
+  const [whaleLabel, setWhaleLabel] = useState("");
+  const [whaleMin, setWhaleMin] = useState("25000");
+  const [whaleNote, setWhaleNote] = useState<string | null>(null);
+  const [whaleBusy, setWhaleBusy] = useState(false);
+  const [socialNote, setSocialNote] = useState<string | null>(null);
+  const refreshWhales = useCallback(() => {
+    setWhaleBusy(true);
+    listWhaleWatches()
+      .then((res) => setWhales(res.watches))
+      .catch(() => undefined)
+      .finally(() => setWhaleBusy(false));
+  }, []);
+  useEffect(() => {
+    refreshWhales();
+  }, [refreshWhales]);
+  const loadMoves = useCallback((wallet: string) => {
+    getWhaleMoves({ data: { wallet, limit: 10 } })
+      .then((res) => setWhaleMoves((prev) => ({ ...prev, [wallet]: res.moves })))
+      .catch(() => undefined);
+  }, []);
+  const submitWhale = (e: React.FormEvent) => {
+    e.preventDefault();
+    setWhaleBusy(true);
+    setWhaleNote(null);
+    addWhaleWatch({ data: { wallet: whaleAddr.trim(), label: whaleLabel.trim(), minUsd: Number(whaleMin) || 25000 } })
+      .then((res) => {
+        setWhaleNote(res.note);
+        if (res.watch) {
+          setWhales((prev) => [res.watch as WhaleWatch, ...prev.filter((w) => w.wallet !== (res.watch as WhaleWatch).wallet)]);
+          setWhaleAddr("");
+          setWhaleLabel("");
+        }
+      })
+      .catch(() => setWhaleNote("Could not add wallet — database link required."))
+      .finally(() => setWhaleBusy(false));
+  };
+
+  // Live news wires
+  const [wireItems, setWireItems] = useState<NewsItem[]>([]);
+  const [wireNote, setWireNote] = useState<string | null>(null);
+  const [wireBusy, setWireBusy] = useState(false);
+  const refreshWire = useCallback(() => {
+    setWireBusy(true);
+    loadNewsWire()
+      .then((res) => {
+        setWireItems(res.items);
+        setWireNote(res.note);
+      })
+      .catch(() => setWireNote("News wires unreachable right now."))
+      .finally(() => setWireBusy(false));
+  }, []);
+  useEffect(() => {
+    if (activeTab === "INTEGRATIONS") refreshWire();
+  }, [activeTab, refreshWire]);
+
+  // Strategy attribution from persisted closes
+  const attribution = useMemo(() => {
+    const byVenue = new Map<string, { trades: number; wins: number; realized: number }>();
+    const bySymbol = new Map<string, { trades: number; realized: number }>();
+    for (const t of dbEvents) {
+      const v = byVenue.get(t.venue) ?? { trades: 0, wins: 0, realized: 0 };
+      v.trades += 1;
+      if (t.pnl > 0) v.wins += 1;
+      v.realized += t.pnl;
+      byVenue.set(t.venue, v);
+      const s = bySymbol.get(t.symbol) ?? { trades: 0, realized: 0 };
+      s.trades += 1;
+      s.realized += t.pnl;
+      bySymbol.set(t.symbol, s);
+    }
+    return {
+      venues: [...byVenue.entries()].map(([venue, s]) => ({ venue, ...s, winRate: s.trades ? (s.wins / s.trades) * 100 : 0 })),
+      topSymbols: [...bySymbol.entries()]
+        .map(([symbol, s]) => ({ symbol, ...s }))
+        .sort((a, b) => b.realized - a.realized)
+        .slice(0, 5),
+    };
+  }, [dbEvents]);
 
   const filteredInstruments = instruments.filter((inst) => {
     if (filterStatus !== "ALL" && inst.status !== filterStatus) return false;
@@ -291,6 +563,18 @@ export function LearnView() {
           )}
         >
           <Bookmark className="size-3.5" /> Evaluated Instruments ({instruments.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab("WHALES")}
+          className={cn(
+            "flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition",
+            activeTab === "WHALES"
+              ? "border-brass text-cream"
+              : "border-transparent text-faint hover:text-cream",
+          )}
+        >
+          <Radio className="size-3.5" /> Whale Watch ({whales.length})
         </button>
 
         <button
@@ -529,7 +813,25 @@ export function LearnView() {
                       <RefreshCw className={cn("mr-1.5 size-3.5", isScanning && "animate-spin")} />
                       Re-Audit
                     </Button>
+
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setSocialNote("Pulling live X + LunarCrush…");
+                        pullLiveSocials(selectedInst.id)
+                          .then((res) => setSocialNote(res.note))
+                          .catch(() => setSocialNote("Live social pull failed."));
+                      }}
+                      disabled={isScanning}
+                      className="text-xs text-brass"
+                      title="Requires verified X or LunarCrush in Integrations"
+                    >
+                      <Radio className="mr-1.5 size-3.5" /> Live socials
+                    </Button>
                   </div>
+                  {socialNote && (
+                    <p className="mt-2 text-[11px] text-faint" aria-live="polite">{socialNote}</p>
+                  )}
                 </div>
 
                 {/* Score Breakdown Bar */}
@@ -688,130 +990,177 @@ export function LearnView() {
         </div>
       )}
 
+      {/* Whale watch: legitimate wallets, every move analyzed */}
+      {activeTab === "WHALES" && (
+        <div className="flex flex-col gap-4">
+          <Card>
+            <div className="flex items-center justify-between border-b border-line pb-3">
+              <div>
+                <Label>Whale Watchlist</Label>
+                <p className="text-xs text-faint">
+                  Add Solana wallets you trust. Every move over the threshold is parsed, persisted,
+                  and — when the bot is armed — copied through the same risk gates as everything else.
+                </p>
+              </div>
+              <Button variant="ghost" onClick={refreshWhales} disabled={whaleBusy} className="text-xs">
+                <RefreshCw className={cn("mr-1.5 size-3.5", whaleBusy && "animate-spin")} />
+                Refresh
+              </Button>
+            </div>
+            <form onSubmit={submitWhale} className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_120px_auto]">
+              <input
+                value={whaleAddr}
+                onChange={(e) => setWhaleAddr(e.target.value)}
+                placeholder="Wallet address (base58)"
+                className="field h-10 rounded-lg border border-line bg-panel-2 px-3 font-mono text-xs text-cream outline-none focus:border-brass"
+              />
+              <input
+                value={whaleLabel}
+                onChange={(e) => setWhaleLabel(e.target.value)}
+                placeholder="Label (e.g. Smart LP)"
+                className="field h-10 rounded-lg border border-line bg-panel-2 px-3 text-xs text-cream outline-none focus:border-brass"
+              />
+              <input
+                value={whaleMin}
+                onChange={(e) => setWhaleMin(e.target.value)}
+                inputMode="numeric"
+                placeholder="Min $"
+                title="Minimum USD move to analyze"
+                className="field h-10 rounded-lg border border-line bg-panel-2 px-3 font-mono text-xs text-cream outline-none focus:border-brass"
+              />
+              <Button type="submit" variant="solid" disabled={whaleBusy || whaleAddr.trim().length < 32} className="h-10 text-xs font-semibold">
+                Watch
+              </Button>
+            </form>
+            {whaleNote && <p className="mt-2 text-xs text-brass" aria-live="polite">{whaleNote}</p>}
+            <div className="mt-3 flex flex-col gap-2">
+              {whales.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-line p-4 text-center text-xs text-faint">
+                  No wallets watched yet. Wallets are verified on-chain before they are saved — never paste an address you cannot vouch for.
+                </p>
+              ) : (
+                whales.map((w) => (
+                  <div key={w.wallet} className="rounded-lg border border-line bg-panel-2 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-cream">{w.label || `${w.wallet.slice(0, 8)}…`}</p>
+                        <p className="truncate font-mono text-[11px] text-faint">{w.wallet}</p>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="font-mono text-faint">≥${w.minUsd.toLocaleString()}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const follow = !w.follow;
+                            setWhales((prev) => prev.map((x) => (x.wallet === w.wallet ? { ...x, follow } : x)));
+                            setWhaleFollow({ data: { wallet: w.wallet, follow } }).catch(() => undefined);
+                          }}
+                          className={cn(
+                            "rounded-lg px-2.5 py-1 font-semibold",
+                            w.follow ? "bg-gain/20 text-gain" : "bg-panel text-faint border border-line",
+                          )}
+                          title={w.follow ? "Following — moves can trigger copy entries" : "Muted — moves are logged only"}
+                        >
+                          {w.follow ? "Following" : "Muted"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => loadMoves(w.wallet)}
+                          className="rounded-lg border border-line px-2.5 py-1 text-cream hover:bg-panel"
+                        >
+                          Moves
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            removeWhaleWatch({ data: { wallet: w.wallet } }).catch(() => undefined);
+                            setWhales((prev) => prev.filter((x) => x.wallet !== w.wallet));
+                          }}
+                          className="rounded-lg px-2 py-1 text-loss hover:bg-loss/10"
+                        >
+                          <Ban className="size-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    {(whaleMoves[w.wallet] ?? []).length > 0 && (
+                      <div className="mt-2 divide-y divide-line/40 border-t border-line/40 font-mono text-[11px]">
+                        {whaleMoves[w.wallet].slice(0, 6).map((m) => (
+                          <div key={m.signature} className="flex items-center justify-between gap-2 py-1.5">
+                            <span className={cn("font-bold", m.direction === "IN" ? "text-gain" : "text-loss")}>
+                              {m.direction} {m.symbol}
+                            </span>
+                            <span className="text-faint">
+                              {m.amount.toPrecision(4)} · ${m.usdEstimate.toLocaleString()}
+                              {m.acted ? " · copied" : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
       {/* Tab 2: Profile Connections & External Integrations */}
       {activeTab === "INTEGRATIONS" && (
         <div className="flex flex-col gap-5">
           <Card>
             <div className="flex items-center justify-between border-b border-line pb-3">
               <div>
-                <Label>External Social Profiles & Intelligence Integrations</Label>
+                <Label>Real Integrations — verified live, never hardcoded</Label>
                 <p className="text-xs text-faint">
-                  Connect your personal or bot social profiles on Twitter [X], Decrypt feeds, and Telegram channels. This gives Monroe live API access to track community sentiment, detect coordinated bot shills, and verify breaking team announcements.
+                  Bring your own keys. Each connection is proven with a live API round-trip before it
+                  counts — credentials stay in this browser and are never stored in any database.
                 </p>
               </div>
             </div>
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               {connectedProfiles.map((prof) => (
-                <div
-                  key={prof.id}
-                  className={cn(
-                    "flex flex-col justify-between rounded-xl border p-4 transition",
-                    prof.connected
-                      ? "border-gain/40 bg-gain/5"
-                      : "border-line bg-panel-2",
-                  )}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="flex size-10 items-center justify-center rounded-lg bg-panel border border-line">
-                        {prof.provider === "X_TWITTER" && <Twitter className="size-5 text-[#1DA1F2]" />}
-                        {prof.provider === "DECRYPT" && <FileText className="size-5 text-brass" />}
-                        {prof.provider === "TELEGRAM" && <Radio className="size-5 text-blue-400" />}
-                        {prof.provider === "LUNARCRUSH" && <Sparkles className="size-5 text-purple-400" />}
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-sm text-cream">{prof.displayName}</h3>
-                        <p className="font-mono text-xs text-faint">{prof.username}</p>
-                      </div>
-                    </div>
-
-                    <span
-                      className={cn(
-                        "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase",
-                        prof.connected
-                          ? "bg-gain/20 text-gain border border-gain/40"
-                          : "bg-panel text-faint border border-line",
-                      )}
-                    >
-                      {prof.connected ? "Connected" : "Disconnected"}
-                    </span>
-                  </div>
-
-                  <div className="mt-3 flex flex-col gap-1 border-t border-line/60 pt-3 text-xs text-faint">
-                    <div className="flex items-center justify-between font-mono text-[11px]">
-                      <span>Rate Limit Budget:</span>
-                      <strong className="text-cream">{prof.rateLimitRemaining} req/hr</strong>
-                    </div>
-                    <div className="flex items-center justify-between font-mono text-[11px]">
-                      <span>Granted Scopes:</span>
-                      <strong className="text-brass">{prof.scopes.length} API scopes</strong>
-                    </div>
-                  </div>
-
-                  <div className="mt-4">
-                    {prof.connected ? (
-                      <Button
-                        variant="ghost"
-                        onClick={() => disconnectProfile(prof.provider)}
-                        className="w-full text-xs text-loss hover:bg-loss/10 hover:text-loss border-line"
-                      >
-                        <Unlink className="mr-1.5 size-3.5" /> Disconnect Integration
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="solid"
-                        onClick={() => {
-                          setConnectModalProvider(prof.provider);
-                          setProfileInputHandle(prof.username || "@");
-                        }}
-                        className="w-full text-xs font-semibold"
-                      >
-                        <LinkIcon className="mr-1.5 size-3.5" /> Connect Account
-                      </Button>
-                    )}
-                  </div>
-                </div>
+                <ProviderCard key={prof.id} provider={prof.provider} />
               ))}
             </div>
           </Card>
 
-          {/* Decrypt Wire & Social Feeds Live Status */}
+          {/* Live news wires */}
           <Card>
             <div className="flex items-center justify-between border-b border-line pb-3">
               <div className="flex items-center gap-2">
                 <FileText className="size-4 text-brass" />
-                <Label>Decrypt Live Market Editorial Wire Stream</Label>
+                <Label>Live Crypto News Wires</Label>
               </div>
-              <span className="rounded bg-gain/20 px-2 py-0.5 text-[10px] font-bold text-gain">LIVE STREAMING</span>
+              <Button variant="ghost" onClick={refreshWire} disabled={wireBusy} className="text-xs">
+                <RefreshCw className={cn("mr-1.5 size-3.5", wireBusy && "animate-spin")} />
+                {wireBusy ? "Loading…" : "Refresh"}
+              </Button>
             </div>
 
             <div className="mt-3 flex flex-col gap-2">
-              <div className="rounded-lg border border-line bg-panel-2 p-3 text-xs">
-                <div className="flex items-center justify-between text-[11px] text-faint">
-                  <span>Source: Decrypt Breaking News API</span>
-                  <span>2 mins ago</span>
-                </div>
-                <h4 className="mt-1 font-semibold text-cream">
-                  SEC Commissioner Hints at Clearer Token Classification Guidelines for DEX Aggregators
-                </h4>
-                <p className="mt-1 text-faint">
-                  Regulatory clarity expected for automated market maker liquidity providers and on-chain routing engines.
+              {wireItems.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-line p-4 text-center text-xs text-faint">
+                  {wireNote ?? "No headlines yet — refresh to pull the live wires."}
                 </p>
-              </div>
-
-              <div className="rounded-lg border border-line bg-panel-2 p-3 text-xs">
-                <div className="flex items-center justify-between text-[11px] text-faint">
-                  <span>Source: Decrypt On-Chain Analysis</span>
-                  <span>14 mins ago</span>
-                </div>
-                <h4 className="mt-1 font-semibold text-cream">
-                  Solana Memecoin Deployments Surge 40%, but Over 92% Fail Honeypot Safety Audits
-                </h4>
-                <p className="mt-1 text-faint">
-                  Independent investigation highlights the necessity of multi-source contract verification and proxy simulation before automated trade entries.
-                </p>
-              </div>
+              ) : (
+                wireItems.map((item, idx) => (
+                  <div key={`${item.source}-${idx}`} className="rounded-lg border border-line bg-panel-2 p-3 text-xs">
+                    <div className="flex items-center justify-between text-[11px] text-faint">
+                      <span>Source: {item.source}</span>
+                      <span>{item.publishedAt ? new Date(item.publishedAt).toLocaleString() : ""}</span>
+                    </div>
+                    {item.link ? (
+                      <a href={item.link} target="_blank" rel="noreferrer" className="mt-1 block font-semibold text-cream hover:text-brass">
+                        {item.title} <ExternalLink className="ml-1 inline size-3" />
+                      </a>
+                    ) : (
+                      <h4 className="mt-1 font-semibold text-cream">{item.title}</h4>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           </Card>
         </div>
@@ -819,7 +1168,94 @@ export function LearnView() {
 
       {/* Tab 3: Intelligence Pipeline Architecture */}
       {activeTab === "INTELLIGENCE" && (
-        <div className="grid gap-5 lg:grid-cols-2">
+        <div className="flex flex-col gap-5">
+          {/* Event radar: M&A, IPOs, strikes, halts */}
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-3">
+              <div className="flex items-center gap-2">
+                <FileText className="size-4 text-brass" />
+                <Label>Event Radar — Mergers, IPOs, Strikes, Halts</Label>
+              </div>
+              <Button variant="ghost" onClick={refreshEvents} disabled={corpBusy} className="text-xs">
+                <RefreshCw className={cn("mr-1.5 size-3.5", corpBusy && "animate-spin")} />
+                {corpBusy ? "Sweeping…" : "Sweep now"}
+              </Button>
+            </div>
+            {corpNote && <p className="mt-2 text-[11px] text-faint">{corpNote}</p>}
+            <div className="mt-3 flex flex-col gap-2">
+              {corpEvents.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-line p-4 text-center text-xs text-faint">
+                  No corporate events persisted yet. Sweep pulls SEC 8-K filings and crypto newswires, classifies them, and HALT events veto new bot entries.
+                </p>
+              ) : (
+                corpEvents.slice(0, 12).map((e) => (
+                  <div key={e.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-panel-2 p-2.5 text-xs">
+                    <div className="min-w-0">
+                      <span
+                        className={cn(
+                          "mr-2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
+                          e.stance === "HALT" && "bg-loss/20 text-loss",
+                          e.stance === "SHORT_THESIS" && "bg-amber-500/20 text-amber-300",
+                          e.stance === "LONG_THESIS" && "bg-gain/20 text-gain",
+                          e.stance === "WATCH" && "bg-panel text-faint border border-line",
+                        )}
+                      >
+                        {e.kind}
+                      </span>
+                      <span className="text-cream">{e.title}</span>
+                      <span className="ml-2 text-faint">
+                        {e.source} · {new Date(e.publishedAt).toLocaleDateString()}
+                        {e.symbols.length ? ` · ${e.symbols.join(", ")}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </Card>
+
+          {/* Strategy attribution from persisted closes */}
+          <Card>
+            <div className="flex items-center gap-2 border-b border-line pb-3">
+              <ShieldCheck className="size-4 text-brass" />
+              <Label>Strategy Attribution — what actually makes money</Label>
+            </div>
+            {dbEvents.length === 0 ? (
+              <p className="mt-3 text-xs text-faint">No persisted closes yet — attribution builds itself from every banked trade.</p>
+            ) : (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-faint">By venue</p>
+                  <div className="mt-1.5 flex flex-col gap-1.5 font-mono text-xs">
+                    {attribution.venues.map((v) => (
+                      <div key={v.venue} className="flex items-center justify-between rounded-lg border border-line/60 bg-panel-2 px-2.5 py-1.5">
+                        <span className="text-cream">{v.venue}</span>
+                        <span className="text-faint">{v.trades} trades · {v.winRate.toFixed(0)}% win</span>
+                        <span className={cn("font-bold", v.realized >= 0 ? "text-gain" : "text-loss")}>
+                          {v.realized >= 0 ? "+" : ""}${v.realized.toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-faint">Top symbols</p>
+                  <div className="mt-1.5 flex flex-col gap-1.5 font-mono text-xs">
+                    {attribution.topSymbols.map((s) => (
+                      <div key={s.symbol} className="flex items-center justify-between rounded-lg border border-line/60 bg-panel-2 px-2.5 py-1.5">
+                        <span className="font-bold text-cream">{s.symbol}</span>
+                        <span className="text-faint">{s.trades} closes</span>
+                        <span className={cn("font-bold", s.realized >= 0 ? "text-gain" : "text-loss")}>
+                          {s.realized >= 0 ? "+" : ""}${s.realized.toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </Card>
+          <div className="grid gap-5 lg:grid-cols-2">
           <Card className="flex flex-col gap-3">
             <div className="flex items-center gap-2 border-b border-line pb-2.5">
               <ShieldCheck className="size-4 text-brass" />
@@ -878,54 +1314,10 @@ export function LearnView() {
               </div>
             </div>
           </Card>
-        </div>
-      )}
-
-      {/* Modal for connecting profile */}
-      {connectModalProvider && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-line bg-panel p-5 shadow-2xl">
-            <h3 className="text-lg font-bold text-cream">Connect Profile</h3>
-            <p className="mt-1 text-xs text-faint">
-              Authorize Monroe to stream social mentions and project velocity for your {connectModalProvider} profile.
-            </p>
-
-            <div className="mt-4 flex flex-col gap-2">
-              <label htmlFor="profile-handle-input" className="text-xs font-semibold text-faint uppercase">Account Handle / API ID</label>
-              <input
-                id="profile-handle-input"
-                type="text"
-                value={profileInputHandle}
-                onChange={(e) => setProfileInputHandle(e.target.value)}
-                placeholder="@YourAccountHandle"
-                className="field h-11 rounded-xl border border-line bg-panel-2 px-3 text-xs text-cream outline-none focus:border-brass"
-              />
-            </div>
-
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <Button
-                variant="ghost"
-                onClick={() => setConnectModalProvider(null)}
-                className="text-xs"
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="solid"
-                onClick={() => {
-                  if (profileInputHandle.trim()) {
-                    connectProfile(connectModalProvider as any, profileInputHandle.trim());
-                  }
-                  setConnectModalProvider(null);
-                }}
-                className="text-xs font-semibold"
-              >
-                Confirm Connection
-              </Button>
-            </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }

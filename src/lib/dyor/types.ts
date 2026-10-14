@@ -13,7 +13,7 @@ export type HoneypotCheck = {
   liquidityLockedPct: number;
   lockDurationDays: number;
   score: number; // 0-100 safety score
-  verdict: "SAFE" | "SUSPICIOUS" | "HONEYPOT_RISK" | "HIGH_TAX";
+  verdict: "SAFE" | "SUSPICIOUS" | "HONEYPOT_RISK" | "HIGH_TAX" | "UNVERIFIED";
   details: string;
 };
 
@@ -61,14 +61,26 @@ export type EvaluatedInstrument = {
   autoBlacklistedReason?: string;
 };
 
+export type ConnectionProvider = "X_TWITTER" | "DECRYPT" | "TELEGRAM" | "LUNARCRUSH" | "RSS_FEED";
+
 export type ConnectedProfile = {
   id: string;
-  provider: "X_TWITTER" | "DECRYPT" | "TELEGRAM" | "DISCORD" | "LUNARCRUSH";
+  provider: "X_TWITTER" | "DECRYPT" | "TELEGRAM" | "DISCORD" | "LUNARCRUSH" | "RSS_FEED";
   username: string;
   displayName: string;
   connected: boolean;
   connectedAt?: number;
   scopes: string[];
   syncStatus: "ACTIVE" | "IDLE" | "ERROR";
-  rateLimitRemaining: number;
+  rateLimitRemaining: number | null;
+  /** Real verification state — a connection only counts when verified live. */
+  verified: boolean;
+  verifiedAt?: number | null;
+  lastCheckNote?: string | null;
+  /** User-owned credential, this browser only — never sent to any database. */
+  secret?: string;
+  /** Telegram alerts target chat. */
+  chatId?: string;
+  /** Custom RSS feed URL. */
+  feedUrl?: string;
 };

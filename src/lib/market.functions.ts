@@ -5,7 +5,8 @@ import { scoreCandidate, type Candidate } from "./paper";
 import { fetchGeckoCandles, type DexTimeframe } from "./charts/geckoterminal";
 import { fetchJupiterTicks, type JupiterTick } from "./charts/jupiter";
 import { FX_PAIRS, fetchFrankfurterSpot, fetchTwelveCandles, fxIntervalFor } from "./fx/twelvedata";
-import { dexSearch } from "./data/market-sources";
+import { fetchHyperliquidFunding, type PerpFunding } from "./perps/hyperliquid";
+import { dexSearch, verifySecurity, type SecurityReport, type TokenMetrics } from "./data/market-sources";
 import {
   krakenIntervalFor,
   krakenPairFor,
@@ -451,7 +452,7 @@ export const loadDexCandles = createServerFn({ method: "POST" })
   });
 
 const tickCache = new Map<string, { at: number; result: { ticks: JupiterTick[]; note: string } }>();
-const TICK_CACHE_MS = 10_000;
+const TICK_CACHE_MS = 5_000;
 
 /** Live batch price ticks for Solana mints via Jupiter Lite (free, no key). */
 export const loadTokenTicks = createServerFn({ method: "POST" })
@@ -487,6 +488,8 @@ const POOL_CACHE_MS = 5 * 60_000;
 export type ChartPool = {
   poolAddress: string;
   baseSymbol: string;
+  /** Base-token mint for live tick streaming (null when unknown). */
+  mint: string | null;
   chain: string;
   liquidityUsd: number | null;
   label: string;
@@ -513,6 +516,7 @@ export const resolveChartPool = createServerFn({ method: "POST" })
         ? {
             poolAddress: match.pairAddress,
             baseSymbol: match.symbol.split(/[/:_\-]/)[0],
+            mint: match.address,
             chain: match.chain,
             liquidityUsd: match.liquidityUsd,
             label: `${match.symbol} · ${match.chain}`,
@@ -616,4 +620,73 @@ export const loadFxSpot = createServerFn({ method: "POST" })
     );
     fxSpotCache.set(cacheKey, { at: Date.now(), prices });
     return { prices, note: `FX spots · ${Object.keys(prices).length}/${data.pairs.length} pairs` };
+  });
+
+let perpFundingCache: { at: number; rows: PerpFunding[] } | null = null;
+const PERP_FUNDING_CACHE_MS = 60_000;
+
+/** Live Hyperliquid perp funding + marks (free, no key) for avenue hydration. */
+export const loadPerpFunding = createServerFn({ method: "GET" }).handler(async (): Promise<{
+  rows: PerpFunding[];
+  note: string;
+}> => {
+  if (perpFundingCache && Date.now() - perpFundingCache.at < PERP_FUNDING_CACHE_MS) {
+    return { rows: perpFundingCache.rows, note: `Hyperliquid live · ${perpFundingCache.rows.length} perps` };
+  }
+  try {
+    const rows = await fetchHyperliquidFunding();
+    perpFundingCache = { at: Date.now(), rows };
+    return { rows, note: `Hyperliquid live · ${rows.length} perps` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Perp funding unavailable";
+    return { rows: perpFundingCache?.rows ?? [], note: message };
+  }
+});
+
+/**
+ * Real dual-provider security verification for one token (GoPlus +
+ * honeypot.is, fail-closed). Powers DYOR deep audits with evidence instead
+ * of heuristics.
+ */
+export const verifyInstrument = createServerFn({ method: "POST" })
+  .validator((input: { chain?: string; address?: string }) => ({
+    chain: String(input?.chain ?? "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 32),
+    address: String(input?.address ?? "").trim().slice(0, 128),
+  }))
+  .handler(async ({ data }): Promise<{ security: SecurityReport | null; note: string }> => {
+    if (!data.chain || !data.address) {
+      return { security: null, note: "Chain and contract address are required" };
+    }
+    const metric: TokenMetrics = {
+      chain: data.chain,
+      address: data.address,
+      symbol: "",
+      name: "",
+      priceUsd: null,
+      liquidityUsd: null,
+      volume24h: null,
+      marketCap: null,
+      fdv: null,
+      priceChange24h: null,
+      buys24h: null,
+      sells24h: null,
+      pairCreatedAt: null,
+      url: null,
+      fetchedAt: Date.now(),
+    };
+    try {
+      const security = await verifySecurity(metric);
+      if (!security) {
+        return { security: null, note: "Security providers returned no usable report — treated as unverified" };
+      }
+      return {
+        security,
+        note: security.verified
+          ? `Verified by ${security.providers.join(" + ")}`
+          : `Partial evidence from ${security.providers.join(" + ") || "no provider"} — unverified`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Security check failed";
+      return { security: null, note: message };
+    }
   });

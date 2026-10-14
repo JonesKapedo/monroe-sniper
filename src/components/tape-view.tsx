@@ -269,6 +269,7 @@ export function TapeView() {
       setChartPool({
         poolAddress: raydium.pairAddress,
         baseSymbol: "SOL",
+        mint: SOL_MINT,
         chain: "solana",
         liquidityUsd: null,
         label: `SOL/USDC · ${raydium.dexId}`,
@@ -313,19 +314,28 @@ export function TapeView() {
     };
   }, [chartSource, chartPool, timeframe]);
 
-  // Jupiter live tick extends the current SOL candle between history polls.
+  // Live tick streaming for the charted token, merged into the open candle.
+  // Falls back to SOL so the default chart always breathes.
+  const chartMint = chartPool?.mint ?? SOL_MINT;
   useEffect(() => {
-    if (chartSource !== "solana-dex" || chartToken !== "SOL") {
+    if (chartSource !== "solana-dex") {
+      setTickNote(null);
+      return;
+    }
+    const mints = [...new Set([SOL_MINT, chartMint].filter((m) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m)))];
+    if (!mints.length) {
       setTickNote(null);
       return;
     }
     let current = true;
     const refresh = async () => {
       try {
-        const res = await loadTokenTicks({ data: { mints: [SOL_MINT] } });
+        const res = await loadTokenTicks({ data: { mints } });
         if (!current) return;
-        const tick = res.ticks[0];
-        setTickNote(res.ticks.length ? `Jupiter live $${tick.usdPrice.toFixed(2)}` : null);
+        const tick =
+          res.ticks.find((t) => t.mint === chartMint) ??
+          res.ticks.find((t) => t.mint === SOL_MINT);
+        setTickNote(tick ? `Jupiter live $${tick.usdPrice < 1 ? tick.usdPrice.toPrecision(4) : tick.usdPrice.toFixed(2)}` : null);
         if (!tick) return;
         setDexHistory((prev) =>
           mergeTickIntoCandles(prev, tick.usdPrice, Date.now(), candleDurationMs(timeframe)),
@@ -335,12 +345,12 @@ export function TapeView() {
       }
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 15_000);
+    const timer = window.setInterval(() => void refresh(), 5_000);
     return () => {
       current = false;
       window.clearInterval(timer);
     };
-  }, [chartSource, chartToken, timeframe]);
+  }, [chartSource, chartToken, chartMint, timeframe]);
 
   const tokenOptions = useMemo(() => {
     const bases = new Set<string>(["SOL"]);
@@ -403,6 +413,21 @@ export function TapeView() {
     (sum, position) => sum + (position.mark - position.entryPrice) * position.qty,
     0,
   );
+
+  // Paper fills plotted on the chart: nearest candle by time, skipped when off-scale.
+  const execMarkers = useMemo(() => {
+    if (chartSource !== "solana-dex" || candles.length === 0) return [];
+    return closedExecutions
+      .filter((e) => e.symbol.toUpperCase().includes(chartToken))
+      .slice(0, 12)
+      .flatMap((e) => {
+        let best = 0;
+        for (let i = 1; i < candles.length; i += 1) {
+          if (Math.abs(candles[i].time - e.ts) < Math.abs(candles[best].time - e.ts)) best = i;
+        }
+        return [{ exec: e, index: best }];
+      });
+  }, [chartSource, candles, closedExecutions, chartToken]);
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5">
@@ -728,6 +753,43 @@ export function TapeView() {
                     />
                   </>
                 ) : null}
+                {relevantPositions.flatMap((position) => {
+                  if (position.mark < chart.min || position.mark > chart.max) return [];
+                  const y = chart.y(position.mark);
+                  return [
+                    <g key={`mark-${position.id}`}>
+                      <line
+                        x1={LEFT}
+                        y1={y}
+                        x2={RIGHT}
+                        y2={y}
+                        stroke="var(--theme-cream)"
+                        strokeDasharray="1 3"
+                        strokeWidth="1.25"
+                        opacity="0.85"
+                      />
+                      <circle cx={RIGHT} cy={y} r="3.5" fill="var(--theme-cream)" />
+                    </g>,
+                  ];
+                })}
+                {execMarkers.flatMap(({ exec, index }) => {
+                  if (exec.price < chart.min || exec.price > chart.max) return [];
+                  const up = exec.side === "BUY";
+                  const color = up ? "var(--theme-gain)" : "var(--theme-loss)";
+                  const cx = chart.x(index);
+                  const cy = chart.y(exec.price);
+                  return [
+                    <g key={`exec-${exec.id}`}>
+                      <polygon
+                        points={up ? `${cx - 4},${cy + 5} ${cx + 4},${cy + 5} ${cx},${cy - 2}` : `${cx - 4},${cy - 5} ${cx + 4},${cy - 5} ${cx},${cy + 2}`}
+                        fill={color}
+                        opacity="0.95"
+                      >
+                        <title>{`${exec.side} ${exec.symbol} @ ${exec.price}`}</title>
+                      </polygon>
+                    </g>,
+                  ];
+                })}
               </g>
               {[candles[0], candles[Math.floor(candles.length / 2)], candles.at(-1)].map(
                 (candle, index) =>
@@ -767,6 +829,10 @@ export function TapeView() {
                   <span className="inline-flex items-center gap-1.5">
                     <i className="size-2 rounded-full bg-loss" />
                     Stop
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <i className="size-2 rounded-full bg-cream" />
+                    Live mark
                   </span>
                 </>
               ) : null}

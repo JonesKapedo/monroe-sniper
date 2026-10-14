@@ -28,15 +28,18 @@ import {
 import { setupVector, type SetupVector } from "./math/vectors";
 import { fibReentryDelayMin } from "./math/fib";
 import { getDbHealth, saveTradeLearning, type TradeLearningEvent } from "./trade-memory.functions";
+import { markWhaleActed } from "./whales.functions";
 import type { AvenueCategory, DisciplineRules, PaperReadiness } from "./avenues/types";
 import {
   defaultDisciplineRules,
   avenueAnchorPrice,
   avenueAnchors,
+  hydrateAvenuesWithFunding,
   scanAllAvenues,
   calculatePaperReadiness,
 } from "./avenues/engine";
 import { FX_PAIRS } from "./fx/twelvedata";
+import type { PerpFunding } from "./perps/hyperliquid";
 import { useDyorStore } from "./dyor/store";
 import { assessEdge } from "./intel/emh";
 
@@ -126,6 +129,15 @@ type DeskState = {
   /** Latest FX spot marks by token id (`fx:EURUSD`), session only. */
   fxPrices: Record<string, number>;
   setFxPrices: (prices: Record<string, number>) => void;
+  /** Live Hyperliquid funding rows for avenue hydration, session only. */
+  perpFunding: PerpFunding[];
+  setPerpFunding: (rows: PerpFunding[]) => void;
+  /** Symbols under event HALT — entries blocked until the halt clears. */
+  eventHalts: string[];
+  setEventHalts: (symbols: string[]) => void;
+  /** Whale signals already acted on (no double-copying). */
+  actedSigs: string[];
+  whaleEnter: (c: Candidate, sig: string, walletLabel: string) => { ok: boolean; note: string };
   // Turbo mode: 27-minute aggressive runs with a 10-minute cooldown.
   turboPhase: TurboPhase;
   turboStartedAt: number | null;
@@ -218,6 +230,25 @@ function openVectorsOf(book: Book): SetupVector[] {
 
 function mathOverlays(book: Book): { winnerVectors: SetupVector[]; openVectors: SetupVector[] } {
   return { winnerVectors: winnerVectors(), openVectors: openVectorsOf(book) };
+}
+
+/** Fire-and-forget Telegram trade alert — alerts never break trading. */
+function telegramAlert(text: string): void {
+  try {
+    const creds = useDyorStore.getState().telegramCreds();
+    if (!creds) return;
+    void import("./integrations.functions")
+      .then((m) => m.sendTelegramAlert({ data: { ...creds, text } }))
+      .catch(() => undefined);
+  } catch {
+    // Alerts never break trading.
+  }
+}
+
+/** True when a corporate-event HALT covers this symbol. */
+export function isHalted(symbol: string, halts: string[]): boolean {
+  const base = symbol.toUpperCase().split(/[/:_\- ]/)[0];
+  return halts.some((h) => h.toUpperCase() === base);
 }
 
 function absorb(
@@ -354,6 +385,9 @@ export const useDesk = create<DeskState>()(
       dbGrossWin: 0,
       dbGrossLoss: 0,
       fxPrices: {},
+      perpFunding: [],
+      eventHalts: [],
+      actedSigs: [],
       turboPhase: "off",
       turboStartedAt: null,
       turboEndsAt: null,
@@ -490,6 +524,32 @@ export const useDesk = create<DeskState>()(
 
       setFxPrices: (prices) =>
         set((s) => ({ fxPrices: { ...s.fxPrices, ...prices } })),
+
+      setPerpFunding: (rows) => set({ perpFunding: rows }),
+
+      setEventHalts: (symbols) =>
+        set({ eventHalts: [...new Set(symbols.map((x) => x.toUpperCase()))].slice(0, 30) }),
+
+      whaleEnter: (c, sig, walletLabel) => {
+        const s = get();
+        if (s.mode !== "demo" || !s.power || s.turboPhase === "cooling") {
+          return { ok: false, note: "Bot is not taking entries right now" };
+        }
+        if (s.actedSigs.includes(sig)) {
+          return { ok: false, note: "Already acted on this whale move" };
+        }
+        const res = get().manualEnter({
+          ...c,
+          rationale: [...c.rationale, `🐋 Whale copy: ${walletLabel} accumulated ${c.symbol}`],
+        });
+        if (!res.ok) return res;
+        void markWhaleActed({ data: { signatures: [sig] } }).catch(() => undefined);
+        useDesk.setState((prev) => ({
+          actedSigs: [sig, ...prev.actedSigs].slice(0, 200),
+          log: pushLog(prev.log, `🐋 Whale copy: ${c.symbol} behind ${walletLabel} — ${res.note}`),
+        }));
+        return res;
+      },
 
       refreshDbStats: () => {
         void getDbHealth().then((health) => {
@@ -656,6 +716,13 @@ export const useDesk = create<DeskState>()(
           stopStreak,
           lastStopAt,
         });
+        if (closedTrades.length > 0) {
+          const lines = closedTrades.map(({ trade }) => {
+            const isProfit = trade.pnl > 0;
+            return `${trade.reason === "TARGET" ? "✅ TP" : trade.reason === "STOP" ? "🛑 SL" : "📕 Closed"} ${trade.symbol} ${isProfit ? "+" : ""}$${trade.pnl.toFixed(2)}`;
+          });
+          telegramAlert(`Monroe paper closes (${closedTrades.length}):\n${lines.slice(0, 8).join("\n")}`);
+        }
         archiveClosedTrades(closedTrades);
       },
 
@@ -692,13 +759,17 @@ export const useDesk = create<DeskState>()(
         }
 
         // 1. Check all money-making avenues (Perps, Arbitrage, Early IPOs, Yield Basis)
-        const avenues = scanAllAvenues(currentBook, s.disciplineRules);
+        const avenues = hydrateAvenuesWithFunding(
+          scanAllAvenues(currentBook, s.disciplineRules),
+          s.perpFunding,
+        );
         const unheldAvenue = avenues.find(
           (a) =>
             !currentBook.positions.some((p) => p.tokenId === a.id) &&
             a.disciplineApproved &&
             a.confidenceScore >= 80 &&
-            !fibBlocked(a.symbol),
+            !fibBlocked(a.symbol) &&
+            !isHalted(a.symbol, s.eventHalts),
         );
 
         // If an avenue setup is available, execute with disciplined parameters
@@ -770,6 +841,7 @@ export const useDesk = create<DeskState>()(
                 executions: [exec, ...s.executions].slice(0, 100),
                 turboEntries: s.turboEntries + (isTurbo ? 1 : 0),
               });
+              telegramAlert(`Monroe paper entry\n${noteLine}`);
               // Turbo takes a tape trade too when slots remain; otherwise one entry per cycle.
               if (!isTurbo) return;
             }
@@ -787,7 +859,7 @@ export const useDesk = create<DeskState>()(
               const price = fxState.fxPrices[id];
               if (!(price > 0)) continue;
               if (fxBook.positions.some((p) => p.tokenId === id)) continue;
-              if (fibBlocked(pair)) continue;
+              if (fibBlocked(pair) || isHalted(pair, fxState.eventHalts)) continue;
               const fxCand: Candidate = {
                 id,
                 symbol: pair,
@@ -847,6 +919,7 @@ export const useDesk = create<DeskState>()(
                 executions: [fxExec, ...afterFx.executions].slice(0, 100),
                 turboEntries: afterFx.turboEntries + 1,
               });
+              telegramAlert(`Monroe paper entry\n${fxNote}`);
               break; // one FX entry per cycle
             }
           }
@@ -860,7 +933,7 @@ export const useDesk = create<DeskState>()(
           const turboNow = live.riskSettings.sizingProfile === "TURBO";
           const floorNow = turboNow ? Math.max(45, live.memory.minScore - 15) : live.memory.minScore;
           const pick = chooseEntry(tapeBook, live.tape, floorNow);
-          if (!pick || fibBlocked(pick.symbol)) return;
+          if (!pick || fibBlocked(pick.symbol) || isHalted(pick.symbol, live.eventHalts)) return;
 
           // Run through the quantitative risk engine
           const verdict = evaluateRiskAndSize(
@@ -918,6 +991,7 @@ export const useDesk = create<DeskState>()(
           executions: [exec, ...fresh.executions].slice(0, 100),
           turboEntries: fresh.turboEntries + (turboNow ? 1 : 0),
         });
+        telegramAlert(`Monroe paper entry\n${noteLine}`);
         }
       },
 
@@ -984,6 +1058,7 @@ export const useDesk = create<DeskState>()(
           executions: [exec, ...s.executions].slice(0, 100),
           turboEntries: s.turboEntries + (isTurbo && s.turboPhase === "running" ? 1 : 0),
         });
+        telegramAlert(`Monroe paper entry\n${note}`);
         return { ok: true, note, verdict };
       },
 
@@ -1151,6 +1226,8 @@ export const useDesk = create<DeskState>()(
         turboPrevProfile: s.turboPrevProfile,
         turboEntries: s.turboEntries,
         turboReport: s.turboReport,
+        eventHalts: s.eventHalts,
+        actedSigs: s.actedSigs,
         botStartedAt: s.botStartedAt,
       }),
       skipHydration: true,

@@ -32,7 +32,9 @@ import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 import { getDbHealth, getTradeLearningEvents } from "@/lib/trade-memory.functions";
 
-import { loadFeeds, loadFxSpot } from "@/lib/market.functions";
+import { loadFeeds, loadFxSpot, loadPerpFunding } from "@/lib/market.functions";
+import { loadCorpEvents } from "@/lib/events.functions";
+import { listWhaleWatches, refreshWhaleMoves } from "@/lib/whales.functions";
 import { FX_PAIRS } from "@/lib/fx/twelvedata";
 
 const NAV = [
@@ -109,6 +111,47 @@ export function Frame({ children }: { children: ReactNode }) {
 
       // Auto-step desk sniper if power is on
       if (useDesk.getState().power) useDesk.getState().autoStep();
+
+      // Live perp funding for avenue hydration, refreshed about once a minute.
+      if (tickCount % 30 === 0) {
+        void loadPerpFunding()
+          .then((res) => {
+            if (res.rows.length) useDesk.getState().setPerpFunding(res.rows);
+          })
+          .catch(() => undefined);
+      }
+
+      // Corporate-event radar (~5 min): HALT symbols veto new bot entries.
+      if (tickCount % 150 === 0) {
+        const heldSyms = [...desk.demo.positions, ...desk.live.positions].map((p) => p.symbol);
+        void loadCorpEvents({ data: { query: "merger", universe: heldSyms } })
+          .then((res) => useDesk.getState().setEventHalts(res.halts))
+          .catch(() => undefined);
+      }
+
+      // Whale sweep (~90s): followed wallets' fresh inflows become gated copy entries.
+      if (desk.power && tickCount % 45 === 0) {
+        void (async () => {
+          try {
+            const watches = (await listWhaleWatches()).watches.filter((w) => w.follow);
+            for (const w of watches.slice(0, 5)) {
+              const { moves } = await refreshWhaleMoves({ data: { wallet: w.wallet } });
+              for (const m of moves) {
+                if (m.direction !== "IN") continue;
+                const st = useDesk.getState();
+                if (!st.power) return;
+                const cand = st.tape.find(
+                  (t) => t.address.toLowerCase() === m.mint.toLowerCase(),
+                );
+                if (!cand) continue;
+                st.whaleEnter(cand, m.signature, w.label || w.wallet.slice(0, 8));
+              }
+            }
+          } catch {
+            // Best-effort intelligence; crypto marks still flow.
+          }
+        })();
+      }
 
       timer = window.setTimeout(loop, interval);
     };
