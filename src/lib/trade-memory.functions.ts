@@ -160,18 +160,153 @@ export const saveTradeLearning = createServerFn({ method: "POST" })
 
 export const getTradeLearningState = createServerFn({ method: "GET" }).handler(async () => {
   const sql = await getSql();
-  const rows = await sql<{
-    seen: number | string;
-    wins: number | string;
-    losses: number | string;
-    realized: number | string;
-    min_score: number | string;
-  }>`
-    SELECT seen, wins, losses, realized, min_score
-    FROM trade_learning_state
-    WHERE singleton = TRUE
-  `;
-  const row = rows[0];
-  if (!row) throw new Error("Trade learning state has not been initialized by the database migration.");
-  return learningState(row);
+  try {
+    const rows = await sql<{
+      seen: number | string;
+      wins: number | string;
+      losses: number | string;
+      realized: number | string;
+      min_score: number | string;
+    }>`
+      SELECT seen, wins, losses, realized, min_score
+      FROM trade_learning_state
+      WHERE singleton = TRUE
+    `;
+    const row = rows[0];
+    if (!row)
+      throw new Error(
+        `Trade learning state row is missing on ${dbSource}. Apply migrations/*.sql to this database.`,
+      );
+    return learningState(row);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/relation .* does not exist|no such table/i.test(message)) {
+      throw new Error(
+        `Trade learning tables are missing on ${dbSource}. Apply migrations/*.sql (0002_trade_learning.sql) to this database.`,
+      );
+    }
+    throw error;
+  }
 });
+
+export type DbHealth = {
+  source: "neon" | "pglite";
+  ok: boolean;
+  events: number;
+  state: TradeLearningState | null;
+  /** Gross sums across all persisted closes — the profit-factor inputs. */
+  grossWin: number;
+  grossLoss: number;
+  error: string | null;
+};
+
+/** Single streamlined health probe the UI can poll: backend, reachability, counts. */
+export const getDbHealth = createServerFn({ method: "GET" }).handler(async (): Promise<DbHealth> => {
+  const fail = (error: unknown): DbHealth => ({
+    source: dbSource,
+    ok: false,
+    events: 0,
+    state: null,
+    grossWin: 0,
+    grossLoss: 0,
+    error: error instanceof Error ? error.message : String(error),
+  });
+  try {
+    const sql = await getSql();
+    const counts = await sql<{ events: number | string; gross_win: number | string; gross_loss: number | string }>`
+      SELECT COUNT(*)::INTEGER AS events,
+        COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0) AS gross_win,
+        COALESCE(SUM(CASE WHEN pnl < 0 THEN -pnl ELSE 0 END), 0) AS gross_loss
+      FROM trade_learning_events
+    `;
+    const states = await sql<{
+      seen: number | string;
+      wins: number | string;
+      losses: number | string;
+      realized: number | string;
+      min_score: number | string;
+    }>`
+      SELECT seen, wins, losses, realized, min_score
+      FROM trade_learning_state
+      WHERE singleton = TRUE
+    `;
+    const row = states[0];
+    const agg = counts[0];
+    if (!row) return fail("Trade learning state row is missing. Apply migrations/*.sql to this database.");
+    return {
+      source: dbSource,
+      ok: true,
+      events: Number(agg?.events ?? 0),
+      state: learningState(row),
+      grossWin: Number(agg?.gross_win ?? 0),
+      grossLoss: Number(agg?.gross_loss ?? 0),
+      error: null,
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+export type TradeLearningEvent = {
+  id: string;
+  symbol: string;
+  chain: string;
+  venue: string;
+  entryPrice: number;
+  exitPrice: number;
+  qty: number;
+  pnl: number;
+  score: number;
+  mode: string;
+  reason: string;
+  openedAt: number;
+  closedAt: number;
+};
+
+/** Most recent persisted closes, newest first — powers the Learn history + merged readiness. */
+export const getTradeLearningEvents = createServerFn({ method: "POST" })
+  .validator((input: { limit?: number }) => ({
+    limit: Math.max(1, Math.min(200, Math.floor(Number(input?.limit) || 40))),
+  }))
+  .handler(async ({ data }): Promise<{ events: TradeLearningEvent[]; source: "neon" | "pglite" }> => {
+    const sql = await getSql();
+    const rows = await sql<{
+      id: string;
+      symbol: string;
+      chain: string;
+      venue: string;
+      entry_price: number | string;
+      exit_price: number | string;
+      qty: number | string;
+      pnl: number | string;
+      score: number | string;
+      mode: string;
+      reason: string;
+      opened_at: number | string;
+      closed_at: number | string;
+    }>`
+      SELECT id, symbol, chain, venue, entry_price, exit_price, qty, pnl, score,
+        mode, reason, opened_at, closed_at
+      FROM trade_learning_events
+      ORDER BY closed_at DESC
+      LIMIT ${data.limit}
+    `;
+    return {
+      source: dbSource,
+      events: rows.map((r) => ({
+        id: String(r.id),
+        symbol: String(r.symbol),
+        chain: String(r.chain),
+        venue: String(r.venue),
+        entryPrice: Number(r.entry_price),
+        exitPrice: Number(r.exit_price),
+        qty: Number(r.qty),
+        pnl: Number(r.pnl),
+        score: Number(r.score),
+        mode: String(r.mode),
+        reason: String(r.reason),
+        openedAt: Number(r.opened_at),
+        closedAt: Number(r.closed_at),
+      })),
+    };
+  });

@@ -3,6 +3,7 @@ import {
   Activity,
   Clock,
   LayoutDashboard,
+  LogOut,
   Radar,
   ScanSearch,
   Search,
@@ -18,6 +19,9 @@ import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
 import { hashPin } from "@/lib/sniper/wallet";
 import { useSniper } from "@/lib/sniper/store";
 import { useDesk } from "@/lib/desk-store";
+import { useSupabaseGate } from "@/lib/supabase-gate";
+import { getSupabase } from "@/lib/supabase";
+import { LoginView } from "@/components/login-view";
 import { useDyorStore } from "@/lib/dyor/store";
 import { equity } from "@/lib/paper";
 import { Button } from "@/components/ui";
@@ -25,7 +29,7 @@ import { Mascot } from "@/components/mascot";
 import { defaultSettings } from "@/lib/sniper/types";
 import { LiveModeTransitionModal } from "@/components/live-mode-transition-modal";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
-import { getTradeLearningState } from "@/lib/trade-memory.functions";
+import { getDbHealth, getTradeLearningEvents } from "@/lib/trade-memory.functions";
 
 import { loadFeeds } from "@/lib/market.functions";
 
@@ -41,8 +45,11 @@ const NAV = [
 
 export function Frame({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
+  const gate = useSupabaseGate();
+  const signedIn = gate.status === "signed-in";
 
   useEffect(() => {
+    if (!signedIn) return;
     let cancel = false;
     let timer = 0;
     let tickCount = 0;
@@ -93,8 +100,12 @@ export function Frame({ children }: { children: ReactNode }) {
       ]);
       if (cancel) return;
       setReady(true);
-      void getTradeLearningState()
-        .then((state) => {
+      void getDbHealth()
+        .then((health) => {
+          if (!health.ok || !health.state) {
+            throw new Error(health.error ?? "Trade learning tables returned no state.");
+          }
+          const state = health.state;
           useDesk.getState().restoreLearningState(
             {
               seen: state.seen,
@@ -103,14 +114,26 @@ export function Frame({ children }: { children: ReactNode }) {
               realized: state.realized,
               minScore: state.minScore,
             },
-            state.seen,
+            health.events,
+            health.source,
           );
+          useDesk.getState().setDbHistory([], health.grossWin, health.grossLoss);
+          // Pull the persisted closes: they feed the Learn history panel and
+          // keep readiness honest across devices and browser resets.
+          return getTradeLearningEvents({ data: { limit: 200 } });
+        })
+        .then((pack) => {
+          if (!pack) return;
+          const desk = useDesk.getState();
+          desk.setDbHistory(pack.events, desk.dbGrossWin, desk.dbGrossLoss);
         })
         .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
           console.error("[trade-learning] Failed to restore database learning state:", error);
+          useDesk.getState().setDbStatus({ source: "unknown", ok: false, error: message.slice(0, 300) });
           useDesk.setState((desk) => ({
             note: "Database learning state is unavailable; local paper learning remains active.",
-            log: ["Trade learning state could not be loaded from the database.", ...desk.log].slice(
+            log: [`Database link failed (${message.slice(0, 120)}).`, ...desk.log].slice(
               0,
               50,
             ),
@@ -122,9 +145,17 @@ export function Frame({ children }: { children: ReactNode }) {
       cancel = true;
       window.clearTimeout(timer);
     };
-  }, []);
+  }, [signedIn]);
 
-  if (!ready) {
+  if (gate.status === "misconfigured") {
+    return <LoginView client={null} misconfigured />;
+  }
+
+  if (gate.status === "signed-out") {
+    return <LoginView client={gate.client} misconfigured={false} />;
+  }
+
+  if (!signedIn || !ready) {
     return (
       <div className="flex min-h-screen flex-col justify-between bg-ink px-6 py-8 text-cream">
         <p className="text-sm tracking-widest text-brass uppercase">Monroe</p>
@@ -353,13 +384,13 @@ function Shell({ children }: { children: ReactNode }) {
               </span>{" "}
               <span className="text-sm font-semibold text-cream">${activeEq.toFixed(2)}</span>
             </div>
+            <DbBadge />
 
             {/* Power / Armed Button */}
             <button
               type="button"
               aria-label={power ? "Disarm paper bot" : "Arm paper bot"}
-              onClick={requestStandby}
-              className={cn(
+              onClick={requestStandby}              className={cn(
                 "inline-flex min-h-11 items-center gap-1.5 rounded-full border px-2 text-xs font-medium transition-colors sm:gap-2 sm:px-3",
                 power
                   ? mode === "live"
@@ -386,6 +417,15 @@ function Shell({ children }: { children: ReactNode }) {
               ) : (
                 "Standby"
               )}
+            </button>
+            <button
+              type="button"
+              aria-label="Sign out"
+              title="Sign out"
+              onClick={() => void getSupabase()?.auth.signOut()}
+              className="inline-flex min-h-11 items-center rounded-full border border-line bg-panel px-2.5 text-faint transition-colors hover:text-cream"
+            >
+              <LogOut className="size-4" />
             </button>
           </div>
         </header>
@@ -423,6 +463,38 @@ function Shell({ children }: { children: ReactNode }) {
         ))}
       </nav>
     </div>
+  );
+}
+
+function DbBadge() {
+  const source = useDesk((s) => s.dbSource);
+  const ok = useDesk((s) => s.dbOk);
+  const count = useDesk((s) => s.tradeLearningDbCount);
+  const error = useDesk((s) => s.dbError);
+  const label =
+    source === "neon" ? "Neon" : source === "pglite" ? "Local DB" : "DB…";
+  const title = ok
+    ? `${label} linked · ${count} learning rows`
+    : (error ?? "Database link not verified yet.");
+  return (
+    <span
+      title={title}
+      className={cn(
+        "hidden rounded-full border px-2.5 py-1 text-[11px] font-semibold lg:inline-flex lg:items-center lg:gap-1.5",
+        ok && source === "neon" && "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+        ok && source !== "neon" && "border-line bg-panel-2 text-faint",
+        !ok && "border-amber-500/40 bg-amber-500/10 text-amber-300",
+      )}
+      suppressHydrationWarning
+    >
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          ok ? "bg-emerald-400" : "bg-amber-400",
+        )}
+      />
+      {ok ? `${label} · ${count}` : `${label} offline`}
+    </span>
   );
 }
 

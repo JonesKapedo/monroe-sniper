@@ -86,7 +86,7 @@ route; paper positions and fills remain simulations and are not connected to DEX
 
 ## Persisted paper learning
 
-Each simulated position close is recorded in `trade_learning_events`, with the entry/exit prices, size, outcome, and market conditions used at entry. The server updates the aggregate learning threshold in the same database operation and restores that state when the desk opens. Production uses Neon through `DATABASE_URL`; local preview uses the existing PGLite fallback. The database is enabled for deployment in `.grok/app-env.json`.
+Each simulated position close is recorded in `trade_learning_events`, with the entry/exit prices, size, outcome, and market conditions used at entry. The server updates the aggregate learning threshold in the same database operation and restores that state when the desk opens. Production uses Neon through `DATABASE_URL`; local preview uses the existing PGLite fallback. The production build applies pending migrations before creating the Vercel output, preferring `DATABASE_URL_UNPOOLED` for schema changes and falling back to `DATABASE_URL`. The app-builder deployment config must enable the database.
 
 ## Live trading status
 

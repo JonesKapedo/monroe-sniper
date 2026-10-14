@@ -24,7 +24,7 @@ import {
   type RiskEngineSettings,
   type SizingVerdict,
 } from "./sniper/risk-engine";
-import { saveTradeLearning } from "./trade-memory.functions";
+import { getDbHealth, saveTradeLearning, type TradeLearningEvent } from "./trade-memory.functions";
 import type { AvenueCategory, DisciplineRules, PaperReadiness } from "./avenues/types";
 import {
   defaultDisciplineRules,
@@ -34,6 +34,7 @@ import {
 import { assessEdge } from "./intel/emh";
 
 export type Mode = "demo" | "live";
+export type DbSource = "neon" | "pglite" | "unknown";
 
 export type TapeExecution = {
   id: string;
@@ -80,8 +81,20 @@ type DeskState = {
   riskSettings: RiskEngineSettings;
   disciplineRules: DisciplineRules;
   tradeLearningDbCount: number;
+  dbSource: DbSource;
+  dbOk: boolean;
+  dbError: string | null;
+  dbLastWriteAt: number | null;
+  /** Most recent persisted closes (newest first) — survives local resets via the DB. */
+  dbEvents: TradeLearningEvent[];
+  /** Gross sums across persisted closes — profit-factor inputs for readiness. */
+  dbGrossWin: number;
+  dbGrossLoss: number;
   botStartedAt: number;
-  restoreLearningState: (memory: Memory, storedTradeCount: number) => void;
+  restoreLearningState: (memory: Memory, storedTradeCount: number, source?: DbSource) => void;
+  setDbStatus: (patch: { source?: DbSource; ok?: boolean; error?: string | null }) => void;
+  setDbHistory: (events: TradeLearningEvent[], grossWin: number, grossLoss: number) => void;
+  refreshDbStats: () => void;
   setPower: (on: boolean) => void;
   setMode: (mode: Mode) => void;
   setTape: (rows: Candidate[], note: string) => void;
@@ -173,18 +186,69 @@ function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>)
         closedAt: trade.closedAt,
       },
     })
-      .then(({ inserted }) => {
+      .then(({ inserted, state }) => {
         if (inserted) {
-          useDesk.setState((state) => ({
-            tradeLearningDbCount: state.tradeLearningDbCount + 1,
+          const event: TradeLearningEvent = {
+            id: trade.id,
+            symbol: trade.symbol,
+            chain: trade.chain ?? "unknown",
+            venue: typeof trade.venue === "string" ? trade.venue : "unknown",
+            entryPrice: trade.entryPrice ?? 0,
+            exitPrice: trade.exitPrice ?? 0,
+            qty: trade.qty ?? 0,
+            pnl: trade.pnl,
+            score: trade.entryScore ?? 0,
+            mode,
+            reason: trade.reason,
+            openedAt: trade.openedAt ?? trade.closedAt,
+            closedAt: trade.closedAt,
+          };
+          useDesk.setState((prev) => ({
+            tradeLearningDbCount: state.seen,
+            // The database is the shared source of truth for the adaptive
+            // floor: adopt its aggregate so local + Neon never diverge.
+            memory: {
+              seen: state.seen,
+              wins: state.wins,
+              losses: state.losses,
+              realized: state.realized,
+              minScore: state.minScore,
+            },
+            dbEvents: [event, ...prev.dbEvents].slice(0, 200),
+            dbGrossWin: prev.dbGrossWin + (trade.pnl > 0 ? trade.pnl : 0),
+            dbGrossLoss: prev.dbGrossLoss + (trade.pnl < 0 ? -trade.pnl : 0),
+            dbSource: state.dbSource,
+            dbOk: true,
+            dbError: null,
+            dbLastWriteAt: Date.now(),
+          }));
+          // Reconcile gross sums with the server (cheap, closes are infrequent).
+          void getDbHealth().then((health) => {
+            if (!health.ok) return;
+            useDesk.setState({
+              dbGrossWin: health.grossWin,
+              dbGrossLoss: health.grossLoss,
+              tradeLearningDbCount: health.events,
+            });
+          }).catch(() => undefined);
+        } else {
+          // Duplicate id: row already counted, just mark the link healthy.
+          useDesk.setState((prev) => ({
+            dbSource: state.dbSource,
+            dbOk: true,
+            dbError: null,
+            dbLastWriteAt: prev.dbLastWriteAt ?? Date.now(),
           }));
         }
       })
       .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
         console.error("[trade-learning] Failed to persist a closed trade:", error);
         useDesk.setState((state) => ({
-          note: "Trade closed, but its learning record could not be saved.",
-          log: pushLog(state.log, `Trade learning save failed: ${trade.symbol}`),
+          note: "Trade closed, but its learning record could not be saved. Check the database link.",
+          log: pushLog(state.log, `Trade learning save failed: ${trade.symbol} (${message.slice(0, 120)})`),
+          dbOk: false,
+          dbError: message.slice(0, 300),
         }));
       });
   }
@@ -205,6 +269,13 @@ export const useDesk = create<DeskState>()(
       riskSettings: defaultRiskSettings,
       disciplineRules: defaultDisciplineRules,
       tradeLearningDbCount: 0,
+      dbSource: "unknown",
+      dbOk: false,
+      dbError: null,
+      dbLastWriteAt: null,
+      dbEvents: [],
+      dbGrossWin: 0,
+      dbGrossLoss: 0,
       botStartedAt: Date.now() - 3600000,
       walletHistory: [
         {
@@ -218,11 +289,50 @@ export const useDesk = create<DeskState>()(
         },
       ],
 
-      restoreLearningState: (memory, storedTradeCount) =>
+      restoreLearningState: (memory, storedTradeCount, source = "unknown") =>
         set({
           memory,
           tradeLearningDbCount: storedTradeCount,
+          dbSource: source,
+          dbOk: true,
+          dbError: null,
         }),
+
+      setDbStatus: (patch) =>
+        set((s) => ({
+          dbSource: patch.source ?? s.dbSource,
+          dbOk: patch.ok ?? s.dbOk,
+          dbError: patch.error !== undefined ? patch.error : s.dbError,
+        })),
+
+      setDbHistory: (events, grossWin, grossLoss) =>
+        set((s) => ({
+          dbEvents: events.slice(0, 200),
+          dbGrossWin: grossWin,
+          dbGrossLoss: grossLoss,
+          tradeLearningDbCount: Math.max(s.tradeLearningDbCount, events.length),
+        })),
+
+      refreshDbStats: () => {
+        void getDbHealth().then((health) => {
+          if (!health.ok || !health.state) {
+            get().setDbStatus({
+              source: health.source,
+              ok: false,
+              error: health.error,
+            });
+            return;
+          }
+          set({
+            dbSource: health.source,
+            dbOk: true,
+            dbError: null,
+            dbGrossWin: health.grossWin,
+            dbGrossLoss: health.grossLoss,
+            tradeLearningDbCount: health.events,
+          });
+        }).catch(() => undefined);
+      },
 
       setPower: (on) =>
         set((s) => ({
@@ -287,7 +397,16 @@ export const useDesk = create<DeskState>()(
 
       getReadiness: () => {
         const s = get();
-        return calculatePaperReadiness(s[s.mode]);
+        const book = s[s.mode];
+        // Merge persisted closes with local ones (dedupe by id): a cleared
+        // browser or a fresh device still counts the database's history, so
+        // every close keeps moving the readiness bar.
+        const seenIds = new Set(book.trades.map((t) => t.id));
+        const history = [
+          ...book.trades.map((t) => ({ pnl: t.pnl })),
+          ...s.dbEvents.filter((e) => !seenIds.has(e.id)).map((e) => ({ pnl: e.pnl })),
+        ];
+        return calculatePaperReadiness(book, history);
       },
 
       tick: (prices, monitorOnly = false) => {
@@ -722,13 +841,19 @@ export const useDesk = create<DeskState>()(
         riskSettings: s.riskSettings,
         disciplineRules: s.disciplineRules,
         tradeLearningDbCount: s.tradeLearningDbCount,
+        dbSource: s.dbSource,
+        dbLastWriteAt: s.dbLastWriteAt,
+        dbGrossWin: s.dbGrossWin,
+        dbGrossLoss: s.dbGrossLoss,
         botStartedAt: s.botStartedAt,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.mode = "demo";
-          state.power = false;
+          // Never disarm on refresh: the persisted power switch is the
+          // owner's intent. The loop in Frame resumes auto-stepping.
+          if (typeof state.power !== "boolean") state.power = false;
           if (state.demo && state.demo.cash === 100 && state.demo.trades.length === 0) {
             state.demo.cash = DEMO_START;
             state.demo.peakEquity = DEMO_START;

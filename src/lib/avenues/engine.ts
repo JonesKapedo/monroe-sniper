@@ -264,14 +264,21 @@ export function scanAllAvenues(
 /**
  * Calculates a paper-performance scorecard; it does not assess live-trading readiness.
  * Demonstrates discipline and statistical edge before handling real funds.
+ *
+ * `history` is the deduped close list (persisted DB events + local book trades).
+ * Every close moves the score: 40% sample size, 25% win rate, 20% profit factor,
+ * 15% drawdown discipline. No caps, no plateaus — each trade nudges the bar.
  */
-export function calculatePaperReadiness(book: Book): PaperReadiness {
-  const trades = book.trades;
-  const completedDemoTrades = trades.length;
+export function calculatePaperReadiness(
+  book: Book,
+  history: Array<{ pnl: number }> | null = null,
+): PaperReadiness {
+  const closes = history ?? book.trades;
+  const completedDemoTrades = closes.length;
   const targetDemoTrades = 30;
 
-  const wins = trades.filter((t) => t.pnl > 0);
-  const losses = trades.filter((t) => t.pnl < 0);
+  const wins = closes.filter((t) => t.pnl > 0);
+  const losses = closes.filter((t) => t.pnl < 0);
 
   const totalWinPnl = wins.reduce((sum, t) => sum + t.pnl, 0);
   const totalLossPnl = Math.abs(losses.reduce((sum, t) => sum + t.pnl, 0));
@@ -283,7 +290,7 @@ export function calculatePaperReadiness(book: Book): PaperReadiness {
   const peak = Math.max(book.peakEquity, currentEquity);
   const maxDrawdownPct = peak > 0 ? ((peak - currentEquity) / peak) * 100 : 0;
 
-  // Checklist of rigorous discipline criteria
+  // Checklist of rigorous discipline criteria (unchanged honest gates)
   const checklist = [
     {
       id: "sample_size",
@@ -322,15 +329,18 @@ export function calculatePaperReadiness(book: Book): PaperReadiness {
     },
   ];
 
-  const metCount = checklist.filter((c) => c.met).length;
-  // Calculate weighted readiness score
-  let readinessScore = Math.round((metCount / checklist.length) * 100);
-
-  // Bonus for sample size progression
-  if (completedDemoTrades < targetDemoTrades) {
-    const sampleProgressBonus = Math.min(25, (completedDemoTrades / targetDemoTrades) * 25);
-    readinessScore = Math.min(84, Math.round(readinessScore * 0.75 + sampleProgressBonus));
-  }
+  // Continuous score: every close moves the bar. 40% sample size,
+  // 25% win rate vs the 55% target, 20% profit factor vs 1.6, 15% drawdown
+  // discipline. No plateau caps — a better win rate always reads higher.
+  const clamp100 = (n: number) => Math.max(0, Math.min(100, n));
+  const sampleScore = clamp100((completedDemoTrades / targetDemoTrades) * 100);
+  const winScore = completedDemoTrades === 0 ? 0 : clamp100((winRate / 55) * 100);
+  const pfScore = completedDemoTrades === 0 ? 0 : clamp100((profitFactor / 1.6) * 100);
+  const ddScore =
+    maxDrawdownPct <= 4.5 ? 100 : Math.max(0, 100 - (maxDrawdownPct - 4.5) * 12);
+  const readinessScore = Math.round(
+    0.4 * sampleScore + 0.25 * winScore + 0.2 * pfScore + 0.15 * ddScore,
+  );
 
   let status: "TRAINING" | "QUALIFYING" | "PAPER_PROVEN" = "TRAINING";
   let   statusMessage = "Paper training is active; simulated closes are used to estimate the strategy's edge.";

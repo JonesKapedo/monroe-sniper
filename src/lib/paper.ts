@@ -509,7 +509,9 @@ export function emptyMemory(): Memory {
   return { seen: 0, wins: 0, losses: 0, realized: 0, minScore: MIN_SCORE };
 }
 
-/** Nudge the score floor from closed-trade evidence. History is the only teacher. */
+/** Nudge the score floor from closed-trade evidence. History is the only teacher.
+ * Mirrors the trade_learning_state CASE in trade-memory.functions.ts exactly so
+ * the local estimate and the database aggregate never disagree. */
 export function learn(memory: Memory, pnl: number): Memory {
   const wins = memory.wins + (pnl > 0 ? 1 : 0);
   const losses = memory.losses + (pnl < 0 ? 1 : 0);
@@ -518,8 +520,9 @@ export function learn(memory: Memory, pnl: number): Memory {
   let minScore = memory.minScore;
   if (seen >= 4) {
     const winRate = wins / seen;
-    if (winRate < 0.4 || realized < 0) minScore = Math.min(85, minScore + 2);
-    else if (winRate > 0.55 && realized > 0) minScore = Math.max(55, minScore - 1);
+    if (winRate < 0.4 || realized < 0) minScore = Math.min(85, 62 + 2 * (seen - 3));
+    else if (winRate > 0.55 && realized > 0) minScore = Math.max(55, 62 - (seen - 3));
+    else minScore = 62;
   }
   return { seen, wins, losses, realized, minScore };
 }

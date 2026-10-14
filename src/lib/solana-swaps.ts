@@ -100,17 +100,35 @@ export function parseSolanaSwap(
     return null;
   }
 
-  const signer = transaction.transaction?.message?.accountKeys?.find(
+  const accountKeys = transaction.transaction?.message?.accountKeys ?? [];
+  const signerIndex = accountKeys.findIndex(
     (key) => key.signer === true && typeof key.pubkey === "string",
-  )?.pubkey;
+  );
+  const signer = accountKeys[signerIndex]?.pubkey;
   if (typeof signer !== "string") return null;
 
   if (![baseMint, quoteMint].includes(SOL_MINT) || ![baseMint, quoteMint].includes(USDC_MINT)) {
     return null;
   }
 
-  const solDelta = tokenDelta(meta.preTokenBalances, meta.postTokenBalances, signer, SOL_MINT);
+  let solDelta = tokenDelta(meta.preTokenBalances, meta.postTokenBalances, signer, SOL_MINT);
   const usdcDelta = tokenDelta(meta.preTokenBalances, meta.postTokenBalances, signer, USDC_MINT);
+  if (solDelta === 0) {
+    const beforeLamports = meta.preBalances?.[signerIndex];
+    const afterLamports = meta.postBalances?.[signerIndex];
+    if (
+      typeof beforeLamports === "number" &&
+      Number.isFinite(beforeLamports) &&
+      typeof afterLamports === "number" &&
+      Number.isFinite(afterLamports)
+    ) {
+      const feeLamports =
+        signerIndex === 0 && typeof meta.fee === "number" && Number.isFinite(meta.fee)
+          ? meta.fee
+          : 0;
+      solDelta = (afterLamports - beforeLamports + feeLamports) / 1_000_000_000;
+    }
+  }
   if (solDelta === 0 || usdcDelta === 0 || Math.sign(solDelta) === Math.sign(usdcDelta)) {
     return null;
   }

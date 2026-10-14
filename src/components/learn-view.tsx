@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useDyorStore } from "@/lib/dyor/store";
 import { useDesk } from "@/lib/desk-store";
+import { getTradeLearningEvents } from "@/lib/trade-memory.functions";
 import { Card, Label, Button } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
@@ -44,6 +45,25 @@ export function LearnView() {
   // Desk state integration
   const tape = useDesk((s) => s.tape);
   const memory = useDesk((s) => s.memory);
+  const dbEvents = useDesk((s) => s.dbEvents);
+  const dbSource = useDesk((s) => s.dbSource);
+  const dbOk = useDesk((s) => s.dbOk);
+  const dbError = useDesk((s) => s.dbError);
+  const dbGrossWin = useDesk((s) => s.dbGrossWin);
+  const dbGrossLoss = useDesk((s) => s.dbGrossLoss);
+  const tradeLearningDbCount = useDesk((s) => s.tradeLearningDbCount);
+  const [historyBusy, setHistoryBusy] = useState(false);
+
+  const refreshHistory = () => {
+    setHistoryBusy(true);
+    getTradeLearningEvents({ data: { limit: 200 } })
+      .then((pack) => {
+        useDesk.getState().setDbHistory(pack.events, useDesk.getState().dbGrossWin, useDesk.getState().dbGrossLoss);
+        useDesk.getState().refreshDbStats();
+      })
+      .catch(() => undefined)
+      .finally(() => setHistoryBusy(false));
+  };
 
   // Modals / forms
   const [activeTab, setActiveTab] = useState<"INSTRUMENTS" | "INTEGRATIONS" | "INTELLIGENCE">("INSTRUMENTS");
@@ -158,6 +178,72 @@ export function LearnView() {
           <p className="text-[11px] text-faint">Score Floor: {memory.minScore}/100</p>
         </Card>
       </div>
+
+      {/* Persisted trade history (database-backed learning) */}
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="size-4 text-brass" />
+            <Label>Persisted Trade History</Label>
+            <span
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase",
+                dbOk && dbSource === "neon" && "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+                dbOk && dbSource !== "neon" && "border-line bg-panel-2 text-faint",
+                !dbOk && "border-amber-500/40 bg-amber-500/10 text-amber-300",
+              )}
+            >
+              {dbOk ? (dbSource === "neon" ? `Neon · ${tradeLearningDbCount}` : `Local DB · ${tradeLearningDbCount}`) : "DB offline"}
+            </span>
+          </div>
+          <Button variant="ghost" onClick={refreshHistory} disabled={historyBusy} className="text-xs">
+            <RefreshCw className={cn("mr-1.5 size-3.5", historyBusy && "animate-spin")} />
+            {historyBusy ? "Syncing…" : "Sync from database"}
+          </Button>
+        </div>
+        <p className="mt-1 text-xs text-faint">
+          Every simulated close is written to the database and restored on boot — this is the
+          memory the bot actually learns from. Score floor {memory.minScore}/100 · Gross win $
+          {dbGrossWin.toFixed(2)} · Gross loss ${dbGrossLoss.toFixed(2)}
+          {!dbOk && dbError ? ` · Last error: ${dbError.slice(0, 120)}` : ""}
+        </p>
+        {dbEvents.length === 0 ? (
+          <p className="mt-3 rounded-lg border border-dashed border-line p-4 text-center text-xs text-faint">
+            {dbOk
+              ? "No persisted closes yet. Arm the bot and let it trade — each close lands here."
+              : "History unavailable until the database link is healthy."}
+          </p>
+        ) : (
+          <div className="mt-3 max-h-72 overflow-y-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 border-b border-line bg-panel text-faint uppercase">
+                <tr>
+                  <th className="pb-2 font-normal">Closed</th>
+                  <th className="pb-2 font-normal">Symbol</th>
+                  <th className="pb-2 font-normal">Reason</th>
+                  <th className="pb-2 text-right font-normal">P&L</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line/60">
+                {dbEvents.slice(0, 30).map((t) => (
+                  <tr key={t.id} className="hover:bg-panel-2/50">
+                    <td className="py-2 font-mono text-faint">{new Date(t.closedAt).toLocaleString()}</td>
+                    <td className="py-2 font-medium text-cream">{t.symbol}</td>
+                    <td className="py-2">
+                      <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-faint">
+                        {t.reason}
+                      </span>
+                    </td>
+                    <td className={cn("py-2 text-right font-mono font-semibold", t.pnl >= 0 ? "text-gain" : "text-loss")}>
+                      {t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       {/* Navigation Sub-Tabs */}
       <div className="flex border-b border-line">

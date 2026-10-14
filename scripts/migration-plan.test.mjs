@@ -60,6 +60,7 @@ test("app learning schema ships while the auth schema stays outside the globbed 
   const migrationsDir = join(projectRoot(), "migrations");
   assert.deepEqual(pendingMigrations(readdirSync(migrationsDir), []), [
     { name: "0002_trade_learning.sql", path: "0002_trade_learning.sql" },
+    { name: "0003_solana_swap_history.sql", path: "0003_solana_swap_history.sql" },
   ]);
   assert.ok(readdirSync(join(migrationsDir, "auth")).includes("0001_auth.sql"));
 });

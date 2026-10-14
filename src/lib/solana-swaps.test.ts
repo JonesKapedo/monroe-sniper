@@ -21,7 +21,10 @@ function transaction(beforeSol: number, afterSol: number, beforeUsdc: number, af
     blockTime: 1_800_000_000,
     transaction: { message: { accountKeys: [{ pubkey: "trader", signer: true }] } },
     meta: {
-      err: null,
+      err: null as unknown,
+      fee: undefined as number | undefined,
+      preBalances: undefined as number[] | undefined,
+      postBalances: undefined as number[] | undefined,
       preTokenBalances: [
         { owner: "trader", mint: SOL_MINT, uiTokenAmount: { uiAmount: beforeSol } },
         { owner: "trader", mint: USDC_MINT, uiTokenAmount: { uiAmount: beforeUsdc } },
@@ -59,6 +62,28 @@ test("parses confirmed user SOL/USDC swap amounts and side from signer balances"
     parseSolanaSwap({ ...transaction(2, 3, 300, 100), meta: { err: "failed" } }, pair, "bad"),
     null,
   );
+});
+
+test("uses fee-adjusted native SOL balances when wrapped-SOL token deltas are absent", () => {
+  const tx = transaction(0, 0, 300, 100);
+  tx.meta = {
+    ...tx.meta,
+    fee: 5_000,
+    preBalances: [2_000_000_000],
+    postBalances: [2_999_995_000],
+    preTokenBalances: [
+      { owner: "trader", mint: USDC_MINT, uiTokenAmount: { uiAmount: 300 } },
+    ],
+    postTokenBalances: [
+      { owner: "trader", mint: USDC_MINT, uiTokenAmount: { uiAmount: 100 } },
+    ],
+  };
+
+  const swap = parseSolanaSwap(tx, pair, "native-sol-buy");
+  assert.equal(swap?.side, "buy");
+  assert.equal(swap?.baseAmount, 1);
+  assert.equal(swap?.quoteAmount, 200);
+  assert.equal(swap?.priceUsd, 200);
 });
 
 test("selects only the most liquid direct SOL/USDC Raydium and PumpSwap pools", () => {
