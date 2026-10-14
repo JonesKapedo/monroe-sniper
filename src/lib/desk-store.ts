@@ -411,7 +411,7 @@ export const useDesk = create<DeskState>()(
       turboReport: null,
       auditGiven: { 8: false, 13: false, 21: false },
       // Risk-model selection — persists across page visits via localStorage.
-      selectedModel: loadSelectedModel(),
+      selectedModel:  "[paranoid]" ,
       modelHistory: [],
       // Turbo configuration (mutually independent of model selection).
       turboRunMinutes: 34,
@@ -1312,7 +1312,7 @@ export const useDesk = create<DeskState>()(
           if (state.selectedModel) {
             useDesk.setState({ selectedModel: state.selectedModel });
           } else {
-            useDesk.setState({ selectedModel: loadSelectedModel() });
+            useDesk.setState({ selectedModel:  "[paranoid]"  });
           }
           if (state.modelHistory) {
             useDesk.setState({ modelHistory: state.modelHistory });

@@ -89,21 +89,3 @@ export function selectModel(id: RiskModelProfile["id"]): RiskModelProfile | unde
 
 /** Default model is [paranoid] — the bot's safe starting state. */
 export const DEFAULT_MODEL_ID = "[paranoid]";
-
-/** Read the currently selected model from localStorage; fall back to default. */
-export function loadSelectedModel(): RiskModelProfile {
-  if (typeof window === "undefined") return selectModel(DEFAULT_MODEL_ID)!;
-  const stored = localStorage.getItem("selectedRiskModel");
-  if (stored) {
-    const parsed = JSON.parse(stored);
-    const model = selectModel(parsed.id as RiskModelProfile["id"]);
-    return model ?? selectModel(DEFAULT_MODEL_ID)!;
-  }
-  return selectModel(DEFAULT_MODEL_ID)!;
-}
-
-/** Persist the selected model to localStorage so it survives page visits. */
-export function persistSelectedModel(model: RiskModelProfile): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem("selectedRiskModel", JSON.stringify({ id: model.id, name: model.name }));
-}
