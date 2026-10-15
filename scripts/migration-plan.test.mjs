@@ -62,6 +62,11 @@ test("app learning schema ships while the auth schema stays outside the globbed 
     { name: "0002_trade_learning.sql", path: "0002_trade_learning.sql" },
     { name: "0003_solana_swap_history.sql", path: "0003_solana_swap_history.sql" },
     { name: "0004_ultimate_memory.sql", path: "0004_ultimate_memory.sql" },
+    { name: "0005_learning_buckets.sql", path: "0005_learning_buckets.sql" },
+    { name: "0006_profit_lock_tiers.sql", path: "0006_profit_lock_tiers.sql" },
+    { name: "0007_whale_registry.sql", path: "0007_whale_registry.sql" },
+    { name: "0008_qualifying_trades.sql", path: "0008_qualifying_trades.sql" },
+    { name: "0009_engine_cycle.sql", path: "0009_engine_cycle.sql" },
   ]);
   assert.ok(readdirSync(join(migrationsDir, "auth")).includes("0001_auth.sql"));
 });
