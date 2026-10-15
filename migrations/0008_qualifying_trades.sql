@@ -63,96 +63,109 @@ CREATE TABLE IF NOT EXISTS trade_discipline_checklist (
 );
 
 -- Backfill migration: populate qualifying_trades from existing trade_learning_events
--- Run once after schema creation
+-- Run once after schema creation. Idempotent: safe to re-run.
 DO $$
 DECLARE
   rec RECORD;
   total_qualifying INTEGER := 0;
   target_hits INTEGER := 0;
   stop_hits INTEGER := 0;
+  rr_planned DOUBLE PRECISION;
+  rr_actual DOUBLE PRECISION;
+  disc_score DOUBLE PRECISION;
+  gross_win DOUBLE PRECISION;
+  gross_loss DOUBLE PRECISION;
+  computed_pf DOUBLE PRECISION;
+  computed_wr DOUBLE PRECISION;
+  computed_score INTEGER;
+  computed_status TEXT;
 BEGIN
   -- Clear existing (idempotent)
   TRUNCATE qualifying_trades;
 
-  -- Migrate from trade_learning_events
+  -- Migrate from trade_learning_events (schema per 0002: no simulated column)
   FOR rec IN
-    SELECT 
+    SELECT
       id, symbol, entry_price, exit_price, qty, pnl, reason,
-      closed_at, opened_at, mode, score, change_24h, liquidity_usd, volume_24h,
-      venue, chain, pair_age_hours
+      closed_at, opened_at, mode, score
     FROM trade_learning_events
     WHERE reason IN ('TARGET', 'STOP')
-      AND NOT simulated
-      AND reason != 'MANUAL'
       AND entry_price > 0
       AND exit_price > 0
+      AND qty > 0
       AND ABS(pnl) >= entry_price * qty * 0.005  -- min 0.5% move
   LOOP
-    DECLARE
-      rr_planned DOUBLE PRECISION;
-      rr_actual DOUBLE PRECISION;
-      disc_score DOUBLE PRECISION := 1.0;
-    BEGIN
-      -- Estimate planned R:R from available data
-      -- If we don't have explicit stop/target, derive from P&L and entry
-      IF rec.pnl > 0 THEN
-        -- Winner: assume target was hit
-        target_hits := target_hits + 1;
-        rr_actual := rec.pnl / (rec.entry_price * rec.qty);
-        -- Assume planned R:R was at least 2.5:1
-        rr_planned := 2.5;
-      ELSE
-        -- Stop hit: disciplined exit
-        stop_hits := stop_hits + 1;
-        rr_actual := ABS(rec.pnl) / (rec.entry_price * rec.qty);
-        -- Stop loss typically 2-3% so R:R planned would be higher
-        rr_planned := 2.5;
-        -- Discipline score: 1.0 if stop was respected (not blown past)
-        disc_score := 1.0;
-      END IF;
+    rr_planned := 2.5;
+    disc_score := 1.0;
+    IF rec.pnl > 0 THEN
+      -- Winner: assume target was hit
+      target_hits := target_hits + 1;
+      rr_actual := rec.pnl / NULLIF(rec.entry_price * rec.qty, 0);
+    ELSE
+      -- Stop hit: disciplined exit
+      stop_hits := stop_hits + 1;
+      rr_actual := ABS(rec.pnl) / NULLIF(rec.entry_price * rec.qty, 0);
+    END IF;
 
-      INSERT INTO qualifying_trades (
-        id, symbol, entry_price, exit_price, stop_price, target_price,
-        qty, notional, pnl, reason, hold_minutes,
-        risk_reward_planned, risk_reward_actual, discipline_score,
-        market_regime, strategy_tag, confidence_at_entry, mode, closed_at
-      ) VALUES (
-        rec.id, rec.symbol, rec.entry_price, rec.exit_price,
-        rec.entry_price * 0.97,  -- estimated stop
-        rec.entry_price * 1.07,  -- estimated target
-        rec.qty, rec.entry_price * rec.qty, rec.pnl, rec.reason,
-        GREATEST(1, (rec.closed_at - rec.opened_at) / 60000),
-        rr_planned, rr_actual, disc_score,
-        'unknown', 'migrated', rec.score, rec.mode, rec.closed_at
-      ) ON CONFLICT (id) DO NOTHING;
+    INSERT INTO qualifying_trades (
+      id, symbol, entry_price, exit_price, stop_price, target_price,
+      qty, notional, pnl, reason, hold_minutes,
+      risk_reward_planned, risk_reward_actual, discipline_score,
+      market_regime, strategy_tag, confidence_at_entry, mode, closed_at
+    ) VALUES (
+      rec.id, rec.symbol, rec.entry_price, rec.exit_price,
+      rec.entry_price * 0.97,  -- estimated stop
+      rec.entry_price * 1.07,  -- estimated target
+      rec.qty, rec.entry_price * rec.qty, rec.pnl, rec.reason,
+      GREATEST(1, (rec.closed_at - rec.opened_at) / 60000),
+      rr_planned, rr_actual, disc_score,
+      'unknown', 'migrated', rec.score, rec.mode, rec.closed_at
+    ) ON CONFLICT (id) DO NOTHING;
 
-      total_qualifying := total_qualifying + 1;
-    END;
+    total_qualifying := total_qualifying + 1;
   END LOOP;
+
+  -- Aggregate from the freshly backfilled rows (valid subqueries)
+  SELECT COALESCE(SUM(pnl), 0) INTO gross_win FROM qualifying_trades WHERE pnl > 0;
+  SELECT COALESCE(SUM(pnl), 0) INTO gross_loss FROM qualifying_trades WHERE pnl < 0;
+
+  IF total_qualifying > 0 THEN
+    computed_wr := (target_hits::NUMERIC / total_qualifying) * 100;
+  ELSE
+    computed_wr := 0;
+  END IF;
+
+  IF gross_loss < 0 THEN
+    computed_pf := gross_win / ABS(gross_loss);
+  ELSIF gross_win > 0 THEN
+    computed_pf := 3.0;
+  ELSE
+    computed_pf := 1.0;
+  END IF;
+
+  IF total_qualifying >= 200 AND (target_hits::NUMERIC / NULLIF(total_qualifying, 0)) >= 0.65 THEN
+    computed_score := 85;
+    computed_status := 'PAPER_PROVEN';
+  ELSIF total_qualifying >= 50 THEN
+    computed_score := 60;
+    computed_status := 'QUALIFYING';
+  ELSE
+    computed_score := 30;
+    computed_status := 'TRAINING';
+  END IF;
 
   -- Update readiness_state
   INSERT INTO readiness_state (singleton, qualifying_trades_count, target_hits, stop_hits, win_rate, profit_factor, readiness_score, status)
-  SELECT
+  VALUES (
     TRUE,
     total_qualifying,
     target_hits,
     stop_hits,
-    CASE WHEN total_qualifying > 0 THEN (target_hits::NUMERIC / total_qualifying) * 100 ELSE 0 END,
-    CASE 
-      WHEN stop_hits > 0 AND total_qualifying > 0 
-      THEN (SELECT SUM(pnl) FROM qualifying_trades WHERE pnl > 0) / ABS(SELECT SUM(pnl) FROM qualifying_trades WHERE pnl < 0)
-      ELSE 1.0 
-    END,
-    CASE 
-      WHEN total_qualifying >= 200 AND target_hits::NUMERIC / total_qualifying >= 0.65 THEN 85
-      WHEN total_qualifying >= 50 THEN 60
-      ELSE 30
-    END,
-    CASE 
-      WHEN total_qualifying >= 200 AND target_hits::NUMERIC / total_qualifying >= 0.65 THEN 'PAPER_PROVEN'
-      WHEN total_qualifying >= 50 THEN 'QUALIFYING'
-      ELSE 'TRAINING'
-    END
+    computed_wr,
+    computed_pf,
+    computed_score,
+    computed_status
+  )
   ON CONFLICT (singleton) DO UPDATE SET
     qualifying_trades_count = EXCLUDED.qualifying_trades_count,
     target_hits = EXCLUDED.target_hits,
