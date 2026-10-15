@@ -67,6 +67,7 @@ test("app learning schema ships while the auth schema stays outside the globbed 
     { name: "0007_whale_registry.sql", path: "0007_whale_registry.sql" },
     { name: "0008_qualifying_trades.sql", path: "0008_qualifying_trades.sql" },
     { name: "0009_engine_cycle.sql", path: "0009_engine_cycle.sql" },
+    { name: "0010_purge_tainted_learning.sql", path: "0010_purge_tainted_learning.sql" },
   ]);
   assert.ok(readdirSync(join(migrationsDir, "auth")).includes("0001_auth.sql"));
 });

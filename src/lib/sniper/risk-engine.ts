@@ -92,8 +92,9 @@ export function estimateVolatility(c: Candidate): {
   const absChange = Math.abs(c.change24h || 0) / 100;
   let baseVol = 0.035; // Default 3.5% daily volatility
 
-  if (c.venue === "binance") {
-    // Large cap / CEX pairs: standard volatility baseline
+  if (c.venue === "binance" || c.venue === "hyperliquid") {
+    // Large cap / CEX-like venues (Binance spot, Hyperliquid perps):
+    // standard volatility baseline on live quotes, never pool depth.
     baseVol = Math.max(0.015, Math.min(0.08, 0.02 + absChange * 0.4));
   } else {
     // On-chain DEX pairs: higher dispersion and liquidity tail risks
@@ -170,6 +171,22 @@ export function evaluateRiskAndSize(
     checks: [{ id, label, pass: false, detail }],
     reasons: [reason],
   });
+
+  // 1b. Stablecoin block — stables cannot honestly clear a risk multiple;
+  // any "win" on one is quote-scale noise by definition.
+  const STABLE_BASES = new Set([
+    "USDT", "USDC", "DAI", "FDUSD", "TUSD", "USDE", "PYUSD", "GUSD",
+    "USDD", "LUSD", "FRAX", "SUSD",
+  ]);
+  const tradeBase = candidate.symbol.toUpperCase().split(/[/:_\- ]/)[0].replace(/USDT$|USDC$|USD$/, "");
+  if (STABLE_BASES.has(tradeBase) || STABLE_BASES.has(candidate.symbol.toUpperCase().split(/[/:_\- ]/)[0])) {
+    return failVerdict(
+      "stablecoin",
+      "Stablecoins carry no tradable edge",
+      `${candidate.symbol} is a pegged stable — excluded from entries`,
+      "stablecoin-no-edge",
+    );
+  }
 
   // 2. Circuit breaker – halt if daily loss exceeds profile limit
   const peakForDaily = book.peakEquity > 0 ? book.peakEquity : currentEquity;

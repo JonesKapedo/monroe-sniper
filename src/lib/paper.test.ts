@@ -161,3 +161,42 @@ describe("paper desk", () => {
     assert.ok(!quoted.positions[0]?.markSimulated);
   });
 });
+
+describe("same-venue marking", () => {
+  it("rejects a foreign-source quote: holds mark, no exits, no learning", () => {
+    const weth = sampleTape().find((c) => c.symbol === "WETH");
+    assert.ok(weth);
+    const opened = enter(emptyBook(), weth, Date.now(), 0, { priceSource: "hyperliquid:WETH" });
+    assert.equal(opened.ok, true);
+    const position = opened.book.positions[0];
+    // A tape quote for the same token id under a different source must not mark it.
+    const marked = markBook(
+      opened.book,
+      { [position.tokenId]: position.entryPrice * 2 },
+      position.openedAt + 1,
+      true,
+      { sources: { [position.tokenId]: "tape:foreign" } },
+    );
+    assert.equal(marked.positions.length, 1);
+    assert.equal(marked.positions[0]?.mark, position.entryPrice);
+    assert.equal(marked.trades.length, 0);
+  });
+
+  it("marks normally when the source matches", () => {
+    const weth = sampleTape().find((c) => c.symbol === "WETH");
+    assert.ok(weth);
+    const opened = enter(emptyBook(), weth, Date.now(), 0, { priceSource: "tape:weth" });
+    assert.equal(opened.ok, true);
+    const position = opened.book.positions[0];
+    const marked = markBook(
+      opened.book,
+      { [position.tokenId]: position.entryPrice * 2 },
+      position.openedAt + 1,
+      true,
+      { sources: { [position.tokenId]: "tape:weth" } },
+    );
+    assert.equal(marked.positions.length, 0);
+    assert.equal(marked.trades.length, 1);
+    assert.equal(marked.trades[0]?.markSource, "tape:weth");
+  });
+});

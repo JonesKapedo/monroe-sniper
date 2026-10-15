@@ -99,7 +99,9 @@ export type ExecutionVenue =
   | "Uniswap v3"
   | "Orca"
   | "PancakeSwap"
-  | "FX Spot";
+  | "FX Spot"
+  | "Hyperliquid Perps"
+  | "Solana DEX";
 
 export type TapeExecution = {
   id: string;
@@ -182,6 +184,8 @@ type DeskState = {
   /** Fib re-entry memory */
   stopStreak: Record<string, number>;
   lastStopAt: Record<string, number>;
+  /** Last close timestamp per symbol, ANY reason — kills 7-second re-fire loops. */
+  lastCloseAt: Record<string, number>;
   /** Turbo kill switch */
   stopTurbo: () => { ok: boolean; note: string };
   setPower: (on: boolean) => void;
@@ -255,6 +259,13 @@ type DeskState = {
   ) => DynamicSizingResult;
   // Backfill
   backfillQualifyingTrades: () => Promise<void>;
+  /**
+   * Operator-approved purge of tainted learning: clears local closed-trade
+   * history, adaptive memory, DB event cache and re-entry memory. Open
+   * positions and cash are untouched. Pair with purgeTradeLearning (server)
+   * so the database restarts clean too.
+   */
+  purgeLearningHistory: () => void;
 };
 
 
@@ -281,10 +292,13 @@ function makeSolHash(): string {
   return str;
 }
 
-function venueFor(c: Candidate): ExecutionVenue {
+function venueFor(c: Pick<Candidate, "venue" | "chain">): ExecutionVenue {
   if (c.venue === "fx" || c.chain === "fx") return "FX Spot";
+  if (c.venue === "hyperliquid") return "Hyperliquid Perps";
   if (c.venue === "binance") return "Binance Spot";
-  if (c.chain === "solana") return Math.random() > 0.4 ? "Raydium CLMM" : "Orca";
+  // DEX fills never record which pool routed them, so venue display stays at
+  // chain level instead of guessing a DEX name.
+  if (c.chain === "solana") return "Solana DEX";
   if (c.chain === "bsc") return "PancakeSwap";
   return "Uniswap v3";
 }
@@ -293,6 +307,20 @@ const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 
 /** Last skip-log timestamp per avenue id — throttles no-quote notices. */
 const lastAnchorSkipLog = new Map<string, number>();
+
+/**
+ * Effective price-source identity for a position. New positions record it at
+ * entry; legacy perp positions (opened before source tracking) derive it
+ * from their `perp-{coin}-funding` token id so the same-venue rule covers
+ * them too. Returns undefined for legacy non-perp positions (tape behavior).
+ */
+function positionPriceSource(p: { priceSource?: string; tokenId: string }): string | undefined {
+  if (p.priceSource !== undefined) return p.priceSource;
+  if (p.tokenId.startsWith("perp-") && p.tokenId.endsWith("-funding")) {
+    return `hyperliquid:${p.tokenId.slice(5, -8).toUpperCase()}`;
+  }
+  return undefined;
+}
 
 /**
  * Final portfolio-stake guard shared by every entry path (bot avenue, bot
@@ -383,9 +411,10 @@ function absorb(
   memory: Memory,
   monitorOnly = false,
   staleIds: ReadonlySet<string> = EMPTY_SET,
+  sources?: Record<string, string>,
 ): { book: Book; memory: Memory; newTrades: typeof book.trades } {
   const priorIds = new Set(book.trades.map((trade) => trade.id));
-  const next = markBook(book, prices, Date.now(), !monitorOnly, { staleIds });
+  const next = markBook(book, prices, Date.now(), !monitorOnly, { staleIds, sources });
   let mem = memory;
   const newTrades = next.trades.filter((trade) => !priorIds.has(trade.id));
   for (const trade of newTrades) {
@@ -523,6 +552,7 @@ export const useDesk = create<DeskState>()(
       actedSigs: [],
       stopStreak: {},
       lastStopAt: {},
+      lastCloseAt: {},
       turboPhase: "off",
       turboStartedAt: null,
       turboEndsAt: null,
@@ -982,10 +1012,21 @@ export const useDesk = create<DeskState>()(
 
       tick: (prices, monitorOnly = false, staleIds: ReadonlySet<string> = EMPTY_SET) => {
         const s = get();
-        // Enrich the feed map so every open position has a price: avenue
-        // positions resolve through their anchor symbol, anything still
-        // unpriced falls back to labeled simulated drift inside markBook.
+        // Live Hyperliquid marks keyed by avenue position id. Perp positions
+        // are marked ONLY by these — never by tape spot quotes.
+        const hyperMarks: Record<string, number> = {};
+        for (const row of s.perpFunding) {
+          if (row.markPx !== null && row.markPx > 0) {
+            hyperMarks[`perp-${row.coin.toLowerCase()}-funding`] = row.markPx;
+          }
+        }
+        // Enrich the feed map so every open position has a price. Positions
+        // carrying a hyperliquid priceSource resolve ONLY via hyperMarks;
+        // everything else resolves via tape, then anchor, then holds stale.
+        // Sources are recorded so markBook rejects cross-source marking.
         const enriched: Record<string, number> = { ...prices };
+        const sources: Record<string, string> = {};
+        for (const id of Object.keys(prices)) sources[id] = `tape:${id}`;
         const openPositions = [...s.demo.positions, ...s.live.positions];
         if (openPositions.some((p) => !(enriched[p.tokenId] > 0))) {
           const anchors = avenueAnchors(s.demo, s.disciplineRules, Date.now(), {
@@ -993,15 +1034,38 @@ export const useDesk = create<DeskState>()(
           });
           for (const p of openPositions) {
             if (enriched[p.tokenId] > 0) continue;
+            const src = positionPriceSource(p);
+            if (src?.startsWith("hyperliquid:")) {
+              const px = hyperMarks[p.tokenId];
+              if (px !== undefined && px > 0) {
+                enriched[p.tokenId] = px;
+                sources[p.tokenId] = src;
+              }
+              // Otherwise the perp position holds its last mark flagged stale:
+              // no drift, no stop/target on invented prices, no learning.
+              continue;
+            }
             const anchor = anchors.get(p.tokenId);
             const px = anchor ? avenueAnchorPrice(anchor, s.tape) : null;
-            if (px !== null) enriched[p.tokenId] = px;
+            if (px !== null) {
+              enriched[p.tokenId] = px;
+              sources[p.tokenId] = `anchor:${anchor}`;
+            }
             // Otherwise the position holds its last mark flagged stale:
             // no drift, no stop/target on invented prices, no learning.
           }
         }
-        const demoAbs = absorb(s.demo, enriched, s.memory, monitorOnly, staleIds);
-        const liveAbs = absorb(s.live, enriched, demoAbs.memory, monitorOnly, staleIds);
+        // Positions already priced above keep the source of the feed row that
+        // priced them (tape ids) so same-venue enforcement has context.
+        // Perp positions always resolve to their hyperliquid identity so a
+        // tape spot quote can never mark them, even when enriched above.
+        for (const p of openPositions) {
+          if (sources[p.tokenId] === undefined && enriched[p.tokenId] > 0) {
+            sources[p.tokenId] = positionPriceSource(p) ?? `tape:${p.tokenId}`;
+          }
+        }
+        const demoAbs = absorb(s.demo, enriched, s.memory, monitorOnly, staleIds, sources);
+        const liveAbs = absorb(s.live, enriched, demoAbs.memory, monitorOnly, staleIds, sources);
         const closedTrades = [
           ...demoAbs.newTrades.map((trade) => ({ trade, mode: "demo" as const })),
           ...liveAbs.newTrades.map((trade) => ({ trade, mode: "live" as const })),
@@ -1010,8 +1074,12 @@ export const useDesk = create<DeskState>()(
         let nextLog = s.log;
         const stopStreak = { ...s.stopStreak };
         const lastStopAt = { ...s.lastStopAt };
+        const lastCloseAt = { ...s.lastCloseAt };
 
         for (const { trade, mode } of closedTrades) {
+          // Any close sits the symbol out: TARGET loops re-firing every cycle
+          // manufactured the phantom win streaks. 30 minutes, all modes.
+          lastCloseAt[trade.symbol] = trade.closedAt;
           // Fib-spaced re-entry memory: stops stack per symbol, targets forgive.
           if (trade.reason === "STOP") {
             stopStreak[trade.symbol] = (stopStreak[trade.symbol] ?? 0) + 1;
@@ -1030,7 +1098,10 @@ export const useDesk = create<DeskState>()(
             hash: trade.symbol.includes("SOL") || trade.symbol.includes("WIF") ? makeSolHash() : makeHash(),
             ts: trade.closedAt,
             symbol: trade.symbol,
-            venue: trade.symbol.includes("USDT") ? "Binance Spot" : "Raydium CLMM",
+            venue: venueFor({
+              venue: trade.venue ?? (trade.symbol.includes("USDT") ? "binance" : "dex"),
+              chain: trade.chain ?? "",
+            }),
             side: "SELL",
             price: trade.exitPrice ?? 0,
             qty: trade.qty ?? 0,
@@ -1051,6 +1122,7 @@ export const useDesk = create<DeskState>()(
           log: nextLog,
           stopStreak,
           lastStopAt,
+          lastCloseAt,
         });
         if (closedTrades.length > 0) {
           const lines = closedTrades.map(({ trade }) => {
@@ -1104,14 +1176,20 @@ export const useDesk = create<DeskState>()(
         const scoreFloor = isTurbo ? Math.max(45, s.memory.minScore - 15) : s.memory.minScore;
         const overlays = mathOverlays(currentBook);
 
-        // Fib-spaced re-entry: a symbol that just stopped sits out a few
-        // minutes (degen only — other profiles keep classic behavior).
+        // Re-entry discipline, all modes: any symbol closed within the last
+        // 30 minutes sits out. TARGET loops re-firing every cycle is exactly
+        // how phantom win streaks were manufactured — no legitimate setup
+        // needs the same symbol twice in half an hour.
+        // Fib-spaced re-entry stacks on top for turbo stops.
         const fibBlocked = (symbol: string): boolean => {
+          const now = Date.now();
+          const lastClose = s.lastCloseAt[symbol];
+          if (lastClose && now - lastClose < 30 * 60_000) return true;
           if (!isTurbo) return false;
           const last = s.lastStopAt[symbol];
           if (!last) return false;
           const delayMin = fibReentryDelayMin(s.stopStreak[symbol] ?? 1);
-          return Date.now() - last < delayMin * 60_000;
+          return now - last < delayMin * 60_000;
         };
 
         // Capital Discipline: Daily Drawdown Circuit Breaker
@@ -1158,8 +1236,8 @@ export const useDesk = create<DeskState>()(
             symbol: unheldAvenue.symbol,
             name: unheldAvenue.symbol,
             address: unheldAvenue.id,
-            chain: unheldAvenue.chain,
-            venue: unheldAvenue.venueA.toLowerCase().includes("binance") ? "binance" : "dex",
+            chain: "hyperliquid",
+            venue: "hyperliquid",
             priceUsd: unheldAvenue.priceA,
             change24h: tapeCtx.change24h,
             volume24h: tapeCtx.volume24h,
@@ -1201,16 +1279,17 @@ export const useDesk = create<DeskState>()(
                   notional,
                   stop: unheldAvenue.stopLossPrice,
                   target: unheldAvenue.targetPrice,
+                  priceSource: `hyperliquid:${(unheldAvenue.anchorSymbol ?? unheldAvenue.symbol).toUpperCase()}`,
                 });
 
             if (result.ok) {
-              const hashStr = unheldAvenue.chain === "solana" ? makeSolHash() : makeHash();
+              const hashStr = makeSolHash();
               const exec: TapeExecution = {
                 id: `entry-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
                 hash: hashStr,
                 ts: Date.now(),
                 symbol: unheldAvenue.symbol,
-                venue: (unheldAvenue.venueA.includes("Binance") ? "Binance Spot" : "Raydium CLMM") as any,
+                venue: venueFor(aveCand),
                 side: unheldAvenue.perpSide === "SHORT" ? "SELL" : "BUY",
                 price: unheldAvenue.priceA,
                 qty: notional / unheldAvenue.priceA,
@@ -1284,6 +1363,7 @@ export const useDesk = create<DeskState>()(
             notional: tapeStake.notional,
             stop: verdict.stopPrice,
             target: verdict.targetPrice,
+            priceSource: `tape:${pick.id}`,
           });
 
           if (!result.ok) return;
@@ -1375,6 +1455,7 @@ export const useDesk = create<DeskState>()(
           notional,
           stop: verdict.stopPrice,
           target: verdict.targetPrice,
+          priceSource: `tape:${c.id}`,
         });
 
         if (!result.ok) {
@@ -1699,6 +1780,24 @@ export const useDesk = create<DeskState>()(
         // For now, log that it's a manual operation
         set((state) => ({
           log: pushLog(state.log, "🔄 Qualifying trades backfill - run migration 0008"),
+        }));
+      },
+
+      purgeLearningHistory: () => {
+        const stripTrades = (book: Book): Book => ({ ...book, trades: [] });
+        set((s) => ({
+          demo: stripTrades(s.demo),
+          live: stripTrades(s.live),
+          memory: emptyMemory(),
+          dbEvents: [],
+          dbGrossWin: 0,
+          dbGrossLoss: 0,
+          tradeLearningDbCount: 0,
+          stopStreak: {},
+          lastStopAt: {},
+          lastCloseAt: {},
+          note: "Learning history purged — readiness restarts at 0/200 TRAINING. Open positions and cash untouched.",
+          log: pushLog(s.log, "Learning history purged by operator (tainted closes removed)"),
         }));
       },
 

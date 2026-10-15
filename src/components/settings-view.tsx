@@ -35,7 +35,41 @@ export function SettingsView() {
   const settings = book.settings;
   const appearance = settings.appearance ?? defaultSettings.appearance;
   const [phrase, setPhrase] = useState("");
+  const [purgeBusy, setPurgeBusy] = useState(false);
+  const [purgeNote, setPurgeNote] = useState<string | null>(null);
   const kelly = kellyFraction(book.trades, settings.kellyCap);
+
+  const runPurge = async () => {
+    if (phrase !== "PURGE" || purgeBusy) return;
+    if (
+      !window.confirm(
+        "Purge ALL learning history (persisted closes, readiness, adaptive thresholds)? Open positions and cash are kept. This cannot be undone.",
+      )
+    ) {
+      return;
+    }
+    setPurgeBusy(true);
+    setPurgeNote(null);
+    try {
+      const mod = await import("@/lib/trade-memory.functions");
+      const res = await mod.purgeTradeLearning();
+      useDesk.getState().purgeLearningHistory();
+      await useDesk.getState().refreshDbStats();
+      setPurgeNote(res.note);
+      setPhrase("");
+    } catch (error) {
+      // Local state still purges so the desk stops learning from bad data
+      // even when the database link is down.
+      try {
+        useDesk.getState().purgeLearningHistory();
+      } catch {
+        // best-effort
+      }
+      setPurgeNote(error instanceof Error ? error.message : "Purge failed — database link required.");
+    } finally {
+      setPurgeBusy(false);
+    }
+  };
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
@@ -318,8 +352,8 @@ export function SettingsView() {
             </Button>
           </div>
           <label className="text-sm">
-            Type RESET to restore the $500 opening book
-            <input className="field mt-2" value={phrase} onChange={(e) => setPhrase(e.target.value)} aria-label="Type RESET to confirm" />
+            Type RESET to restore the $500 opening book — or PURGE to arm the learning-history purge above
+            <input className="field mt-2" value={phrase} onChange={(e) => setPhrase(e.target.value)} aria-label="Type RESET or PURGE to confirm" />
           </label>
           <Button
             variant="danger"
@@ -331,6 +365,28 @@ export function SettingsView() {
           >
             Restore opening balance
           </Button>
+          <div className="mt-3 flex flex-col gap-2 rounded-xl border border-loss/40 bg-loss/5 p-3">
+            <span className="text-sm font-semibold text-cream">Purge tainted learning history</span>
+            <p className="text-xs text-faint">
+              Clears every persisted close, readiness score, and adaptive threshold — locally and
+              in the database. Open positions and cash are untouched. Use after a feed defect
+              poisoned the history. This cannot be undone.
+            </p>
+            <Button
+              variant="danger"
+              disabled={phrase !== "PURGE" || purgeBusy}
+              onClick={() => void runPurge()}
+              className="w-fit"
+            >
+              {purgeBusy ? "Purging…" : "Purge learning history"}
+            </Button>
+            <p className="text-[11px] text-faint">Type PURGE above to arm this button, then confirm.</p>
+            {purgeNote && (
+              <p className="text-xs text-brass" aria-live="polite">
+                {purgeNote}
+              </p>
+            )}
+          </div>
         </div>
       </Card>
 

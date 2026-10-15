@@ -267,7 +267,7 @@ export const useDyorStore = create<DyorState>()(
             name: cand.name || cand.symbol,
             chain: cand.chain,
             address: cand.address,
-            venue: cand.venue || "dex",
+            venue: cand.venue === "hyperliquid" || cand.venue === "fx" ? "dex" : cand.venue || "dex",
             status: isSuspicious ? "BLACKLISTED" : "EVALUATING",
             userNote: isSuspicious
               ? "Flagged by live tape risk flags — run Search for a real on-chain audit before sizing."

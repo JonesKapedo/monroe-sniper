@@ -24,7 +24,7 @@ export type Candidate = {
   score: number;
   flags: string[];
   rationale: string[];
-  venue: "binance" | "dex" | "fx";
+  venue: "binance" | "dex" | "fx" | "hyperliquid";
   /** Depth unknown (e.g. CEX quote volume is flow, not pool depth). */
   liquidityUnknown?: boolean;
 };
@@ -41,7 +41,13 @@ export type Position = {
   target?: number;
   openedAt: number;
   notional: number;
-  venue?: "binance" | "dex" | "fx";
+  venue?: "binance" | "dex" | "fx" | "hyperliquid";
+  /**
+   * Feed identity that priced the entry (e.g. "hyperliquid:ATOM",
+   * "tape:binance:btcusdt"). Marks from any other source are rejected —
+   * a position may never be marked by a different asset's quote.
+   */
+  priceSource?: string;
   /** True while the mark is simulated drift (no live quote) rather than a market price. */
   markSimulated?: boolean;
   entryScore?: number;
@@ -60,7 +66,11 @@ export type ClosedTrade = {
   reason: string;
   closedAt: number;
   chain?: string;
-  venue?: "binance" | "dex" | "fx";
+  venue?: "binance" | "dex" | "fx" | "hyperliquid";
+  /** Feed identity behind the entry fill (provenance for audits). */
+  priceSource?: string;
+  /** Feed identity behind the exit mark (provenance for audits). */
+  markSource?: string;
   entryPrice?: number;
   exitPrice?: number;
   qty?: number;
@@ -123,7 +133,7 @@ export function scoreCandidate(input: {
   change24h: number | null;
   pairCreatedAt: number | null;
   url: string | null;
-  venue?: "binance" | "dex" | "fx";
+  venue?: "binance" | "dex" | "fx" | "hyperliquid";
   liquidityUnknown?: boolean;
 }): Candidate | null {
   if (!input.address || !input.priceUsd || input.priceUsd <= 0) return null;
@@ -327,7 +337,7 @@ export function enter(
   c: Candidate,
   now = Date.now(),
   minScore = MIN_SCORE,
-  customSizing?: { notional?: number; stop?: number; target?: number },
+  customSizing?: { notional?: number; stop?: number; target?: number; priceSource?: string },
 ): { book: Book; ok: boolean; note: string } {
   const v = entryVerdict(book, c, now, minScore);
   if (!v.allowed || !v.sim) {
@@ -354,6 +364,7 @@ export function enter(
     openedAt: now,
     notional: notionalToUse,
     venue: c.venue,
+    priceSource: customSizing?.priceSource,
     entryScore: c.score,
     entryChange24h: c.change24h,
     entryLiquidityUsd: c.liquidityUsd,
@@ -375,6 +386,13 @@ export type MarkOptions = {
    * Treated exactly like a missing quote: hold, flag, no exits, no learning.
    */
   staleIds?: ReadonlySet<string>;
+  /**
+   * Feed identity per position id for this tick (e.g. "hyperliquid:ATOM").
+   * A position carrying a priceSource is marked ONLY when the tick's source
+   * matches — a cross-source mark is rejected as stale. Absent map entries
+   * preserve legacy behavior for callers that mark a single coherent feed.
+   */
+  sources?: Record<string, string>;
 };
 
 /** UTC day stamp for the one true day boundary (docs: all risk days are UTC). */
@@ -408,8 +426,17 @@ export function markBook(
     // Fail-closed: no (or known-stale) quote → hold the last mark, flag it
     // stale, and NEVER evaluate stops/targets on it. Only the time stop may
     // close, and the close is excluded from learning.
-    const stale = quote === null || opts.staleIds?.has(p.tokenId) === true;
-    const px = quote ?? p.mark;
+    // Same-venue rule: a position with a recorded priceSource is marked ONLY
+    // by that source. A quote arriving under a different source (e.g. a
+    // same-ticker pool on another chain) is rejected as stale — this is what
+    // stops cross-asset marking from manufacturing wins.
+    const tickSource = opts.sources?.[p.tokenId];
+    const sourceMismatch =
+      p.priceSource !== undefined && tickSource !== undefined && tickSource !== p.priceSource;
+    const stale = quote === null || opts.staleIds?.has(p.tokenId) === true || sourceMismatch;
+    // A mismatched source is frozen at the last mark entirely (not even for
+    // display) — a foreign quote must never move equity.
+    const px = sourceMismatch ? p.mark : (quote ?? p.mark);
     if (!manageExits) {
       kept.push({ ...p, mark: px, markSimulated: stale || undefined });
       continue;
@@ -443,6 +470,8 @@ export function markBook(
         closedAt: now,
         chain: p.chain,
         venue: p.venue,
+        priceSource: p.priceSource,
+        markSource: sourceMismatch ? `${tickSource ?? "unknown"}-rejected` : (tickSource ?? p.priceSource),
         entryPrice: p.entryPrice,
         exitPrice: px,
         qty: p.qty,
@@ -493,6 +522,8 @@ export function closeOne(book: Book, id: string, now = Date.now()): Book {
         closedAt: now,
         chain: p.chain,
         venue: p.venue,
+        priceSource: p.priceSource,
+        markSource: p.priceSource ?? "unknown",
         entryPrice: p.entryPrice,
         exitPrice: p.mark,
         qty: p.qty,

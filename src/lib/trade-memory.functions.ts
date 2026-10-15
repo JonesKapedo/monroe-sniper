@@ -324,3 +324,35 @@ export const getTradeLearningEvents = createServerFn({ method: "POST" })
       })),
     };
   });
+
+/**
+ * Operator-approved purge of tainted learning history. Clears every
+ * persisted close plus all derived aggregates (adaptive thresholds,
+ * qualifying trades, readiness, checklist). Open positions and cash are
+ * untouched. Mirrors migrations/0010 for runtimes whose schema predates it.
+ */
+export const purgeTradeLearning = createServerFn({ method: "POST" }).handler(async (): Promise<{
+  ok: boolean;
+  note: string;
+}> => {
+  const sql = await getSql();
+  await sql.query(`TRUNCATE trade_learning_events`);
+  await sql.query(`TRUNCATE qualifying_trades`);
+  await sql.query(`
+    INSERT INTO trade_learning_state (singleton, seen, wins, losses, realized, min_score)
+    VALUES (TRUE, 0, 0, 0, 0, 62)
+    ON CONFLICT (singleton) DO UPDATE SET seen = 0, wins = 0, losses = 0, realized = 0, min_score = 62
+  `);
+  await sql.query(`
+    INSERT INTO readiness_state (
+      singleton, qualifying_trades_count, target_hits, stop_hits, win_rate,
+      profit_factor, readiness_score, status
+    )
+    VALUES (TRUE, 0, 0, 0, 0, 1.0, 0, 'TRAINING')
+    ON CONFLICT (singleton) DO UPDATE SET
+      qualifying_trades_count = 0, target_hits = 0, stop_hits = 0, win_rate = 0,
+      profit_factor = 1.0, readiness_score = 0, status = 'TRAINING', last_computed_at = now()
+  `);
+  await sql.query(`DELETE FROM trade_discipline_checklist`);
+  return { ok: true, note: "Learning history purged — readiness restarts at 0/200 TRAINING." };
+});
