@@ -9,9 +9,9 @@ export type RiskModelProfile = {
   maxNotionalPct: number; // Hard cap on notional (after conviction)
   convictionScale: number; // Multiplier base (0–1 range contribution)
   confidenceRamp: number; // seen / this = full confidence (e.g. 30 = full at 30 closes)
-  trailPct?: number; // Trailing stop % (null = no trail, use takeProfitR only)
+  trailPct?: number | null; // Trailing stop % (null = no trail, use takeProfitR only)
   takeProfitR: number; // R-multiple target
-  exitAtRunBoundary: boolean; // true only for [degen] — close all at run end
+  exitAtRunBoundary?: boolean; // true only for [degen] — close all at run end
   runMinutes?: number; // 34 for [degen]
   cooldownMinutes?: number; // 10 for [degen]
   auditMinutes?: number[]; // [8, 13, 21] for [degen] progress audits

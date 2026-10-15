@@ -37,11 +37,13 @@ export type CoinbaseOrderResponse = {
   status: string;
   /** Filled quantity */
   filled_size: string;
-  /** Total order quantity */
+  /** Post-only flag */
   post_only: boolean;
-  /** Side */
-  side: string;
-}
+  /** Executed price (when available) */
+  price?: string;
+  /** Status message */
+  status_message?: string;
+};
 
 /** Place a new order on Coinbase Pro. */
 export async function placeCoinbaseOrder(
@@ -86,9 +88,7 @@ export async function placeCoinbaseOrder(
 
 /** Fetch the latest ticker price from Coinbase Pro. */
 export async function fetchCoinbaseTicker(productId: string): Promise<CoinbaseTicker> {
-  const baseUrl = config.sandbox
-    ? "https://api-public.sandbox.pro.coinbase.com"
-    : "https://api.pro.coinbase.com";
+  const baseUrl = "https://api.pro.coinbase.com";
 
   const response = await fetch(`${baseUrl}/products/${productId}/ticker`, {
     method: "GET",
@@ -104,4 +104,3 @@ export async function fetchCoinbaseTicker(productId: string): Promise<CoinbaseTi
   return response.json() as Promise<CoinbaseTicker>;
 }
 
-export type { CoinbaseConfig, CoinbaseTicker, CoinbaseOrderResponse };

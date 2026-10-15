@@ -40,29 +40,37 @@ export type NormalisedTicker = {
 
 /** Read the chosen backend from env; fall back to "binance". */
 function envBackend(): BrokerBackend {
-  const chosen = (typeof process !== "undefined"
-    ? process.env BROKER_BACKEND
-    : undefined) as BrokerBackend | undefined;
-  return chosen || "binance";
+  const raw =
+    typeof process !== "undefined"
+      ? (process.env as Record<string, string | undefined>).BROKER_BACKEND
+      : undefined;
+  const chosen = raw as BrokerBackend | undefined;
+  return chosen === "binance" || chosen === "coinbase" || chosen === "kraken"
+    ? chosen
+    : "binance";
 }
 
 /** Load config for the selected backend. */
 function loadConfig(backend: BrokerBackend, testnet?: boolean): any {
+  const env =
+    typeof process !== "undefined"
+      ? ((process.env as unknown as Record<string, string | undefined>) ?? {})
+      : {};
   switch (backend) {
     case "binance": {
-      const key = process.env.BINANCE_API_KEY ?? "";
-      const secret = process.env.BINANCE_API_SECRET ?? "";
+      const key = env.BINANCE_API_KEY ?? "";
+      const secret = env.BINANCE_API_SECRET ?? "";
       return { apiKey: key, apiSecret: secret, testnet: testnet ?? false };
     }
     case "coinbase": {
-      const key = process.env.COINBASE_API_KEY ?? "";
-      const secret = process.env.COINBASE_API_SECRET ?? "";
-      const passphrase = process.env.COINBASE_PASSPHRASE ?? "";
+      const key = env.COINBASE_API_KEY ?? "";
+      const secret = env.COINBASE_API_SECRET ?? "";
+      const passphrase = env.COINBASE_PASSPHRASE ?? "";
       return { apiKey: key, apiSecret: secret, passphrase, sandbox: testnet ?? false };
     }
     case "kraken": {
-      const key = process.env.KRACKEN_API_KEY ?? "";
-      const secret = process.env.KRACKEN_API_SECRET ?? "";
+      const key = env.KRACKEN_API_KEY ?? "";
+      const secret = env.KRACKEN_API_SECRET ?? "";
       return { apiKey: key, apiSecret: secret };
     }
     default:
@@ -96,7 +104,7 @@ export async function placeOrder(
         side,
         status: mapBinanceStatus(resp.status),
         quantity: parseFloat(resp.qty),
-        price: price !== undefined ? parseFloat(resp.price) : null,
+        price: price !== undefined ? price : parseFloat(resp.price),
         fee: parseFloat(resp.commission),
         feeCurrency: resp.commissionAsset || "USDT",
         timestamp: resp.transactTime,
@@ -108,7 +116,7 @@ export async function placeOrder(
         side,
         symbol,
         quantity,
-        price
+        price !== undefined ? String(price) : undefined,
       );
       const mapStatus = (s: string) =>
         s === "done" ? "FILLED" : s === "canceled" ? "CANCELLED" : "NEW";
@@ -117,9 +125,9 @@ export async function placeOrder(
         symbol: resp.product_id,
         side,
         status: mapStatus(resp.status),
-        quantity: parseFloat(resp.filled_size) || parseFloat(resp.post_only ? "0" : "0"),
-        price: price !== undefined ? parseFloat(price) : parseFloat(resp.price || "0"),
-        fee: parseFloat(resp.filled_size) > 0 ? parseFloat("0.001") : "0", // simplified
+        quantity: parseFloat(resp.filled_size) || 0,
+        price: price !== undefined ? price : parseFloat(resp.price || "0"),
+        fee: parseFloat(resp.filled_size) > 0 ? 0.001 : 0, // simplified
         feeCurrency: resp.product_id.split("-")[0].toUpperCase(),
         timestamp: Date.now(),
       };
@@ -130,15 +138,15 @@ export async function placeOrder(
         side,
         symbol,
         quantity,
-        price
+        price,
       );
       return {
         id: resp.uuid,
-        symbol: resp.pair.replace("/", ""),
+        symbol,
         side,
         status: mapKrakenStatus(resp.status),
         quantity: parseFloat(resp.quantity),
-        price: price !== undefined ? parseFloat(price) : parseFloat(resp.price),
+        price: price !== undefined ? price : parseFloat(resp.price),
         fee: parseFloat(resp.fee),
         feeCurrency: resp.feeCurrency,
         timestamp: Date.now(),
@@ -193,10 +201,10 @@ export async function fetchTicker(symbol: string): Promise<NormalisedTicker> {
       const resp = await (await import("./binance")).fetchBinanceTicker(symbol);
       return {
         symbol: resp.symbol,
-        price: parseFloat(resp.price),
-        changePercent: resp.changePercent,
-        volume: parseFloat(resp.volume),
-        quoteVolume: parseFloat(resp.quoteVolume),
+        price: Number(resp.price),
+        changePercent: Number(resp.changePercent),
+        volume: Number(resp.volume),
+        quoteVolume: Number(resp.quoteVolume),
       };
     }
     case "coinbase": {
@@ -204,9 +212,9 @@ export async function fetchTicker(symbol: string): Promise<NormalisedTicker> {
       return {
         symbol: symbol,
         price: parseFloat(resp.price),
-        changePercent: parseFloat(resp.price_change_24h),
-        volume: parseFloat(resp.volume_24h),
-        quoteVolume: "0",
+        changePercent: parseFloat(resp.price_change_24h || "0"),
+        volume: parseFloat(resp.volume_24h || "0"),
+        quoteVolume: 0,
       };
     }
     case "kraken": {
@@ -214,9 +222,9 @@ export async function fetchTicker(symbol: string): Promise<NormalisedTicker> {
       return {
         symbol: symbol,
         price: parseFloat(resp.last),
-        changePercent: "0", // simplified
+        changePercent: 0, // simplified
         volume: parseFloat(resp.volume),
-        quoteVolume: "0",
+        quoteVolume: 0,
       };
     }
     default:

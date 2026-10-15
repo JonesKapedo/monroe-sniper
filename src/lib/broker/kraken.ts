@@ -162,4 +162,3 @@ export async function fetchKrakenTicker(pair: string): Promise<KrakenTicker> {
   };
 }
 
-export type { KrakenConfig, KrakenTicker, KrakenOrderResponse, OrderSide, OrderType };

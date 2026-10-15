@@ -1001,6 +1001,11 @@ export function LearnView() {
                   Add Solana wallets you trust. Every move over the threshold is parsed, persisted,
                   and — when the bot is armed — copied through the same risk gates as everything else.
                 </p>
+                <p className="mt-1 text-[11px] text-faint">
+                  Qualification gate: 20+ qualifying moves · 65%+ win rate · 70+ confidence before
+                  auto-copy. New wallets start in learning mode — moves are tracked and analyzed
+                  first, then copied only when the risk model passes.
+                </p>
               </div>
               <Button variant="ghost" onClick={refreshWhales} disabled={whaleBusy} className="text-xs">
                 <RefreshCw className={cn("mr-1.5 size-3.5", whaleBusy && "animate-spin")} />

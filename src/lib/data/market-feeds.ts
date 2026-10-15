@@ -35,8 +35,6 @@ export async function fetchFreeTicker(symbol: string): Promise<Ticker | null> {
     bnb: "binancecoin",
     ada: "cardano",
     dot: "polkadot",
-    dot: "polkadot",
-    dot: "polkadot",
   };
 
   const id = idMap[symbol.toLowerCase()] || symbol.toLowerCase();
@@ -167,4 +165,3 @@ function clamp100(n: number): number {
   return Math.max(0, Math.min(100, n));
 }
 
-export type { Ticker, OrderBookSnapshot, Candle };

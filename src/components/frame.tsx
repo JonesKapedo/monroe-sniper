@@ -155,6 +155,25 @@ export function Frame({ children }: { children: ReactNode }) {
       // Auto-step desk sniper if power is on
       if (useDesk.getState().power) useDesk.getState().autoStep();
 
+      // 5-minute engine cycle: market + whale refresh, guard, profit lock, DB persist.
+      // Runs even when the bot is on standby so protection never sleeps.
+      if (tickCount % 150 === 0) {
+        void (async () => {
+          try {
+            const { runTradingCycle } = await import("@/functions/trading-engine");
+            const res = await runTradingCycle({ data: undefined as never });
+            if (res.profitLocked > 0 || res.halted) {
+              useDesk.setState((prev) => ({
+                note: res.note,
+                log: [`Engine cycle: ${res.note}`, ...prev.log].slice(0, 50),
+              }));
+            }
+          } catch {
+            // Best-effort; local ticking continues.
+          }
+        })();
+      }
+
       // Live perp funding for avenue hydration, refreshed about once a minute.
       if (tickCount % 30 === 0) {
         void loadPerpFunding()
@@ -486,17 +505,18 @@ function Shell({ children }: { children: ReactNode }) {
               </div>
             )}
 
-            {/* Mode Switcher */}
-            <div className="flex items-center rounded-full border border-line bg-panel-2 p-0.5">
+            {/* Trading mode — paper simulation */}
+            <div
+              className="flex items-center rounded-full border border-line bg-panel-2 p-0.5"
+              title="Paper simulation mode"
+            >
               <button
                 type="button"
                 aria-label="Paper simulation mode"
                 onClick={() => setMode("demo")}
                 className={cn(
                   "min-h-11 rounded-full px-2 py-1 text-[11px] font-medium transition-colors sm:px-2.5 sm:text-xs",
-                  mode === "demo"
-                    ? "bg-brass text-ink font-semibold shadow-xs"
-                    : "text-faint hover:text-cream",
+                  mode === "demo" ? "bg-brass text-ink font-semibold shadow-xs" : "text-faint hover:text-cream",
                 )}
               >
                 <span className="sm:hidden" aria-hidden="true">
@@ -504,6 +524,13 @@ function Shell({ children }: { children: ReactNode }) {
                 </span>
                 <span className="hidden sm:inline">Paper</span>
               </button>
+            </div>
+
+            {/* Wallet connection — separate zone */}
+            <div
+              className="flex items-center rounded-full border border-brass/30 bg-brass/5 p-0.5"
+              title="Read-only wallet connection"
+            >
               <WalletButton compact />
             </div>
 

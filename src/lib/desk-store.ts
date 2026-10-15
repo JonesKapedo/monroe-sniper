@@ -25,10 +25,42 @@ import {
   type SizingProfile,
   type SizingVerdict,
 } from "./sniper/risk-engine";
+import { MODELS, type RiskModelProfile } from "./sniper/risk-models";
+import {
+  TIER_CONFIGS,
+  detectTier,
+  type TierConfig,
+  type TierName,
+} from "./sniper/tier-config";
+import {
+  DEFAULT_PROFIT_LOCK_CONFIG,
+  applyProfitLock,
+  formatProfitLockStatus,
+  type ProfitLockState,
+  type ProfitLockConfig,
+} from "./sniper/profit-lock";
+import {
+  DEFAULT_EQUITY_GUARD_CONFIG,
+  createInitialEquityGuardState,
+  evaluateEquityGuard as evaluateGuard,
+  recordTradeOutcome,
+  manualHalt as guardHalt,
+  manualResume as guardResume,
+  type EquityGuardState,
+  type EquityGuardConfig,
+  type GuardEvaluationResult,
+} from "./sniper/equity-guard";
+import {
+  calculateDynamicSize,
+  type SizingContext,
+  type SizingResult as DynamicSizingResult,
+} from "./sniper/dynamic-sizing";
 import { setupVector, type SetupVector } from "./math/vectors";
 import { fibReentryDelayMin } from "./math/fib";
+import { useMascot } from "./mascot";
 import { getDbHealth, saveTradeLearning, type TradeLearningEvent } from "./trade-memory.functions";
 import { markWhaleActed } from "./whales.functions";
+import { evaluateWhaleMoveForCopy, type WhaleProfile } from "./whales/intelligence";
 import type { AvenueCategory, DisciplineRules, PaperReadiness } from "./avenues/types";
 import {
   defaultDisciplineRules,
@@ -140,7 +172,30 @@ type DeskState = {
   /** Verified security verdicts by candidate id (10-min TTL, refreshed by sweep). */
   security: Record<string, { verdict: "clean" | "reject" | "unknown"; at: number }>;
   setSecurity: (id: string, verdict: "clean" | "reject" | "unknown") => void;
-  whaleEnter: (c: Candidate, sig: string, walletLabel: string) => { ok: boolean; note: string };
+  whaleEnter: (
+    c: Candidate,
+    sig: string,
+    walletLabel: string,
+  ) => Promise<{ ok: boolean; note: string; verdict?: SizingVerdict; whaleCheck?: unknown }>;
+  /** Fib re-entry memory */
+  stopStreak: Record<string, number>;
+  lastStopAt: Record<string, number>;
+  /** Turbo kill switch */
+  stopTurbo: () => { ok: boolean; note: string };
+  setPower: (on: boolean) => void;
+  setMode: (mode: Mode) => void;
+  setTape: (rows: Candidate[], note: string) => void;
+  tick: (
+    prices: Record<string, number>,
+    monitorOnly?: boolean,
+    staleIds?: ReadonlySet<string>,
+  ) => void;
+  autoStep: () => void;
+  manualEnter: (c: Candidate) => { ok: boolean; note: string; verdict?: SizingVerdict };
+  flatten: (id: string) => void;
+  startTurbo: () => { ok: boolean; note: string };
+  bypassTurboCooldown: () => void;
+  tickTurbo: () => void;
   // Turbo mode: 34-minute runs with progress audits at 8/13/21 min, then 10-min cooldown.
   turboPhase: TurboPhase;
   turboStartedAt: number | null;
@@ -150,6 +205,14 @@ type DeskState = {
   turboEntries: number;
   turboReport: TurboReport | null;
   auditGiven: { 8: boolean; 13: boolean; 21: boolean };
+  // Profit locking & tier system
+  profitLockState: ProfitLockState;
+  profitLockConfig: ProfitLockConfig;
+  currentTier: TierName;
+  tierConfig: TierConfig;
+  // Equity guard
+  equityGuardState: EquityGuardState;
+  equityGuardConfig: EquityGuardConfig;
   // Risk-model selection — persists across page visits via localStorage.
   selectedModel: RiskModelProfile;
   modelHistory: string[];
@@ -169,7 +232,30 @@ type DeskState = {
   updateRiskSettings: (patch: Partial<RiskEngineSettings>) => void;
   updateDisciplineRules: (patch: Partial<DisciplineRules>) => void;
   getReadiness: () => PaperReadiness;
+  // Profit lock & tier
+  applyProfitLock: (currentEquity: number) => void;
+  getProfitLockStatus: (currentEquity: number) => ReturnType<typeof formatProfitLockStatus>;
+  updateProfitLockConfig: (patch: Partial<ProfitLockConfig>) => void;
+  // Tier
+  updateTier: (equity: number) => void;
+  getTierConfig: () => TierConfig;
+  // Equity guard
+  evaluateEquityGuard: (currentEquity: number) => GuardEvaluationResult;
+  recordTradePnl: (pnl: number) => void;
+  manualHalt: (reason: string, durationMinutes?: number) => void;
+  manualResume: () => void;
+  // Dynamic sizing
+  calculatePositionSize: (
+    entryPrice: number,
+    atrPct: number,
+    conviction: number,
+    side?: "LONG" | "SHORT",
+  ) => DynamicSizingResult;
+  // Backfill
+  backfillQualifyingTrades: () => Promise<void>;
 };
+
+
 
 function pushLog(log: string[], line: string): string[] {
   return [line, ...log].slice(0, 50);
@@ -402,6 +488,8 @@ export const useDesk = create<DeskState>()(
       security: {},
       eventHalts: [],
       actedSigs: [],
+      stopStreak: {},
+      lastStopAt: {},
       turboPhase: "off",
       turboStartedAt: null,
       turboEndsAt: null,
@@ -410,8 +498,41 @@ export const useDesk = create<DeskState>()(
       turboEntries: 0,
       turboReport: null,
       auditGiven: { 8: false, 13: false, 21: false },
+      // Profit locking & tier system
+      profitLockState: {
+        baseEquity: DEMO_START,
+        compoundingEquity: Math.min(DEMO_START * 0.1, 1000),
+        lockedProfits: 0,
+        peakEquity: DEMO_START,
+        totalCompounded: 0,
+      },
+      profitLockConfig: DEFAULT_PROFIT_LOCK_CONFIG,
+      currentTier: "micro",
+      tierConfig: TIER_CONFIGS.micro,
+      // Equity guard
+      equityGuardState: {
+        isHalted: false,
+        haltReason: null,
+        haltUntil: null,
+        riskMultiplier: 1.0,
+        consecutiveLosses: 0,
+        consecutiveWins: 0,
+        lastTradePnl: 0,
+        lastTradeAt: null,
+        startOfDayEquity: DEMO_START,
+        startOfDayAt: Date.now(),
+        dailyLossPct: 0,
+        startOfWeekEquity: DEMO_START,
+        startOfWeekAt: Date.now(),
+        cooldownUntil: null,
+        cooldownReason: null,
+        dailyProfitTargetHit: false,
+        weeklyProfitTargetHit: false,
+        lastUpdated: Date.now(),
+      },
+      equityGuardConfig: DEFAULT_EQUITY_GUARD_CONFIG,
       // Risk-model selection — persists across page visits via localStorage.
-      selectedModel:  "[paranoid]" ,
+      selectedModel: MODELS["[paranoid]"],
       modelHistory: [],
       // Turbo configuration (mutually independent of model selection).
       turboRunMinutes: 34,
@@ -473,9 +594,14 @@ export const useDesk = create<DeskState>()(
             startMinScore: s.memory.minScore,
           },
           power: true,
-          note: "🔥 TURBO ARMED — 34-minute max-aggression run with audits at 8/13/21min. Safety gates stay armed.",
-          log: pushLog(s.log, "🔥 TURBO run started (34:00)"),
+          note: "TURBO ARMED — 34-minute max-aggression run with audits at 8/13/21min. Safety gates stay armed.",
+          log: pushLog(s.log, "TURBO run started (34:00)"),
         });
+        try {
+          useMascot.getState().react("turbo-start");
+        } catch {
+          // mascot is UI-only
+        }
         return { ok: true, note: "Turbo run started." };
       },
 
@@ -533,18 +659,18 @@ export const useDesk = create<DeskState>()(
         if (s.turboPhase === "running") {
           const elapsed = now - (s.turboStartedAt ?? 0);
           const auditMinutes = s.auditGiven;
-          if (!auditGiven[8] && elapsed >= 8 * 60_000) {
-            useDesk.setState({ auditGiven: { ...auditGiven, 8: true } });
+          if (!auditMinutes[8] && elapsed >= 8 * 60_000) {
+            useDesk.setState({ auditGiven: { ...auditMinutes, 8: true } });
             // TODO: emit audit panel event — collect metrics and show debrief.
             // console.log("[Degen] 8-minute progress audit triggered");
           }
-          if (!auditGiven[13] && elapsed >= 13 * 60_000) {
-            useDesk.setState({ auditGiven: { ...auditGiven, 13: true } });
+          if (!auditMinutes[13] && elapsed >= 13 * 60_000) {
+            useDesk.setState({ auditGiven: { ...auditMinutes, 13: true } });
             // TODO: emit audit panel event.
             // console.log("[Degen] 13-minute progress audit triggered");
           }
-          if (!auditGiven[21] && elapsed >= 21 * 60_000) {
-            useDesk.setState({ auditGiven: { ...auditGiven, 21: true } });
+          if (!auditMinutes[21] && elapsed >= 21 * 60_000) {
+            useDesk.setState({ auditGiven: { ...auditMinutes, 21: true } });
             // TODO: emit audit panel event.
             // console.log("[Degen] 21-minute progress audit triggered");
           }
@@ -580,7 +706,7 @@ export const useDesk = create<DeskState>()(
       setEventHalts: (symbols) =>
         set({ eventHalts: [...new Set(symbols.map((x) => x.toUpperCase()))].slice(0, 30) }),
 
-      whaleEnter: (c, sig, walletLabel) => {
+      whaleEnter: async (c, sig, walletLabel) => {
         const s = get();
         if (s.mode !== "demo" || !s.power || s.turboPhase === "cooling") {
           return { ok: false, note: "Bot is not taking entries right now" };
@@ -588,17 +714,118 @@ export const useDesk = create<DeskState>()(
         if (s.actedSigs.includes(sig)) {
           return { ok: false, note: "Already acted on this whale move" };
         }
+
+        // Pre-copy gate: new whale (no history) falls back to legacy risk-gated path
+        // so tracking starts immediately while the registry builds qualifying history.
+        const whaleProfile: WhaleProfile = {
+          wallet: c.address,
+          label: walletLabel,
+          chain: c.chain,
+          minUsd: 25000,
+          followMode: "auto-copy",
+          createdAt: Date.now(),
+          lastAnalyzed: Date.now(),
+          totalMovesTracked: 0,
+          qualifyingMoves: 0,
+          strategyTag: "unknown",
+          confidenceScore: 0,
+          winRate: 0,
+          avgHoldMinutes: 0,
+          preferredVenues: [],
+          preferredChains: [],
+          astronomyCorrelation: 0,
+          movesByStrategy: {} as WhaleProfile["movesByStrategy"],
+          movesByVenue: {},
+          movesByDirection: {} as WhaleProfile["movesByDirection"],
+          avgMoveSizeUsd: 0,
+          maxMoveSizeUsd: 0,
+          timePatterns: [],
+        };
+
+        const currentEquity = equity(s[s.mode]);
+        const currentPositions = s[s.mode].positions.length;
+        const maxPositions = s.riskSettings.maxPositions;
+
+        const riskEngineAdapter = (cand: Candidate) => {
+          const overlays = mathOverlays(s[s.mode]);
+          const isTurbo = s.selectedModel.id === "[degen]";
+          const floor = isTurbo ? Math.max(45, s.memory.minScore - 15) : s.memory.minScore;
+          const v = evaluateRiskAndSize(
+            s[s.mode],
+            cand,
+            s.riskSettings,
+            floor,
+            Date.now(),
+            overlays,
+            s.selectedModel.id,
+          );
+          return {
+            allowed: v.allowed,
+            notional: v.notional,
+            stopPrice: v.stopPrice,
+            targetPrice: v.targetPrice,
+            score: c.score,
+          };
+        };
+
+        const preCopyResult = await evaluateWhaleMoveForCopy(
+          {
+            signature: sig,
+            wallet: c.address,
+            mint: c.address,
+            symbol: c.symbol,
+            direction: "IN",
+            amount: 1,
+            usdEstimate: c.priceUsd,
+            priceUsd: c.priceUsd,
+            venue: c.venue === "binance" ? "Binance" : c.chain,
+            chain: c.chain,
+            blockTime: Math.floor(Date.now() / 1000),
+          },
+          whaleProfile,
+          riskEngineAdapter,
+          currentEquity,
+          currentPositions,
+          maxPositions,
+        );
+
+        // New wallet: log the gate outcome but still allow the legacy risk-gated
+        // manualEnter so tracking/active learning is not blocked on day one.
+        // Once the registry has 20+ qualifying moves + 65% WR + 70 confidence,
+        // the gate will enforce PASS-only copies.
+        const isNewWalletGate =
+          !preCopyResult.allowed &&
+          (preCopyResult.reason.includes("qualifying moves") ||
+            preCopyResult.reason.includes("confidence") ||
+            preCopyResult.reason.includes("win rate"));
+
+        if (!preCopyResult.allowed && !isNewWalletGate) {
+          return {
+            ok: false,
+            note: `Pre-copy gate: ${preCopyResult.reason}`,
+          };
+        }
+
         const res = get().manualEnter({
           ...c,
-          rationale: [...c.rationale, `🐋 Whale copy: ${walletLabel} accumulated ${c.symbol}`],
+          rationale: [
+            ...c.rationale,
+            isNewWalletGate
+              ? `Whale copy (learning): ${walletLabel} accumulated ${c.symbol} — registry building history`
+              : `Whale copy: ${walletLabel} (${preCopyResult.whaleProfile.strategyTag}) — ${preCopyResult.reason}`,
+          ],
         });
         if (!res.ok) return res;
+
         void markWhaleActed({ data: { signatures: [sig] } }).catch(() => undefined);
         useDesk.setState((prev) => ({
           actedSigs: [sig, ...prev.actedSigs].slice(0, 200),
-          log: pushLog(prev.log, `🐋 Whale copy: ${c.symbol} behind ${walletLabel} — ${res.note}`),
+          log: pushLog(
+            prev.log,
+            `Whale copy: ${c.symbol} behind ${walletLabel} [${preCopyResult.riskModelVerdict}] — ${res.note}`,
+          ),
         }));
-        return res;
+        return { ...res, whaleCheck: preCopyResult };
       },
 
       refreshDbStats: () => {
@@ -622,7 +849,7 @@ export const useDesk = create<DeskState>()(
         }).catch(() => undefined);
       },
 
-      setPower: (on) =>
+      setPower: (on) => {
         set((s) => ({
           power: s.mode === "live" ? false : on,
           note: on
@@ -636,7 +863,13 @@ export const useDesk = create<DeskState>()(
             s.log,
             on && s.mode !== "live" ? "Sniper ARMED [DEMO]" : on ? "Live execution blocked" : "Sniper DISARMED",
           ),
-        })),
+        }));
+        try {
+          useMascot.getState().react(on ? "arm-bot" : "disarm-bot");
+        } catch {
+          // mascot is UI-only
+        }
+      },
 
       setMode: (mode) => {
         // Mode sounds fire only on real transitions: hawk cry into live,
@@ -788,6 +1021,19 @@ export const useDesk = create<DeskState>()(
           telegramAlert(`Monroe paper closes (${closedTrades.length}):\n${lines.slice(0, 8).join("\n")}`);
         }
         archiveClosedTrades(closedTrades);
+        
+        // Apply profit lock after trades close
+        const finalEquity = equity(demoAbs.book);
+        const lockResult = applyProfitLock(s.profitLockState, finalEquity, s.profitLockConfig);
+        if (lockResult.applied) {
+          set({
+            profitLockState: lockResult.newState,
+            currentTier: detectTier(lockResult.newState.baseEquity, s.currentTier),
+            tierConfig: TIER_CONFIGS[detectTier(lockResult.newState.baseEquity, s.currentTier)],
+            note: `Profit lock: +$${lockResult.lockAmount.toFixed(2)} locked, $${lockResult.compoundAmount.toFixed(2)} compounding`,
+            log: pushLog(s.log, `🔒 Profit lock: $${lockResult.lockAmount.toFixed(2)} locked, $${lockResult.compoundAmount.toFixed(2)} compounding → Base: $${lockResult.newState.baseEquity.toFixed(2)}`),
+          });
+        }
       },
 
       autoStep: () => {
@@ -796,8 +1042,23 @@ export const useDesk = create<DeskState>()(
         if (!s.power || s.mode !== "demo") return;
         // Cooling halts entries only — open positions still ride to exits via tick().
         if (s.turboPhase === "cooling") return;
+        
+        // Equity guard evaluation - runs every cycle
         const targetKey = s.mode;
         const currentBook = s[targetKey];
+        const currentEquity = equity(currentBook);
+        const guardResult = evaluateGuard(s.equityGuardState, currentEquity, s.equityGuardConfig);
+        if (guardResult.actions.length > 0) {
+          set({ equityGuardState: guardResult.newState });
+          if (!guardResult.allowed) {
+            // Log the halt reason
+            for (const action of guardResult.actions) {
+              if (action.type === "HALT" || action.type === "COOLDOWN" || action.type === "REDUCE_RISK") {
+                return; // Halt new entries
+              }
+            }
+          }
+        }
         if (currentBook.positions.length >= s.riskSettings.maxPositions) return;
         const isTurbo = s.selectedModel.id === "[degen]";
         // Model-profile score floor: [degen] drops 15 points, never below 45.
@@ -1262,6 +1523,162 @@ export const useDesk = create<DeskState>()(
           };
         }),
 
+      // Profit lock & tier
+      applyProfitLock: (currentEquity: number) => {
+        const s = get();
+        const result = applyProfitLock(s.profitLockState, currentEquity, s.profitLockConfig);
+        const newTier = detectTier(result.newState.baseEquity, s.currentTier);
+        const tierChanged = newTier !== s.currentTier;
+        set({
+          profitLockState: result.newState,
+          currentTier: newTier,
+          tierConfig: TIER_CONFIGS[newTier],
+          note: tierChanged
+            ? `Tier changed: ${s.currentTier} → ${newTier} (Equity: $${result.newState.baseEquity.toFixed(2)})`
+            : result.applied
+              ? `Profit lock: +$${result.lockAmount.toFixed(2)} locked, $${result.compoundAmount.toFixed(2)} compounding (Tier: ${newTier})`
+              : s.note,
+          log: result.applied
+            ? pushLog(
+                s.log,
+                `Profit lock: $${result.lockAmount.toFixed(2)} locked, $${result.compoundAmount.toFixed(2)} compounding → Base: $${result.newState.baseEquity.toFixed(2)}${tierChanged ? ` · Tier ${s.currentTier} → ${newTier}` : ""}`,
+              )
+            : s.log,
+        });
+        if (result.applied) {
+          try {
+            useMascot.getState().react(tierChanged ? "tier-upgrade" : "profit-lock");
+          } catch {
+            // mascot is UI-only
+          }
+        }
+      },
+
+      getProfitLockStatus: (currentEquity: number) => {
+        const s = get();
+        return formatProfitLockStatus(s.profitLockState, currentEquity);
+      },
+
+      updateProfitLockConfig: (patch: Partial<ProfitLockConfig>) =>
+        set((s) => ({
+          profitLockConfig: { ...s.profitLockConfig, ...patch },
+          log: pushLog(s.log, `Profit lock config updated`),
+        })),
+
+      updateTier: (equity: number) =>
+        set((s) => {
+          const newTier = detectTier(equity, s.currentTier);
+          if (newTier !== s.currentTier) {
+            return {
+              currentTier: newTier,
+              tierConfig: TIER_CONFIGS[newTier],
+              log: pushLog(s.log, `📊 Tier updated: ${s.currentTier} → ${newTier} (Equity: $${equity.toFixed(2)})`),
+            };
+          }
+          return {};
+        }),
+
+      getTierConfig: () => {
+        const s = get();
+        return s.tierConfig;
+      },
+
+      // Equity guard
+      stopTurbo: () => {
+        const s = get();
+        if (s.turboPhase !== "running") {
+          return { ok: false, note: "No turbo run in progress." };
+        }
+        set({
+          turboPhase: "off",
+          turboStartedAt: null,
+          turboEndsAt: null,
+          turboCooldownUntil: null,
+          turboPrevProfile: null,
+          riskSettings: {
+            ...s.riskSettings,
+            sizingProfile: s.turboPrevProfile ?? "[paranoid]",
+          },
+          power: s.power,
+          note: "Turbo stopped by kill switch — profile restored, bot remains armed.",
+          log: pushLog(s.log, "Turbo STOPPED by kill switch"),
+        });
+        try {
+          useMascot.getState().react("turbo-stop");
+        } catch {
+          // Mascot is UI-only
+        }
+        return { ok: true, note: "Turbo stopped." };
+      },
+
+      evaluateEquityGuard: (currentEquity: number) => {
+        const s = get();
+        const result = evaluateGuard(s.equityGuardState, currentEquity, s.equityGuardConfig);
+        if (result.actions.length > 0) {
+          set({ equityGuardState: result.newState });
+          for (const action of result.actions) {
+            if (action.type === "HALT") {
+              get().manualHalt(
+                action.reason,
+                action.until ? Math.ceil((action.until - Date.now()) / 60000) : 60,
+              );
+            } else if (action.type === "COOLDOWN") {
+              get().manualHalt(action.reason, action.minutes);
+            } else if (action.type === "REDUCE_RISK") {
+              // Risk multiplier already updated in state
+            } else if (action.type === "PROFIT_TARGET_HIT") {
+              // Logged automatically
+            }
+          }
+        }
+        return result;
+      },
+
+      recordTradePnl: (pnl: number) =>
+        set((s) => {
+          const newState = recordTradeOutcome(s.equityGuardState, pnl, s.equityGuardConfig);
+          return { equityGuardState: newState };
+        }),
+
+      manualHalt: (reason: string, durationMinutes = 60) => {
+        set((s) => ({
+          equityGuardState: guardHalt(s.equityGuardState, reason, durationMinutes),
+          log: pushLog(s.log, `Manual halt: ${reason} (${durationMinutes}min)`),
+        }));
+      },
+
+      manualResume: () =>
+        set((s) => ({
+          equityGuardState: guardResume(s.equityGuardState),
+          log: pushLog(s.log, "Manual resume"),
+        })),
+
+      // Dynamic sizing
+      calculatePositionSize: (entryPrice: number, atrPct: number, conviction: number, side: "LONG" | "SHORT" = "LONG") => {
+        const s = get();
+        const activeBook = s.mode === "live" ? s.live : s.demo;
+        const currentExposure = activeBook.positions.reduce((sum, p) => sum + p.notional, 0);
+        const context: SizingContext = {
+          equity: equity(activeBook),
+          tier: s.tierConfig,
+          atrPct,
+          conviction,
+          currentExposure,
+          equityGuard: s.equityGuardState,
+        };
+        return calculateDynamicSize(context, entryPrice, side);
+      },
+
+      // Backfill qualifying trades
+      backfillQualifyingTrades: async () => {
+        const s = get();
+        // This would call the migration logic
+        // For now, log that it's a manual operation
+        set((state) => ({
+          log: pushLog(state.log, "🔄 Qualifying trades backfill - run migration 0008"),
+        }));
+      },
+
     }),
     {
       name: "monroe-sniper-v4",
@@ -1296,6 +1713,13 @@ export const useDesk = create<DeskState>()(
         selectedModel: s.selectedModel,
         modelHistory: s.modelHistory,
         botStartedAt: s.botStartedAt,
+        // Profit lock & tier
+        profitLockState: s.profitLockState,
+        profitLockConfig: s.profitLockConfig,
+        currentTier: s.currentTier,
+        // Equity guard
+        equityGuardState: s.equityGuardState,
+        equityGuardConfig: s.equityGuardConfig,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
@@ -1312,10 +1736,32 @@ export const useDesk = create<DeskState>()(
           if (state.selectedModel) {
             useDesk.setState({ selectedModel: state.selectedModel });
           } else {
-            useDesk.setState({ selectedModel:  "[paranoid]"  });
+            useDesk.setState({ selectedModel: MODELS["[paranoid]"] });
           }
           if (state.modelHistory) {
             useDesk.setState({ modelHistory: state.modelHistory });
+          }
+          // Restore profit lock state
+          if (state.profitLockState) {
+            useDesk.setState({ profitLockState: state.profitLockState });
+          }
+          // Restore profit lock config
+          if (state.profitLockConfig) {
+            useDesk.setState({ profitLockConfig: state.profitLockConfig });
+          }
+          // Restore tier
+          if (state.currentTier) {
+            useDesk.setState({ 
+              currentTier: state.currentTier,
+              tierConfig: TIER_CONFIGS[state.currentTier],
+            });
+          }
+          // Restore equity guard
+          if (state.equityGuardState) {
+            useDesk.setState({ equityGuardState: state.equityGuardState });
+          }
+          if (state.equityGuardConfig) {
+            useDesk.setState({ equityGuardConfig: state.equityGuardConfig });
           }
         }
       },

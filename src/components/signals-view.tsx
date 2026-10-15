@@ -10,6 +10,7 @@ import { pct } from "@/lib/sniper/format";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
 import { useSniper } from "@/lib/sniper/store";
 import { useDesk } from "@/lib/desk-store";
+import { useFeedHealth } from "@/lib/feeds/status";
 import { getTradeLearningEvents, type TradeLearningEvent } from "@/lib/trade-memory.functions";
 import { type QuoteSignal, type Side } from "@/lib/sniper/types";
 import { Button, Card, Label } from "@/components/ui";
@@ -27,13 +28,26 @@ export function SignalsView() {
 
   const activeBook = mode === "live" ? live : demo;
   const rows = sniperBook.symbols.map((sym) => ({ sym, set: sniperBook.signals[sym.symbol] }));
+  const feedRows = useFeedHealth((s) => s.rows);
+  const feedById = new Map(feedRows.map((r) => [r.id, r]));
+  const feedDot = (state: string | undefined) =>
+    state === "live"
+      ? "size-2 rounded-full bg-gain pulse-dot"
+      : state === "locked"
+        ? "size-2 rounded-full bg-amber-400"
+        : state === "down"
+          ? "size-2 rounded-full bg-loss"
+          : "size-2 rounded-full bg-faint";
+  const feedLabel = (state: string | undefined) =>
+    state === "live" ? "Live" : state === "down" ? "Down" : state === "locked" ? "Locked" : "No data yet";
 
   // Trade History Panel state
   const [historyTab, setHistoryTab] = useState<"ALL" | "ENTRIES" | "EXITS">("ALL");
   const [outcomeFilter, setOutcomeFilter] = useState<"ALL" | "WIN" | "LOSS">("ALL");
   const [symbolSearch, setSymbolSearch] = useState("");
 
-  // Synthesize Trade Entries from active positions and historical execution log
+  // Trade Entries from authentic position + execution records only.
+  // No synthesized stops, scores, or rationales — missing fields render as "—".
   const entryReports = useMemo(() => {
     const list: Array<{
       id: string;
@@ -44,20 +58,23 @@ export function SignalsView() {
       entryPrice: number;
       notional: number;
       qty: number;
-      stopPrice: number;
-      targetPrice: number;
-      riskRewardRatio: number;
-      score: number;
+      stopPrice: number | null;
+      targetPrice: number | null;
+      riskRewardRatio: number | null;
+      score: number | null;
       rationale: string;
       status: "OPEN" | "CLOSED";
       activePnl?: number;
     }> = [];
 
-    // 1. Current Active Positions
+    // 1. Current Active Positions (authentic brackets + entry score when recorded)
     activeBook.positions.forEach((p) => {
       const diff = p.mark - p.entryPrice;
       const unPnl = p.qty > 0 ? diff * p.qty : diff;
-      const rr = p.target && p.stop ? Math.abs((p.target - p.entryPrice) / (p.entryPrice - p.stop)) : 2.5;
+      const rr =
+        p.target !== undefined && p.stop !== undefined && p.entryPrice - p.stop !== 0
+          ? Math.abs((p.target - p.entryPrice) / (p.entryPrice - p.stop))
+          : null;
 
       list.push({
         id: `pos-${p.id}`,
@@ -68,24 +85,21 @@ export function SignalsView() {
         entryPrice: p.entryPrice,
         notional: p.notional,
         qty: p.qty,
-        stopPrice: p.stop,
-        targetPrice: p.target ?? p.entryPrice * 1.15,
-        riskRewardRatio: Math.round(rr * 10) / 10,
-        score: 88,
-        rationale: "Adaptive Volatility ATR Sizing · Risk Gated Entry",
+        stopPrice: p.stop ?? null,
+        targetPrice: p.target ?? null,
+        riskRewardRatio: rr !== null ? Math.round(rr * 10) / 10 : null,
+        score: p.entryScore ?? null,
+        rationale: "Open position brackets",
         status: "OPEN",
         activePnl: unPnl,
       });
     });
 
-    // 2. Historical Executions from Tape
+    // 2. Historical Executions from Tape (execution record only — no invented brackets)
     executions
       .filter((e) => e.type === "BOT_ENTRY")
       .forEach((e) => {
         if (!list.some((existing) => existing.symbol === e.symbol && Math.abs(existing.ts - e.ts) < 5000)) {
-          const defaultStop = e.price * 0.96;
-          const defaultTarget = e.price * 1.12;
-          const rr = e.riskReward ?? Math.abs((defaultTarget - e.price) / (e.price - defaultStop));
           list.push({
             id: `exec-${e.id}`,
             ts: e.ts,
@@ -95,20 +109,21 @@ export function SignalsView() {
             entryPrice: e.price,
             notional: e.notional,
             qty: e.qty,
-            stopPrice: defaultStop,
-            targetPrice: defaultTarget,
-            riskRewardRatio: Math.round(rr * 10) / 10,
-            score: 85,
-            rationale: e.note || "Ensemble consensus cleared brain threshold",
+            stopPrice: null,
+            targetPrice: null,
+            riskRewardRatio: e.riskReward !== undefined ? Math.round(e.riskReward * 10) / 10 : null,
+            score: null,
+            rationale: e.note || "Bot entry execution",
             status: "CLOSED",
           });
         }
       });
 
-    // 3. Sniper Book Positions if available
+    // 3. Sniper Book Positions if available (engine brackets + confidence)
     sniperBook.positions.forEach((p) => {
       if (!list.some((existing) => existing.symbol === p.symbol)) {
-        const rr = Math.abs((p.target - p.entry) / (p.entry - p.stop));
+        const denom = p.entry - p.stop;
+        const rr = denom !== 0 ? Math.abs((p.target - p.entry) / denom) : null;
         list.push({
           id: `snip-${p.id}`,
           ts: p.openedAt,
@@ -120,9 +135,9 @@ export function SignalsView() {
           qty: p.qty,
           stopPrice: p.stop,
           targetPrice: p.target,
-          riskRewardRatio: Math.round(rr * 10) / 10,
+          riskRewardRatio: rr !== null ? Math.round(rr * 10) / 10 : null,
           score: Math.round(p.confidence * 100),
-          rationale: "Microstructure Queue & Momentum Model Alignment",
+          rationale: "Engine position",
           status: "OPEN",
         });
       }
@@ -131,25 +146,34 @@ export function SignalsView() {
     return list.sort((a, b) => b.ts - a.ts);
   }, [activeBook.positions, executions, sniperBook.positions]);
 
-  // Synthesize Trade Exits from desk closed trades and sniper closed trades
+  // Trade Exits from authentic closed-trade records only.
+  // Rows without recorded entry/exit prices are skipped — never estimated.
   const exitReports = useMemo(() => {
     const list: Array<{
       id: string;
       ts: number;
       symbol: string;
       side: "LONG" | "SHORT" | "SELL";
-      entryPrice: number;
-      exitPrice: number;
+      entryPrice: number | null;
+      exitPrice: number | null;
       pnlUsd: number;
-      pnlPct: number;
+      pnlPct: number | null;
       reason: string;
       reasonBadge: "TARGET" | "STOP" | "TIME" | "SIGNAL" | "MANUAL";
       holdingTime: string;
       outcome: "WIN" | "LOSS";
     }> = [];
 
-    // Desk Closed Trades
+    const formatHolding = (openedAt: number | undefined, closedAt: number): string => {
+      if (!openedAt || closedAt <= openedAt) return "—";
+      const mins = Math.max(1, Math.round((closedAt - openedAt) / 60000));
+      if (mins < 60) return `${mins}m`;
+      return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+    };
+
+    // Desk Closed Trades (authentic prices/timestamps only)
     activeBook.trades.forEach((t) => {
+      if (t.entryPrice === undefined || t.exitPrice === undefined) return;
       const isWin = t.pnl > 0;
       let badge: "TARGET" | "STOP" | "TIME" | "SIGNAL" | "MANUAL" = "TARGET";
       const r = t.reason.toUpperCase();
@@ -158,24 +182,21 @@ export function SignalsView() {
       else if (r.includes("SIGNAL")) badge = "SIGNAL";
       else if (r.includes("MANUAL") || r.includes("FLATTEN")) badge = "MANUAL";
 
-      // Compute estimated entry/exit prices if not explicit
-      const assumedNotional = 45;
-      const pnlPct = assumedNotional > 0 ? (t.pnl / assumedNotional) * 100 : 0;
-      const basePx = t.symbol === "BTC" ? 87000 : t.symbol === "ETH" ? 3100 : 180;
-      const exitPx = basePx * (1 + pnlPct / 100);
+      const pnlPct =
+        t.entryPrice > 0 ? ((t.exitPrice - t.entryPrice) / t.entryPrice) * 100 : null;
 
       list.push({
         id: `desk-trade-${t.id}`,
         ts: t.closedAt,
         symbol: t.symbol,
         side: "LONG",
-        entryPrice: basePx,
-        exitPrice: Math.round(exitPx * 100) / 100,
+        entryPrice: t.entryPrice,
+        exitPrice: t.exitPrice,
         pnlUsd: t.pnl,
-        pnlPct: Math.round(pnlPct * 10) / 10,
+        pnlPct: pnlPct !== null ? Math.round(pnlPct * 10) / 10 : null,
         reason: t.reason,
         reasonBadge: badge,
-        holdingTime: "~18m",
+        holdingTime: formatHolding(t.openedAt, t.closedAt),
         outcome: isWin ? "WIN" : "LOSS",
       });
     });
@@ -303,51 +324,65 @@ export function SignalsView() {
         </div>
       </div>
 
-      {/* Provider Status Badges */}
+      {/* Feed Status (authentic — from live feed health, never hardcoded live) */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Card className="border-line bg-panel p-3.5">
           <div className="flex items-center justify-between">
             <Label>Binance Spot CEX</Label>
-            <span className="size-2 rounded-full bg-gain pulse-dot" />
+            <span className={feedDot(feedById.get("binance")?.state)} />
           </div>
           <p className="mt-1 text-xs text-cream">Order flow & 24h volume delta</p>
-          <p className="mt-2 text-[11px] text-brass font-mono">Weight 30% · Live WebSockets</p>
+          <p className="mt-2 text-[11px] text-brass font-mono">
+            Weight 30% · {feedLabel(feedById.get("binance")?.state)}
+            {feedById.get("binance")?.detail ? ` — ${feedById.get("binance")?.detail}` : ""}
+          </p>
         </Card>
 
         <Card className="border-line bg-panel p-3.5">
           <div className="flex items-center justify-between">
             <Label>DexScreener Pools</Label>
-            <span className="size-2 rounded-full bg-gain pulse-dot" />
+            <span className={feedDot(feedById.get("dex")?.state)} />
           </div>
           <p className="mt-1 text-xs text-cream">Raydium & Uniswap liquidity</p>
-          <p className="mt-2 text-[11px] text-brass font-mono">Weight 25% · On-Chain RPC</p>
+          <p className="mt-2 text-[11px] text-brass font-mono">
+            Weight 25% · {feedLabel(feedById.get("dex")?.state)}
+            {feedById.get("dex")?.detail ? ` — ${feedById.get("dex")?.detail}` : ""}
+          </p>
         </Card>
 
         <Card className="border-line bg-panel p-3.5">
           <div className="flex items-center justify-between">
-            <Label>Invo Institutional</Label>
-            <span className="size-2 rounded-full bg-gain" />
+            <Label>CoinGecko Reference</Label>
+            <span className={feedDot(feedById.get("coingecko")?.state)} />
           </div>
-          <p className="mt-1 text-xs text-cream">Macro positioning & index bias</p>
-          <p className="mt-2 text-[11px] text-brass font-mono">Weight 20% · Factor desk</p>
+          <p className="mt-1 text-xs text-cream">Reference pricing & market caps</p>
+          <p className="mt-2 text-[11px] text-brass font-mono">
+            Reference · {feedLabel(feedById.get("coingecko")?.state)}
+            {feedById.get("coingecko")?.detail ? ` — ${feedById.get("coingecko")?.detail}` : ""}
+          </p>
         </Card>
 
         <Card className="border-line bg-panel p-3.5">
           <div className="flex items-center justify-between">
-            <Label>Finviz Breakout</Label>
-            <span className="size-2 rounded-full bg-gain" />
+            <Label>CoinMarketCap</Label>
+            <span className={feedDot(feedById.get("coinmarketcap")?.state)} />
           </div>
-          <p className="mt-1 text-xs text-cream">Volatility squeeze & geometry</p>
-          <p className="mt-2 text-[11px] text-brass font-mono">Weight 15% · Pattern engine</p>
+          <p className="mt-1 text-xs text-cream">Cross-venue reference checks</p>
+          <p className="mt-2 text-[11px] text-brass font-mono">
+            Reference · {feedLabel(feedById.get("coinmarketcap")?.state)}
+            {feedById.get("coinmarketcap")?.detail ? ` — ${feedById.get("coinmarketcap")?.detail}` : ""}
+          </p>
         </Card>
 
         <Card className="border-line bg-panel p-3.5">
           <div className="flex items-center justify-between">
-            <Label>Simul8or Queue</Label>
-            <span className="size-2 rounded-full bg-gain" />
+            <Label>Ensemble Consensus</Label>
+            <span className="size-2 rounded-full bg-brass" />
           </div>
-          <p className="mt-1 text-xs text-cream">Microstructure adverse selection</p>
-          <p className="mt-2 text-[11px] text-brass font-mono">Weight 10% · Level 2 Sim</p>
+          <p className="mt-1 text-xs text-cream">Invo + Finviz + Simul8or composite</p>
+          <p className="mt-2 text-[11px] text-brass font-mono">
+            Computed live per symbol below · {rows.length} symbols
+          </p>
         </Card>
       </div>
 
@@ -561,14 +596,28 @@ export function SignalsView() {
                             <span className="text-[10px] text-faint">({e.qty.toFixed(2)} units)</span>
                           </td>
                           <td className="py-2.5 text-loss">
-                            ${e.stopPrice >= 1 ? e.stopPrice.toFixed(2) : e.stopPrice.toPrecision(4)}
+                            {e.stopPrice !== null
+                              ? `$${e.stopPrice >= 1 ? e.stopPrice.toFixed(2) : e.stopPrice.toPrecision(4)}`
+                              : "—"}
                           </td>
                           <td className="py-2.5 text-gain">
-                            ${e.targetPrice >= 1 ? e.targetPrice.toFixed(2) : e.targetPrice.toPrecision(4)}
-                            <span className="ml-1 text-[10px] text-brass">({e.riskRewardRatio}:1 R)</span>
+                            {e.targetPrice !== null ? (
+                              <>
+                                ${e.targetPrice >= 1 ? e.targetPrice.toFixed(2) : e.targetPrice.toPrecision(4)}
+                                <span className="ml-1 text-[10px] text-brass">
+                                  ({e.riskRewardRatio !== null ? `${e.riskRewardRatio}:1 R` : "—"})
+                                </span>
+                              </>
+                            ) : (
+                              "—"
+                            )}
                           </td>
                           <td className="py-2.5">
-                            <span className="text-brass font-bold">{e.score}/100</span>
+                            {e.score !== null ? (
+                              <span className="text-brass font-bold">{e.score}/100</span>
+                            ) : (
+                              <span className="text-faint">—</span>
+                            )}
                           </td>
                           <td className="py-2.5 text-right whitespace-nowrap">
                             {e.status === "OPEN" ? (
@@ -647,11 +696,17 @@ export function SignalsView() {
                           </td>
                           <td className="py-2.5 font-bold text-cream">{x.symbol}</td>
                           <td className="py-2.5 text-cream">
-                            ${x.entryPrice >= 1 ? x.entryPrice.toFixed(2) : x.entryPrice.toPrecision(4)}{" "}
-                            &rarr;{" "}
-                            <span className={cn("font-bold", isWin ? "text-gain" : "text-loss")}>
-                              ${x.exitPrice >= 1 ? x.exitPrice.toFixed(2) : x.exitPrice.toPrecision(4)}
-                            </span>
+                            {x.entryPrice !== null && x.exitPrice !== null ? (
+                              <>
+                                ${x.entryPrice >= 1 ? x.entryPrice.toFixed(2) : x.entryPrice.toPrecision(4)}{" "}
+                                &rarr;{" "}
+                                <span className={cn("font-bold", isWin ? "text-gain" : "text-loss")}>
+                                  ${x.exitPrice >= 1 ? x.exitPrice.toFixed(2) : x.exitPrice.toPrecision(4)}
+                                </span>
+                              </>
+                            ) : (
+                              "—"
+                            )}
                           </td>
                           <td className="py-2.5 text-faint">{x.holdingTime}</td>
                           <td className="py-2.5">
@@ -669,9 +724,14 @@ export function SignalsView() {
                             </span>
                           </td>
                           <td className="py-2.5">
-                            <span className={cn("font-bold", isWin ? "text-gain" : "text-loss")}>
-                              {x.pnlPct >= 0 ? "+" : ""}{x.pnlPct.toFixed(1)}%
-                            </span>
+                            {x.pnlPct !== null ? (
+                              <span className={cn("font-bold", isWin ? "text-gain" : "text-loss")}>
+                                {x.pnlPct >= 0 ? "+" : ""}
+                                {x.pnlPct.toFixed(1)}%
+                              </span>
+                            ) : (
+                              <span className="text-faint">—</span>
+                            )}
                           </td>
                           <td className="py-2.5 text-right font-bold">
                             <span

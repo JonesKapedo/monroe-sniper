@@ -3,7 +3,7 @@ import { equity, exposure } from "../paper";
 import { auditAcademicSafeguards } from "./investopedia-mistakes-guard";
 import { fibExtensions, snapToFib } from "../math/fib";
 import { isCorrelatedDuplicate, setupVector, winnerResemblance, type SetupVector } from "../math/vectors";
-import { selectModel, type RiskModelProfile } from "./risk-models";
+import { MODELS, selectModel, type RiskModelProfile } from "./risk-models";
 
 export type SizingModel = "VOLATILITY_PARITY" | "FRACTIONAL_KELLY" | "FIXED_FRACTION";
 export type SizingProfile = "CONSERVATIVE" | "OPTIMUM_SWEET_SPOT" | "AGGRESSIVE" | "TURBO" | "[paranoid]" | "[elvis]" | "gradient" | "[degen]";
@@ -126,11 +126,9 @@ export function evaluateRiskAndSize(
   math?: RiskMathOverlays,
   modelId: RiskModelProfile["id"] = "[paranoid]",
 ): SizingVerdict {
-  const profile = selectModel(modelId) ?? selectModel("[paranoid]");
-  const convictionForModel = (
-    gradientEdge: number,
-    seen: number,
-  ): number => {
+  const profile: RiskModelProfile =
+    selectModel(modelId) ?? selectModel("[paranoid]") ?? MODELS["[paranoid]"];
+  const convictionForModel = (gradientEdge: number, seen: number): number => {
     const clamped = Math.max(-1, Math.min(1, gradientEdge / 12));
     const confidence = Math.min(1, seen / profile.confidenceRamp);
     return 1.0 + clamped * profile.convictionScale * confidence;
@@ -142,73 +140,18 @@ export function evaluateRiskAndSize(
   const currentExposure = exposure(book);
   const peak = Math.max(book.peakEquity, currentEquity);
   const drawdown = peak > 0 ? (peak - currentEquity) / peak : 0;
-  const dailyLossLimit = profile.id === "[degen]" ? 0.15 : profile.id === "[elvis]" ? 0.1 : 0.08;
-  const maxPositions = profile.id === "[degen]" ? 8 : profile.id === "[elvis]" ? 6 : 4;
+  const dailyLossLimit =
+    profile.id === "[degen]" ? 0.15 : profile.id === "[elvis]" ? 0.1 : 0.08;
+  const profileMaxPositions =
+    profile.id === "[degen]" ? 8 : profile.id === "[elvis]" ? 6 : 4;
   const isDuplicate = book.positions.some((p) => p.tokenId === candidate.id);
   const cooling = book.cooldownUntil !== null && now < book.cooldownUntil;
 
-  // 2. Circuit breaker – halt if daily loss exceeds profile limit
-  const dailyPnL = (book.peakEquity - equity(book)) / book.peakEquity;
-  const circuitBreakerTrip = dailyPnL > dailyLossLimit;
+  // 1. Estimate asset-specific volatility and ATR first so early returns
+  // carry authentic market context instead of hardcoded placeholders.
+  const { volatility, atr, regime } = estimateVolatility(candidate);
 
-  // 3. Max positions guard
-  const currentPositionCount = book.positions.length;
-  const positionsExceeded = currentPositionCount >= maxPositions;
-
-  // 4. Duplicate guard already checked above
-
-  // Early return if circuit breaker trips
-  if (circuitBreakerTrip) {
-    return {
-      allowed: false,
-      notional: 0,
-      qty: 0,
-      entryPrice: candidate.priceUsd,
-      stopPrice: candidate.priceUsd,
-      targetPrice: candidate.priceUsd,
-      stopLossPct: 0,
-      takeProfitPct: 0,
-      riskRewardRatio: 0,
-      riskAmount: 0,
-      valueAtRisk95: 0,
-      volatility: profile.id === "[degen]" ? "ELEVATED" : "NORMAL",
-      volatilityRegime: profile.id === "[degen]" ? "ELEVATED" : "NORMAL",
-      valueAtRisk95: 0,
-      checks: [...checks, "circuit-breaker"],
-      reasons: [...reasons, ],
-    };
-  }
-
-  // Early return if max positions exceeded
-  if (positionsExceeded) {
-    return {
-      allowed: false,
-      notional: 0,
-      qty: 0,
-      entryPrice: candidate.priceUsd,
-      stopPrice: candidate.priceUsd,
-      targetPrice: candidate.priceUsd,
-      stopLossPct: 0,
-      takeProfitPct: 0,
-      riskRewardRatio: 0,
-      riskAmount: 0,
-      valueAtRisk95: 0,
-      volatility: profile.id === "[degen]" ? "ELEVATED" : "NORMAL",
-      volatilityRegime: profile.id === "[degen]" ? "ELEVATED" : "NORMAL",
-      valueAtRisk95: 0,
-      checks: [...checks, "max-positions"],
-      reasons: [...reasons, ],
-    };
-  }
-
-  // 1. Estimate asset-specific volatility and ATR
-const { volatility, atr, regime } = estimateVolatility(candidate);
-
-// Model-profile minimum-edge gate — profiles have distinct thresholds; below
-// the threshold the candidate is rejected regardless of score or other gates.
-const effectiveEdge = gradientEdge !== undefined ? Math.max(-1, Math.min(1, gradientEdge / 12)) : 0;
-if (effectiveEdge < profile.minEdge) {
-  return {
+  const failVerdict = (id: string, label: string, detail: string, reason: string): SizingVerdict => ({
     allowed: false,
     notional: 0,
     qty: 0,
@@ -218,15 +161,60 @@ if (effectiveEdge < profile.minEdge) {
     stopLossPct: 0,
     takeProfitPct: 0,
     riskRewardRatio: 0,
+    atr,
+    volatility,
+    volatilityRegime: regime,
     riskAmount: 0,
     valueAtRisk95: 0,
-    volatility: regime,
-    volatilityRegime: regime,
-    valueAtRisk95: 0,
-    checks: [],
-    reasons: [`edge-below-${profile.id}`],
-  };
-}
+    checks: [{ id, label, pass: false, detail }],
+    reasons: [reason],
+  });
+
+  // 2. Circuit breaker – halt if daily loss exceeds profile limit
+  const peakForDaily = book.peakEquity > 0 ? book.peakEquity : currentEquity;
+  const dailyPnL = peakForDaily > 0 ? (peakForDaily - currentEquity) / peakForDaily : 0;
+  if (dailyPnL > dailyLossLimit) {
+    return failVerdict(
+      "circuit-breaker",
+      "Daily loss circuit breaker",
+      `Daily loss ${(dailyPnL * 100).toFixed(1)}% > ${(dailyLossLimit * 100).toFixed(0)}% (${profile.id})`,
+      `daily-loss-exceeds-${profile.id}`,
+    );
+  }
+
+  // 3. Max positions guard
+  if (book.positions.length >= profileMaxPositions) {
+    return failVerdict(
+      "max-positions",
+      `Max positions (${profileMaxPositions})`,
+      `${book.positions.length}/${profileMaxPositions} held`,
+      `max-positions-reached-${profileMaxPositions}`,
+    );
+  }
+
+  // Model-profile minimum-edge gate uses score-derived edge so the gate is
+  // driven by the live candidate rather than a hardcoded constant.
+  const effectiveEdge = Math.max(-1, Math.min(1, (candidate.score - 50) / 50));
+  if (effectiveEdge < profile.minEdge) {
+    return {
+      allowed: false,
+      notional: 0,
+      qty: 0,
+      entryPrice: candidate.priceUsd,
+      stopPrice: candidate.priceUsd,
+      targetPrice: candidate.priceUsd,
+      stopLossPct: 0,
+      takeProfitPct: 0,
+      riskRewardRatio: 0,
+      atr,
+      volatility,
+      volatilityRegime: regime,
+      riskAmount: 0,
+      valueAtRisk95: 0,
+      checks: [],
+      reasons: [`edge-below-${profile.id}`],
+    };
+  }
 
 // Apply conviction scaling from the model profile when gradient edge is available.
   // Dynamic Stop distance: ATR * atrMultiplier, clamped between 2% and 12%
@@ -274,9 +262,8 @@ if (effectiveEdge < profile.minEdge) {
   // alien shapes size down — never a veto, never a pass.
   const resemblance = winnerResemblance(candidateVector, math?.winnerVectors ?? []);
   const rawConviction = Math.min(1.35, Math.max(0.65, (candidate.score / 75) * (0.9 + 0.2 * resemblance)));
-  const gradientEdgeFromSettings = settings.riskSettings.gradientEdge ?? 0;
-  const seenFromMemory = s?.memory?.seen ?? 0;
-  const modelConviction = gradientEdgeFromSettings !== 0 ? convictionForModel(gradientEdgeFromSettings, seenFromMemory) : 1.0;
+  // Conviction scales with candidate edge; memory-aware ramps live in desk-store.
+  const modelConviction = convictionForModel(effectiveEdge * 12, 20);
   const conviction = Math.min(1.35, Math.max(0.65, rawConviction * modelConviction));
   const openSlots = Math.max(1, settings.maxPositions - book.positions.length);
   const cashPerSlot = book.cash / openSlots;

@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { Mascot } from "@/components/mascot";
 import { Button, Card } from "@/components/ui";
 import { supabaseSetupHint } from "@/lib/supabase-gate";
+import { useMascot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 
 /**
@@ -38,10 +39,26 @@ export function LoginView({
             ? "Email or password is incorrect."
             : signInError.message,
         );
+        try {
+          useMascot.getState().react("login-fail");
+        } catch {
+          // mascot is UI-only
+        }
+      } else {
+        try {
+          useMascot.getState().react("login-success");
+        } catch {
+          // mascot is UI-only
+        }
       }
       // Success flows through onAuthStateChange — no navigation needed.
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed. Try again.");
+      try {
+        useMascot.getState().react("login-fail");
+      } catch {
+        // mascot is UI-only
+      }
     } finally {
       setBusy(false);
     }

@@ -177,4 +177,3 @@ export async function checkSolBalance(address: string): Promise<{ sol: number; u
   return { sol: 0, usdc: 0 };
 }
 
-export type { BinanceConfig, BinanceTicker, BinanceOrderResponse, OrderSide, OrderType };

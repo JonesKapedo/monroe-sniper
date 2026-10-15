@@ -17,6 +17,7 @@ import { Route as SignalsRouteImport } from './routes/signals'
 import { Route as TapeRouteImport } from './routes/tape'
 import { Route as WalletRouteImport } from './routes/wallet'
 import { Route as ApiSolanaSwapsRouteImport } from './routes/api/solana-swaps'
+import { Route as ApiTradingCycleRouteImport } from './routes/api/trading-cycle'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -58,6 +59,11 @@ const ApiSolanaSwapsRoute = ApiSolanaSwapsRouteImport.update({
   path: '/api/solana-swaps',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTradingCycleRoute = ApiTradingCycleRouteImport.update({
+  id: '/api/trading-cycle',
+  path: '/api/trading-cycle',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -68,6 +74,7 @@ export interface FileRoutesByFullPath {
   '/tape': typeof TapeRoute
   '/wallet': typeof WalletRoute
   '/api/solana-swaps': typeof ApiSolanaSwapsRoute
+  '/api/trading-cycle': typeof ApiTradingCycleRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -78,6 +85,7 @@ export interface FileRoutesByTo {
   '/tape': typeof TapeRoute
   '/wallet': typeof WalletRoute
   '/api/solana-swaps': typeof ApiSolanaSwapsRoute
+  '/api/trading-cycle': typeof ApiTradingCycleRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -89,6 +97,7 @@ export interface FileRoutesById {
   '/tape': typeof TapeRoute
   '/wallet': typeof WalletRoute
   '/api/solana-swaps': typeof ApiSolanaSwapsRoute
+  '/api/trading-cycle': typeof ApiTradingCycleRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -101,6 +110,7 @@ export interface FileRouteTypes {
     | '/tape'
     | '/wallet'
     | '/api/solana-swaps'
+    | '/api/trading-cycle'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -111,6 +121,7 @@ export interface FileRouteTypes {
     | '/tape'
     | '/wallet'
     | '/api/solana-swaps'
+    | '/api/trading-cycle'
   id:
     | '__root__'
     | '/'
@@ -121,6 +132,7 @@ export interface FileRouteTypes {
     | '/tape'
     | '/wallet'
     | '/api/solana-swaps'
+    | '/api/trading-cycle'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -132,6 +144,7 @@ export interface RootRouteChildren {
   TapeRoute: typeof TapeRoute
   WalletRoute: typeof WalletRoute
   ApiSolanaSwapsRoute: typeof ApiSolanaSwapsRoute
+  ApiTradingCycleRoute: typeof ApiTradingCycleRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -192,6 +205,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSolanaSwapsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/trading-cycle': {
+      id: '/api/trading-cycle'
+      path: '/api/trading-cycle'
+      fullPath: '/api/trading-cycle'
+      preLoaderRoute: typeof ApiTradingCycleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -204,6 +224,7 @@ const rootRouteChildren: RootRouteChildren = {
   TapeRoute: TapeRoute,
   WalletRoute: WalletRoute,
   ApiSolanaSwapsRoute: ApiSolanaSwapsRoute,
+  ApiTradingCycleRoute: ApiTradingCycleRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

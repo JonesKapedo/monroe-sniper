@@ -37,6 +37,8 @@ import { WalletButton } from "@/components/wallet-modal";
 import { Money, capitalMoodClass } from "@/components/money";
 import { cn } from "@/lib/cn";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
+import { useMascot } from "@/lib/mascot";
+import { EquityDashboard } from "@/components/equity-dashboard";
 
 const money = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -78,7 +80,13 @@ export function Desk() {
   const turboEntries = useDesk((s) => s.turboEntries);
   const turboReport = useDesk((s) => s.turboReport);
   const startTurbo = useDesk((s) => s.startTurbo);
+  const stopTurbo = useDesk((s) => s.stopTurbo);
   const bypassTurboCooldown = useDesk((s) => s.bypassTurboCooldown);
+  const manualHalt = useDesk((s) => s.manualHalt);
+  const manualResume = useDesk((s) => s.manualResume);
+  const equityGuardState = useDesk((s) => s.equityGuardState);
+  const profitLockState = useDesk((s) => s.profitLockState);
+  const currentTier = useDesk((s) => s.currentTier);
   const getReadiness = useDesk((s) => s.getReadiness);
   const readiness = getReadiness ? getReadiness() : null;
 
@@ -155,9 +163,19 @@ export function Desk() {
   const toggleBotPower = () => {
     if (!power) {
       setPower(true);
+      try {
+        useMascot.getState().react("arm-bot");
+      } catch {
+        // mascot is UI-only
+      }
       return;
     }
     setPower(false);
+    try {
+      useMascot.getState().react("disarm-bot");
+    } catch {
+      // mascot is UI-only
+    }
     if (useDesk.getState().demo.positions.length) setShowStandbyModal(true);
   };
 
@@ -193,20 +211,28 @@ export function Desk() {
 
         {/* Mode Switch Button & Power Button */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          {/* Prominent Mode Switch Button */}
-          <div className="flex items-center rounded-xl border border-line bg-panel-2 p-1">
+          {/* Trading mode (paper) — separated from wallet connection */}
+          <div
+            className="flex items-center rounded-xl border border-line bg-panel-2 p-1"
+            title="Paper simulation mode. Live execution stays locked."
+          >
             <button
               type="button"
               onClick={() => setMode("demo")}
               className={cn(
                 "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
-                mode === "demo"
-                  ? "bg-brass text-ink shadow-sm"
-                  : "text-faint hover:text-cream",
+                mode === "demo" ? "bg-brass text-ink shadow-sm" : "text-faint hover:text-cream",
               )}
             >
               Paper trading
             </button>
+          </div>
+
+          {/* Wallet connection — distinct zone */}
+          <div
+            className="flex items-center rounded-xl border border-brass/30 bg-brass/5 p-1"
+            title="Connect a read-only wallet for balance awareness. Trading stays paper-only."
+          >
             <WalletButton compact />
           </div>
 
@@ -232,15 +258,22 @@ export function Desk() {
             )}
           </Button>
 
-          {/* Turbo mode: 27-min max-aggression run */}
+          {/* Turbo mode with kill switch */}
           {turboPhase === "off" ? (
             <Button
               variant="ghost"
-              onClick={() => startTurbo()}
+              onClick={() => {
+                const res = startTurbo();
+                try {
+                  if (res.ok) useMascot.getState().react("turbo-start");
+                } catch {
+                  // mascot is UI-only
+                }
+              }}
               className="border-loss/50 font-semibold text-loss hover:bg-loss/10"
-              title="27-minute max-aggression run. Safety gates stay armed."
+              title="34-minute max-aggression run. Safety gates stay armed."
             >
-              🔥 Turbo
+              Turbo
             </Button>
           ) : (
             <span
@@ -252,7 +285,21 @@ export function Desk() {
               )}
               title={turboPhase === "running" ? "Turbo run in progress" : "Turbo cooling — entries halted"}
             >
-              🔥 {turboPhase === "running" ? `TURBO ${formatCountdown(turboEndsAt, nowTs)}` : `COOL ${formatCountdown(turboCooldownUntil, nowTs)}`}
+              {turboPhase === "running" ? `TURBO ${formatCountdown(turboEndsAt, nowTs)}` : `COOL ${formatCountdown(turboCooldownUntil, nowTs)}`}
+              {turboPhase === "running" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm("Stop the turbo run now? Profile restores, bot stays armed.")) {
+                      stopTurbo();
+                    }
+                  }}
+                  className="ml-1 rounded bg-loss px-1.5 py-0.5 text-[10px] font-bold text-ink hover:bg-loss/80"
+                  title="Kill switch: stop turbo immediately"
+                >
+                  STOP
+                </button>
+              )}
             </span>
           )}
           {turboPhase === "cooling" && (
@@ -271,13 +318,44 @@ export function Desk() {
           )}
 
           {/* Refresh Feeds */}
+          <Button variant="ghost" onClick={() => scan(query)} disabled={busy} title="Scan global feeds">
+            <RefreshCw className={cn("size-4", busy && "animate-spin")} />
+          </Button>
+
+          {/* 5-min engine cycle: market + whale refresh, guard, profit lock, persist */}
           <Button
             variant="ghost"
-            onClick={() => scan(query)}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const { runTradingCycle } = await import("@/functions/trading-engine");
+                const res = await runTradingCycle({ data: undefined as never });
+                useDesk.setState((prev) => ({
+                  note: res.note,
+                  log: [`Engine cycle: ${res.note}`, ...prev.log].slice(0, 50),
+                }));
+                if (res.profitLocked > 0) {
+                  try {
+                    useMascot.getState().react("profit-lock");
+                  } catch {
+                    // mascot is UI-only
+                  }
+                }
+              } catch {
+                useDesk.setState((prev) => ({
+                  note: "Engine cycle failed — market scan continues locally.",
+                  log: ["Engine cycle failed.", ...prev.log].slice(0, 50),
+                }));
+              } finally {
+                await scan(query);
+                setBusy(false);
+              }
+            }}
             disabled={busy}
-            title="Scan global feeds"
+            title="Run 5-min engine cycle: refresh market + whales, apply guard + profit lock, save to DB"
           >
-            <RefreshCw className={cn("size-4", busy && "animate-spin")} />
+            <Clock className={cn("size-4", busy && "animate-spin")} />
+            <span className="ml-1 hidden text-xs sm:inline">5-min cycle</span>
           </Button>
 
           {/* Flatten Positions */}
@@ -289,8 +367,41 @@ export function Desk() {
           >
             Flatten All
           </Button>
+
+          {/* Global kill switch */}
+          {equityGuardState.isHalted ? (
+            <Button
+              variant="solid"
+              onClick={() => manualResume()}
+              className="bg-gain font-semibold text-ink hover:bg-gain/90"
+              title={equityGuardState.haltReason ?? "Resume trading"}
+            >
+              Resume
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (window.confirm("Halt all new entries? Open positions ride to exits.")) {
+                  manualHalt("Operator global halt", 60);
+                  try {
+                    useMascot.getState().react("halt-triggered");
+                  } catch {
+                    // mascot is UI-only
+                  }
+                }
+              }}
+              className="border-loss/50 font-semibold text-loss hover:bg-loss/10"
+              title="Global kill switch: block all new entries"
+            >
+              Halt all
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* Equity protection: profit lock + tier + guard */}
+      <EquityDashboard />
 
       {/* Nairobi EAT (UTC+3) Clock & Bot Lifecycle Status Strip */}
       <div className="flex flex-col justify-between gap-3 rounded-xl border border-line bg-panel p-3.5 sm:flex-row sm:items-center">

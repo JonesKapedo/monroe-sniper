@@ -110,7 +110,7 @@ export function auditOrderPlaced(order: NormalisedOrder, actor?: string) {
 export function auditOrderFilled(order: NormalisedOrder, actor?: string) {
   useAuditStore.getState().push({
     category: "ORDER_FILLED",
-    message: `Order filled: ${order.side} ${order.filledQuantity ?? order.quantity} ${order.symbol} @ ${order.avgPrice ?? order.price ?? "MKT"}`,
+    message: `Order filled: ${order.side} ${order.quantity} ${order.symbol} @ ${order.price ?? "MKT"}`,
     payload: { orderId: order.id, ...order },
     actor,
   });
@@ -138,7 +138,7 @@ export function auditKycUpdate(status: KycStatus, actor?: string) {
   useAuditStore.getState().push({
     category: "KYC_UPDATED",
     message: `KYC ${status.approved ? "approved" : "rejected"}: ${status.provider} level ${status.level}`,
-    payload: { verificationId: status.verificationId, ...status },
+    payload: { ...status },
     actor,
   });
 }
@@ -325,4 +325,3 @@ export function generateComplianceReport(
   ].join("\n");
 }
 
-export type { KycStatus, AuditEntry };

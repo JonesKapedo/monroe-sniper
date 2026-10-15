@@ -403,4 +403,3 @@ export function getPerfSummary(): string {
   return `Eq: $${dash.equity.toFixed(2)} | P&L: ${dash.session.totalPnlPct.toFixed(2)}% | WR: ${dash.session.winRate.toFixed(1)}% | PF: ${dash.session.profitFactor.toFixed(2)} | Trades: ${dash.session.tradeCount}`;
 }
 
-export type { TradeRecord, PnLMetrics, StrategyMetrics, DashboardSnapshot };
