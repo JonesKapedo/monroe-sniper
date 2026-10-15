@@ -61,6 +61,8 @@ export function Frame({ children }: { children: ReactNode }) {
     let cancel = false;
     let timer = 0;
     let tickCount = 0;
+    // Last background engine-cycle run (timestamp ms). Cadence lives in Settings.
+    let lastEngineCycleAt = 0;
     // Last-known good marks: on total feed outage the desk still ticks these
     // (display refresh + time stops) instead of freezing mid-risk.
     let lastPrices: Record<string, number> = {};
@@ -184,9 +186,15 @@ export function Frame({ children }: { children: ReactNode }) {
       // Auto-step desk sniper if power is on
       if (useDesk.getState().power) useDesk.getState().autoStep();
 
-      // 5-minute engine cycle: market + whale refresh, guard, profit lock, DB persist.
+      // Background engine cycle: market + whale refresh, guard, profit lock,
+      // DB persist. Cadence + on/off live in Settings → Bot interoperability.
       // Runs even when the bot is on standby so protection never sleeps.
-      if (tickCount % 150 === 0) {
+      {
+        const cfg = useDesk.getState().engineCycle;
+        const now = Date.now();
+        const due = cfg.enabled && now - lastEngineCycleAt >= cfg.minutes * 60_000;
+        if (due) lastEngineCycleAt = now;
+        if (due) {
         void (async () => {
           try {
             const { runTradingCycle } = await import("@/functions/trading-engine");
@@ -201,6 +209,7 @@ export function Frame({ children }: { children: ReactNode }) {
             // Best-effort; local ticking continues.
           }
         })();
+        }
       }
 
       // Live perp funding for avenue hydration, refreshed about once a minute.

@@ -69,4 +69,13 @@ describe("paper readiness (qualifying TP/SL trades, 65% win-rate floor)", () => 
     const weak = calculatePaperReadiness(bookWithUnrealized(), [...win(129), ...loss(71)]);
     assert.notEqual(weak.status, "PAPER_PROVEN");
   });
+
+  it("honors custom discipline targets", () => {
+    const strict = calculatePaperReadiness(bookWithUnrealized(), win(200), { trades: 300, winRate: 65 });
+    assert.equal(strict.targetDemoTrades, 300);
+    assert.notEqual(strict.status, "PAPER_PROVEN");
+    const relaxed = calculatePaperReadiness(bookWithUnrealized(), win(100), { trades: 100, winRate: 65 });
+    assert.equal(relaxed.targetDemoTrades, 100);
+    assert.equal(relaxed.status, "PAPER_PROVEN");
+  });
 });

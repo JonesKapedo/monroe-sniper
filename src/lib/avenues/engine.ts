@@ -51,6 +51,7 @@ export const defaultDisciplineRules: DisciplineRules = {
   autoBreakEvenAtMultiple: 1.5, // Move stop to break-even once 1.5R profit reached
   haltOnConsecutiveLosses: 3, // Cooldown after 3 back-to-back losses
   blacklistedTokenCheck: true,
+  reentryCooldownMinutes: 30, // Sit-out after any close on the same symbol
 };
 
 /**
@@ -236,9 +237,19 @@ export function avenueAnchors(
  *
  * `history` is the deduped close list (persisted DB events + local book trades).
  */
+export interface ReadinessTargets {
+  /** Qualifying TP/SL closes required (clamped 50–300). */
+  trades: number;
+  /** Win-rate floor % (clamped 50–80). */
+  winRate: number;
+}
+
+export const DEFAULT_READINESS_TARGETS: ReadinessTargets = { trades: 200, winRate: 65 };
+
 export function calculatePaperReadiness(
   book: Book,
   history: Array<{ pnl: number; reason?: string; simulated?: boolean }> | null = null,
+  targets: Partial<ReadinessTargets> = {},
 ): PaperReadiness {
   const closes = history ?? book.trades;
   // Qualifying trades only: stop hits are disciplined exits, target hits are
@@ -250,7 +261,9 @@ export function calculatePaperReadiness(
     return r === "TARGET" || r === "STOP" || r === "BREAKEVEN";
   });
   const completedDemoTrades = qualifying.length;
-  const targetDemoTrades = 200;
+  const targetDemoTrades = Math.round(
+    Math.min(300, Math.max(50, targets.trades ?? DEFAULT_READINESS_TARGETS.trades)),
+  );
 
   const targetHits = qualifying.filter((t) => (t.reason ?? "").toUpperCase() === "TARGET");
   const stopHits = qualifying.filter((t) => (t.reason ?? "").toUpperCase() !== "TARGET");
@@ -267,10 +280,10 @@ export function calculatePaperReadiness(
   const peak = Math.max(book.peakEquity, currentEquity);
   const maxDrawdownPct = peak > 0 ? ((peak - currentEquity) / peak) * 100 : 0;
 
-  // Hard floor: fewer than 20 qualifying trades or a win rate below 65%
-  // means there is no evidence of edge — cap the score at 25.
+  // Hard floor: fewer than 20 qualifying trades or a win rate below the
+  // configured floor means there is no evidence of edge — cap at 25.
   const MIN_QUALIFYING = 20;
-  const MIN_WIN_RATE = 65;
+  const MIN_WIN_RATE = Math.min(80, Math.max(50, targets.winRate ?? DEFAULT_READINESS_TARGETS.winRate));
   const floored = completedDemoTrades < MIN_QUALIFYING || winRate < MIN_WIN_RATE;
 
   // Checklist of rigorous discipline criteria (honest gates)
@@ -336,20 +349,20 @@ export function calculatePaperReadiness(
   let statusMessage =
     "Paper training is active; only bracket-resolved trades (targets and stops) count toward the edge estimate.";
   let recommendation =
-    "Keep the bot in paper mode while it collects 200 qualifying trades at a 65%+ win rate.";
+    `Keep the bot in paper mode while it collects ${targetDemoTrades} qualifying trades at a ${MIN_WIN_RATE}%+ win rate.`;
 
   if (!floored && readinessScore >= 85 && completedDemoTrades >= targetDemoTrades) {
     status = "PAPER_PROVEN";
-    statusMessage = "Paper thresholds met: 200+ qualifying trades at 65%+ win rate. This is not approval for real-money trading.";
+    statusMessage = `Paper thresholds met: ${targetDemoTrades}+ qualifying trades at ${MIN_WIN_RATE}%+ win rate. This is not approval for real-money trading.`;
     recommendation =
       "The qualifying sample meets the configured paper thresholds. Live execution remains unavailable.";
   } else if (!floored && readinessScore >= 60) {
     status = "QUALIFYING";
     statusMessage = "Paper review in progress; collecting qualifying target/stop outcomes.";
     recommendation =
-      "Bot is performing well in simulated market flow. Allow it to finish the 200-trade qualifying sample to confirm drawdown stability.";
+      `Bot is performing well in simulated market flow. Allow it to finish the ${targetDemoTrades}-trade qualifying sample to confirm drawdown stability.`;
   } else if (floored && completedDemoTrades >= MIN_QUALIFYING) {
-    statusMessage = `Win rate ${winRate.toFixed(1)}% is below the 65% floor — score capped until edge improves.`;
+    statusMessage = `Win rate ${winRate.toFixed(1)}% is below the ${MIN_WIN_RATE}% floor — score capped until edge improves.`;
     recommendation =
       "Losses are outpacing wins on bracket-resolved trades. Let the bot keep learning; the score only rises with a genuine edge.";
   }
@@ -367,7 +380,7 @@ export function calculatePaperReadiness(
     completedDemoTrades,
     targetDemoTrades,
     currentWinRatePct: Math.round(winRate * 10) / 10,
-    targetWinRatePct: 65.0,
+    targetWinRatePct: MIN_WIN_RATE,
     profitFactor: Math.round(profitFactor * 100) / 100,
     targetProfitFactor: 1.6,
     maxObservedDrawdownPct: Math.round(maxDrawdownPct * 10) / 10,

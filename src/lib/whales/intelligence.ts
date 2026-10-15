@@ -280,19 +280,40 @@ export interface PreCopyCheckResult {
   correlation: number;
 }
 
+export interface WhaleQualification {
+  /** Minimum tracked qualifying moves (clamped 5–50). */
+  minMoves: number;
+  /** Minimum historical win rate % (clamped 50–80). */
+  minWinRate: number;
+  /** Minimum confidence score 0–100 (clamped 50–90). */
+  minConfidence: number;
+}
+
+export const DEFAULT_WHALE_QUALIFICATION: WhaleQualification = {
+  minMoves: 20,
+  minWinRate: 65,
+  minConfidence: 70,
+};
+
 export async function evaluateWhaleMoveForCopy(
   move: WhaleMoveRaw,
   whaleProfile: WhaleProfile,
   riskEngine: (candidate: any) => { allowed: boolean; notional: number; stopPrice: number; targetPrice: number; score: number },
   currentEquity: number,
   currentPositions: number,
-  maxPositions: number
+  maxPositions: number,
+  qualification: Partial<WhaleQualification> = {},
 ): Promise<PreCopyCheckResult> {
+  const q: WhaleQualification = {
+    minMoves: Math.round(Math.min(50, Math.max(5, qualification.minMoves ?? DEFAULT_WHALE_QUALIFICATION.minMoves))),
+    minWinRate: Math.min(80, Math.max(50, qualification.minWinRate ?? DEFAULT_WHALE_QUALIFICATION.minWinRate)),
+    minConfidence: Math.round(Math.min(90, Math.max(50, qualification.minConfidence ?? DEFAULT_WHALE_QUALIFICATION.minConfidence))),
+  };
   // 1. Whale qualification checks
-  if (whaleProfile.confidenceScore < 70) {
+  if (whaleProfile.confidenceScore < q.minConfidence) {
     return {
       allowed: false,
-      reason: `Whale confidence ${whaleProfile.confidenceScore} < 70`,
+      reason: `Whale confidence ${whaleProfile.confidenceScore} < ${q.minConfidence}`,
       whaleProfile,
       riskModelVerdict: "FAIL",
       riskScore: 0,
@@ -302,11 +323,11 @@ export async function evaluateWhaleMoveForCopy(
       correlation: 0,
     };
   }
-  
-  if (whaleProfile.winRate < 65) {
+
+  if (whaleProfile.winRate < q.minWinRate) {
     return {
       allowed: false,
-      reason: `Whale win rate ${whaleProfile.winRate}% < 65%`,
+      reason: `Whale win rate ${whaleProfile.winRate}% < ${q.minWinRate}%`,
       whaleProfile,
       riskModelVerdict: "FAIL",
       riskScore: 0,
@@ -316,11 +337,11 @@ export async function evaluateWhaleMoveForCopy(
       correlation: 0,
     };
   }
-  
-  if (whaleProfile.qualifyingMoves < 20) {
+
+  if (whaleProfile.qualifyingMoves < q.minMoves) {
     return {
       allowed: false,
-      reason: `Whale qualifying moves ${whaleProfile.qualifyingMoves} < 20`,
+      reason: `Whale qualifying moves ${whaleProfile.qualifyingMoves} < ${q.minMoves}`,
       whaleProfile,
       riskModelVerdict: "FAIL",
       riskScore: 0,

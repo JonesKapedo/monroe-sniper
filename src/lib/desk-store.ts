@@ -82,6 +82,7 @@ export type DbSource = "neon" | "pglite" | "unknown";
 export type TurboPhase = "off" | "running" | "cooling";
 
 /** A turbo run is 34 minutes with progress audits at 8, 13, and 21 minutes, then a 10-minute cooldown. */
+/** Legacy defaults — turbo timing now lives in state (turboRunMinutes). Kept for reference. */
 export const TURBO_RUN_MS = 34 * 60_000;
 export const TURBO_COOLDOWN_MS = 10 * 60_000;
 
@@ -266,6 +267,28 @@ type DeskState = {
    * so the database restarts clean too.
    */
   purgeLearningHistory: () => void;
+  /**
+   * Bot interoperability: which engines may open entries. Manual entries are
+   * always allowed. The shared kill switch / equity guard still governs all.
+   */
+  entrySources: { avenues: boolean; tape: boolean; whale: boolean };
+  setEntrySource: (key: "avenues" | "tape" | "whale", on: boolean) => void;
+  /** Live-tunable capital protection (trailing stop, daily loss, halts). */
+  updateEquityGuardConfig: (patch: Partial<EquityGuardConfig>) => void;
+  /** Turbo run / cooldown lengths in minutes. */
+  setTurboRunMinutes: (minutes: number) => void;
+  setTurboCooldownMinutes: (minutes: number) => void;
+  /** Background engine cycle (market + whale refresh, guard, profit lock). */
+  engineCycle: { enabled: boolean; minutes: number };
+  setEngineCycle: (patch: Partial<{ enabled: boolean; minutes: number }>) => void;
+  /** Whale-copy master switch plus qualification floors. */
+  whaleSettings: { enabled: boolean; minMoves: number; minWinRate: number; minConfidence: number };
+  updateWhaleSettings: (
+    patch: Partial<{ enabled: boolean; minMoves: number; minWinRate: number; minConfidence: number }>,
+  ) => void;
+  /** Paper-discipline targets (qualifying trades + win-rate floor). */
+  readinessTargets: { trades: number; winRate: number };
+  setReadinessTargets: (patch: Partial<{ trades: number; winRate: number }>) => void;
 };
 
 
@@ -594,6 +617,14 @@ export const useDesk = create<DeskState>()(
         lastUpdated: Date.now(),
       },
       equityGuardConfig: DEFAULT_EQUITY_GUARD_CONFIG,
+      // Bot interoperability — which engines may open entries.
+      entrySources: { avenues: true, tape: true, whale: true },
+      // Background engine cycle (market + whale refresh, guard, profit lock).
+      engineCycle: { enabled: true, minutes: 5 },
+      // Whale-copy master switch plus qualification floors.
+      whaleSettings: { enabled: true, minMoves: 20, minWinRate: 65, minConfidence: 70 },
+      // Paper-discipline targets (qualifying trades + win-rate floor).
+      readinessTargets: { trades: 200, winRate: 65 },
       // Risk-model selection — persists across page visits via localStorage.
       selectedModel: MODELS["[paranoid]"],
       modelHistory: [],
@@ -641,12 +672,13 @@ export const useDesk = create<DeskState>()(
           return { ok: false, note: "Turbo is cooling — wait it out or bypass the cooldown." };
         }
         const now = Date.now();
+        const runMinutes = Math.round(Math.min(120, Math.max(5, s.turboRunMinutes ?? 34)));
         set({
           turboPrevProfile: s.selectedModel.id,
           riskSettings: { ...s.riskSettings, sizingProfile: "[degen]" },
           turboPhase: "running",
           turboStartedAt: now,
-          turboEndsAt: now + TURBO_RUN_MS,
+          turboEndsAt: now + runMinutes * 60_000,
           turboCooldownUntil: null,
           turboEntries: 0,
           turboReport: {
@@ -657,8 +689,8 @@ export const useDesk = create<DeskState>()(
             startMinScore: s.memory.minScore,
           },
           power: true,
-          note: "TURBO ARMED — 34-minute max-aggression run with audits at 8/13/21min. Safety gates stay armed.",
-          log: pushLog(s.log, "TURBO run started (34:00)"),
+          note: `TURBO ARMED — ${runMinutes}-minute max-aggression run. Safety gates stay armed.`,
+          log: pushLog(s.log, `TURBO run started (${runMinutes}:00)`),
         });
         try {
           useMascot.getState().react("turbo-start");
@@ -774,6 +806,9 @@ export const useDesk = create<DeskState>()(
         if (s.mode !== "demo" || !s.power || s.turboPhase === "cooling") {
           return { ok: false, note: "Bot is not taking entries right now" };
         }
+        if (!s.entrySources.whale || !s.whaleSettings.enabled) {
+          return { ok: false, note: "Whale copy is paused in Settings → Bot interoperability." };
+        }
         if (s.actedSigs.includes(sig)) {
           return { ok: false, note: "Already acted on this whale move" };
         }
@@ -850,6 +885,11 @@ export const useDesk = create<DeskState>()(
           currentEquity,
           currentPositions,
           maxPositions,
+          {
+            minMoves: s.whaleSettings.minMoves,
+            minWinRate: s.whaleSettings.minWinRate,
+            minConfidence: s.whaleSettings.minConfidence,
+          },
         );
 
         // New wallet: log the gate outcome but still allow the legacy risk-gated
@@ -1007,7 +1047,10 @@ export const useDesk = create<DeskState>()(
             .filter((e) => !seenIds.has(e.id))
             .map((e) => ({ pnl: e.pnl, reason: e.reason })),
         ];
-        return calculatePaperReadiness(book, history);
+        return calculatePaperReadiness(book, history, {
+          trades: s.readinessTargets.trades,
+          winRate: s.readinessTargets.winRate,
+        });
       },
 
       tick: (prices, monitorOnly = false, staleIds: ReadonlySet<string> = EMPTY_SET) => {
@@ -1176,15 +1219,19 @@ export const useDesk = create<DeskState>()(
         const scoreFloor = isTurbo ? Math.max(45, s.memory.minScore - 15) : s.memory.minScore;
         const overlays = mathOverlays(currentBook);
 
-        // Re-entry discipline, all modes: any symbol closed within the last
-        // 30 minutes sits out. TARGET loops re-firing every cycle is exactly
-        // how phantom win streaks were manufactured — no legitimate setup
-        // needs the same symbol twice in half an hour.
+        // Re-entry discipline, all modes: any symbol closed within the
+        // configured cooldown sits out. TARGET loops re-firing every cycle is
+        // exactly how phantom win streaks were manufactured — no legitimate
+        // setup needs the same symbol twice in half an hour.
         // Fib-spaced re-entry stacks on top for turbo stops.
+        const cooldownMs = Math.max(
+          5,
+          Math.min(120, s.disciplineRules.reentryCooldownMinutes ?? 30),
+        ) * 60_000;
         const fibBlocked = (symbol: string): boolean => {
           const now = Date.now();
           const lastClose = s.lastCloseAt[symbol];
-          if (lastClose && now - lastClose < 30 * 60_000) return true;
+          if (lastClose && now - lastClose < cooldownMs) return true;
           if (!isTurbo) return false;
           const last = s.lastStopAt[symbol];
           if (!last) return false;
@@ -1216,7 +1263,8 @@ export const useDesk = create<DeskState>()(
         // If a live-verified avenue setup is available, execute with disciplined
         // parameters. Volume/liquidity/volatility come from the live tape via
         // the avenue anchor — absent tape context means no entry (fail-closed).
-        if (unheldAvenue) {
+        // Pausable from Settings → Bot interoperability.
+        if (s.entrySources.avenues && unheldAvenue) {
           const tapeCtx = tapeContextFor(unheldAvenue.anchorSymbol, s.tape);
           if (!tapeCtx) {
             // Throttled: one skip line per avenue per 30 minutes, not per cycle.
@@ -1320,8 +1368,8 @@ export const useDesk = create<DeskState>()(
           }
         }
 
-        // 2. Otherwise pick from market tape
-        {
+        // 2. Otherwise pick from market tape (pausable from Bot interoperability).
+        if (s.entrySources.tape) {
           const live = useDesk.getState();
           const tapeBook = live[live.mode];
           if (tapeBook.positions.length >= live.riskSettings.maxPositions) return;
@@ -1669,6 +1717,12 @@ export const useDesk = create<DeskState>()(
           log: pushLog(s.log, `Profit lock config updated`),
         })),
 
+      updateEquityGuardConfig: (patch) =>
+        set((s) => ({
+          equityGuardConfig: { ...s.equityGuardConfig, ...patch },
+          log: pushLog(s.log, "Equity guard config updated"),
+        })),
+
       updateTier: (equity: number) =>
         set((s) => {
           const newTier = detectTier(equity, s.currentTier);
@@ -1686,6 +1740,70 @@ export const useDesk = create<DeskState>()(
         const s = get();
         return s.tierConfig;
       },
+
+      setEntrySource: (key, on) =>
+        set((s) => ({
+          entrySources: { ...s.entrySources, [key]: on },
+          log: pushLog(
+            s.log,
+            `Entry source ${key} ${on ? "enabled" : "paused"} by operator`,
+          ),
+        })),
+
+      setTurboRunMinutes: (minutes) =>
+        set((s) => ({
+          turboRunMinutes: Math.round(Math.min(120, Math.max(5, minutes))),
+          log: pushLog(s.log, "Turbo run length updated"),
+        })),
+
+      setTurboCooldownMinutes: (minutes) =>
+        set((s) => ({
+          turboCooldownMinutes: Math.round(Math.min(60, Math.max(2, minutes))),
+          log: pushLog(s.log, "Turbo cooldown updated"),
+        })),
+
+      setEngineCycle: (patch) =>
+        set((s) => ({
+          engineCycle: {
+            enabled: patch.enabled ?? s.engineCycle.enabled,
+            minutes: patch.minutes === undefined
+              ? s.engineCycle.minutes
+              : [5, 15, 30, 60].includes(patch.minutes)
+                ? patch.minutes
+                : s.engineCycle.minutes,
+          },
+          log: pushLog(s.log, "Background engine cycle updated"),
+        })),
+
+      updateWhaleSettings: (patch) =>
+        set((s) => ({
+          whaleSettings: {
+            enabled: patch.enabled ?? s.whaleSettings.enabled,
+            minMoves: patch.minMoves === undefined
+              ? s.whaleSettings.minMoves
+              : Math.round(Math.min(50, Math.max(5, patch.minMoves))),
+            minWinRate: patch.minWinRate === undefined
+              ? s.whaleSettings.minWinRate
+              : Math.min(80, Math.max(50, patch.minWinRate)),
+            minConfidence: patch.minConfidence === undefined
+              ? s.whaleSettings.minConfidence
+              : Math.round(Math.min(90, Math.max(50, patch.minConfidence))),
+          },
+          log: pushLog(s.log, "Whale-copy settings updated"),
+        })),
+
+      setReadinessTargets: (patch) =>
+        set((s) => ({
+          readinessTargets: {
+            trades: patch.trades === undefined
+              ? s.readinessTargets.trades
+              : Math.round(Math.min(300, Math.max(50, patch.trades))),
+            winRate: patch.winRate === undefined
+              ? s.readinessTargets.winRate
+              : Math.min(80, Math.max(50, patch.winRate)),
+          },
+          log: pushLog(s.log, "Paper-discipline targets updated"),
+        })),
 
       // Equity guard
       stopTurbo: () => {
@@ -1842,6 +1960,13 @@ export const useDesk = create<DeskState>()(
         // Equity guard
         equityGuardState: s.equityGuardState,
         equityGuardConfig: s.equityGuardConfig,
+        // Bot interoperability + discipline targets
+        entrySources: s.entrySources,
+        engineCycle: s.engineCycle,
+        whaleSettings: s.whaleSettings,
+        readinessTargets: s.readinessTargets,
+        turboRunMinutes: s.turboRunMinutes,
+        turboCooldownMinutes: s.turboCooldownMinutes,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
@@ -1884,6 +2009,25 @@ export const useDesk = create<DeskState>()(
           }
           if (state.equityGuardConfig) {
             useDesk.setState({ equityGuardConfig: state.equityGuardConfig });
+          }
+          // Restore bot interoperability + discipline targets
+          if (state.entrySources) {
+            useDesk.setState({ entrySources: state.entrySources });
+          }
+          if (state.engineCycle) {
+            useDesk.setState({ engineCycle: state.engineCycle });
+          }
+          if (state.whaleSettings) {
+            useDesk.setState({ whaleSettings: state.whaleSettings });
+          }
+          if (state.readinessTargets) {
+            useDesk.setState({ readinessTargets: state.readinessTargets });
+          }
+          if (typeof state.turboRunMinutes === "number") {
+            useDesk.setState({ turboRunMinutes: state.turboRunMinutes });
+          }
+          if (typeof state.turboCooldownMinutes === "number") {
+            useDesk.setState({ turboCooldownMinutes: state.turboCooldownMinutes });
           }
         }
       },

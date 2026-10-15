@@ -34,6 +34,8 @@ export type RiskEngineSettings = {
   maxPerChain: number; // e.g. max 2 positions in same chain
   useTrailingStop: boolean;
   dynamicCompounding: boolean;
+  /** Block entries on pegged stables (any "win" there is quote-scale noise). */
+  blockStablecoins: boolean;
 };
 
 export const defaultRiskSettings: RiskEngineSettings = {
@@ -52,6 +54,7 @@ export const defaultRiskSettings: RiskEngineSettings = {
   maxPerChain: 2,
   useTrailingStop: true,
   dynamicCompounding: true,
+  blockStablecoins: true,
 };
 
 export type RiskCheck = {
@@ -179,7 +182,10 @@ export function evaluateRiskAndSize(
     "USDD", "LUSD", "FRAX", "SUSD",
   ]);
   const tradeBase = candidate.symbol.toUpperCase().split(/[/:_\- ]/)[0].replace(/USDT$|USDC$|USD$/, "");
-  if (STABLE_BASES.has(tradeBase) || STABLE_BASES.has(candidate.symbol.toUpperCase().split(/[/:_\- ]/)[0])) {
+  if (
+    settings.blockStablecoins &&
+    (STABLE_BASES.has(tradeBase) || STABLE_BASES.has(candidate.symbol.toUpperCase().split(/[/:_\- ]/)[0]))
+  ) {
     return failVerdict(
       "stablecoin",
       "Stablecoins carry no tradable edge",

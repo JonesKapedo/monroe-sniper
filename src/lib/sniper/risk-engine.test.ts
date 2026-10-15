@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { emptyBook, type Candidate } from "../paper.ts";
-import { evaluateRiskAndSize } from "./risk-engine.ts";
+import { defaultRiskSettings, evaluateRiskAndSize } from "./risk-engine.ts";
 
 function candidate(symbol: string, priceUsd: number): Candidate {
   return {
@@ -68,5 +68,17 @@ describe("risk-engine honesty gates", () => {
     const verdict = evaluateRiskAndSize(full, candidate("SOL", 100));
     assert.equal(verdict.allowed, false);
     assert.ok(verdict.reasons.join(" ").includes("Stake budget"));
+  });
+});
+
+describe("risk-engine operator toggles", () => {
+  it("stablecoin block can be switched off explicitly", () => {
+    const blocked = evaluateRiskAndSize(emptyBook(500), candidate("USDT", 1));
+    assert.equal(blocked.allowed, false);
+    const open = evaluateRiskAndSize(emptyBook(500), candidate("USDT", 1), {
+      ...defaultRiskSettings,
+      blockStablecoins: false,
+    });
+    assert.ok(!open.reasons.join(" ").includes("stablecoin"));
   });
 });

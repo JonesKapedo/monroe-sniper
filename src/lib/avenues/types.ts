@@ -58,6 +58,8 @@ export interface DisciplineRules {
   autoBreakEvenAtMultiple: number; // e.g. trail to B/E when profit reaches 1.5R
   haltOnConsecutiveLosses: number; // e.g. halt after 3 back-to-back losses
   blacklistedTokenCheck: boolean;
+  /** Sit-out after ANY close on the same symbol (kills re-fire loops). */
+  reentryCooldownMinutes: number; // e.g. 30
 }
 
 export interface PaperReadiness {
