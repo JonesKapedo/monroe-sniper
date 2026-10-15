@@ -68,8 +68,8 @@ import {
   avenueAnchors,
   scanAllAvenues,
   calculatePaperReadiness,
+  tapeContextFor,
 } from "./avenues/engine";
-import { FX_PAIRS } from "./fx/twelvedata";
 import type { PerpFunding } from "./perps/hyperliquid";
 import { useDyorStore } from "./dyor/store";
 import { playHawkCry, playSoftChirp } from "./sound";
@@ -937,8 +937,12 @@ export const useDesk = create<DeskState>()(
         const teachable = (pnl: number, simulated?: boolean, reason?: string) =>
           !simulated && reason !== "MANUAL";
         const history = [
-          ...book.trades.filter((t) => teachable(t.pnl, t.simulated, t.reason)).map((t) => ({ pnl: t.pnl })),
-          ...s.dbEvents.filter((e) => !seenIds.has(e.id)).map((e) => ({ pnl: e.pnl })),
+          ...book.trades
+            .filter((t) => teachable(t.pnl, t.simulated, t.reason))
+            .map((t) => ({ pnl: t.pnl, reason: t.reason, simulated: t.simulated })),
+          ...s.dbEvents
+            .filter((e) => !seenIds.has(e.id))
+            .map((e) => ({ pnl: e.pnl, reason: e.reason })),
         ];
         return calculatePaperReadiness(book, history);
       },
@@ -951,7 +955,9 @@ export const useDesk = create<DeskState>()(
         const enriched: Record<string, number> = { ...prices };
         const openPositions = [...s.demo.positions, ...s.live.positions];
         if (openPositions.some((p) => !(enriched[p.tokenId] > 0))) {
-          const anchors = avenueAnchors(s.demo, s.disciplineRules);
+          const anchors = avenueAnchors(s.demo, s.disciplineRules, Date.now(), {
+            funding: s.perpFunding,
+          });
           for (const p of openPositions) {
             if (enriched[p.tokenId] > 0) continue;
             const anchor = anchors.get(p.tokenId);
@@ -1096,8 +1102,16 @@ export const useDesk = create<DeskState>()(
             !isHalted(a.symbol, s.eventHalts),
         );
 
-        // If an avenue setup is available, execute with disciplined parameters
+        // If a live-verified avenue setup is available, execute with disciplined
+        // parameters. Volume/liquidity/volatility come from the live tape via
+        // the avenue anchor — absent tape context means no entry (fail-closed).
         if (unheldAvenue) {
+          const tapeCtx = tapeContextFor(unheldAvenue.anchorSymbol, s.tape);
+          if (!tapeCtx) {
+            set({
+              log: pushLog(s.log, `Avenue skipped (no live tape context): ${unheldAvenue.symbol}`),
+            });
+          } else {
           const aveCand: Candidate = {
             id: unheldAvenue.id,
             symbol: unheldAvenue.symbol,
@@ -1106,13 +1120,11 @@ export const useDesk = create<DeskState>()(
             chain: unheldAvenue.chain,
             venue: unheldAvenue.venueA.toLowerCase().includes("binance") ? "binance" : "dex",
             priceUsd: unheldAvenue.priceA,
-            change24h:
-              (unheldAvenue.grossSpreadPct ?? 2.5) *
-              (unheldAvenue.perpSide === "SHORT" ? -1 : 1),
-            volume24h: 850_000,
-            liquidityUsd: 420_000,
+            change24h: tapeCtx.change24h,
+            volume24h: tapeCtx.volume24h,
+            liquidityUsd: tapeCtx.liquidityUsd,
             score: unheldAvenue.confidenceScore,
-            pairAgeHours: 24,
+            pairAgeHours: null,
             url: null,
             flags: [],
             rationale: [unheldAvenue.title, ...(unheldAvenue.disciplineNotes ?? [])],
@@ -1170,82 +1182,6 @@ export const useDesk = create<DeskState>()(
               if (!isTurbo) return;
             }
           }
-        }
-
-        // 1b. Turbo forex majors: same gates, TwelveData spots, chain-capped.
-        if (isTurbo) {
-          const fxState = useDesk.getState();
-          const fxBook = fxState[fxState.mode];
-          const fxFloor = Math.max(45, fxState.memory.minScore - 15);
-          if (fxBook.positions.length < fxState.riskSettings.maxPositions) {
-            for (const pair of FX_PAIRS) {
-              const id = `fx:${pair.replace("/", "")}`;
-              const price = fxState.fxPrices[id];
-              if (!(price > 0)) continue;
-              if (fxBook.positions.some((p) => p.tokenId === id)) continue;
-              if (fibBlocked(pair) || isHalted(pair, fxState.eventHalts)) continue;
-              const fxCand: Candidate = {
-                id,
-                symbol: pair,
-                name: `${pair} · FX major`,
-                address: pair,
-                chain: "fx",
-                venue: "fx",
-                priceUsd: price,
-                change24h: 0.4,
-                volume24h: 5_000_000,
-                liquidityUsd: 50_000_000,
-                score: 72,
-                pairAgeHours: null,
-                url: null,
-                flags: [],
-                rationale: ["FX major · TwelveData spot · turbo hunt"],
-              };
-              const fxVerdict = evaluateRiskAndSize(
-                fxBook,
-                fxCand,
-                fxState.riskSettings,
-                fxFloor,
-                Date.now(),
-                mathOverlays(fxBook),
-              );
-              if (!fxVerdict.allowed || fxVerdict.notional <= 0) continue;
-              const fxResult = enter(fxBook, fxCand, Date.now(), fxFloor, {
-                notional: fxVerdict.notional,
-                stop: fxVerdict.stopPrice,
-                target: fxVerdict.targetPrice,
-              });
-              if (!fxResult.ok) continue;
-              const fxExec: TapeExecution = {
-                id: `entry-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                hash: makeHash("fx"),
-                ts: Date.now(),
-                symbol: pair,
-                venue: "FX Spot",
-                side: "BUY",
-                price,
-                qty: fxVerdict.qty,
-                notional: fxVerdict.notional,
-                latencyMs: 40,
-                slippageBps: 0.2,
-                type: "BOT_ENTRY",
-                avenue: "SPOT_MOMENTUM",
-                note: `Turbo FX BUY ${pair} · $${fxVerdict.notional.toFixed(2)} (R:R ${fxVerdict.riskRewardRatio}R)`,
-                atr: fxVerdict.atr,
-                riskReward: fxVerdict.riskRewardRatio,
-              };
-              const fxNote = `Turbo FX: ${pair} $${fxVerdict.notional.toFixed(2)} @ ${price.toFixed(4)}`;
-              const afterFx = useDesk.getState();
-              set({
-                [fxState.mode]: fxResult.book,
-                note: fxNote,
-                log: pushLog(afterFx.log, fxNote),
-                executions: [fxExec, ...afterFx.executions].slice(0, 100),
-                turboEntries: afterFx.turboEntries + 1,
-              });
-              telegramAlert(`Monroe paper entry\n${fxNote}`);
-              break; // one FX entry per cycle
-            }
           }
         }
 

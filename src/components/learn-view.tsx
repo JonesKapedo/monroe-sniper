@@ -727,16 +727,20 @@ export function LearnView() {
                           </span>
                           <div className="mt-1 font-mono text-xs">
                             Safety:{" "}
-                            <span
-                              className={cn(
-                                "font-bold",
-                                inst.overallSafetyScore >= 80 && "text-gain",
-                                inst.overallSafetyScore < 80 && inst.overallSafetyScore >= 50 && "text-brass",
-                                inst.overallSafetyScore < 50 && "text-loss",
-                              )}
-                            >
-                              {inst.overallSafetyScore}%
-                            </span>
+                            {inst.honeypotMultiSource.some((c) => !/unverified/i.test(c.source)) ? (
+                              <span
+                                className={cn(
+                                  "font-bold",
+                                  inst.overallSafetyScore >= 80 && "text-gain",
+                                  inst.overallSafetyScore < 80 && inst.overallSafetyScore >= 50 && "text-brass",
+                                  inst.overallSafetyScore < 50 && "text-loss",
+                                )}
+                              >
+                                {inst.overallSafetyScore}%
+                              </span>
+                            ) : (
+                              <span className="font-bold text-faint">pending audit</span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -834,32 +838,55 @@ export function LearnView() {
                   )}
                 </div>
 
-                {/* Score Breakdown Bar */}
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 rounded-xl border border-line bg-panel-2 p-3 font-mono text-xs">
-                  <div>
-                    <span className="text-faint text-[10px] uppercase font-sans">Security Score</span>
-                    <p
-                      className={cn(
-                        "text-lg font-bold",
-                        selectedInst.overallSafetyScore >= 80 ? "text-gain" : selectedInst.overallSafetyScore >= 50 ? "text-brass" : "text-loss",
-                      )}
-                    >
-                      {selectedInst.overallSafetyScore} / 100
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-faint text-[10px] uppercase font-sans">Audit Confidence</span>
-                    <p className="text-lg font-bold text-cream">{selectedInst.overallConfidence}%</p>
-                  </div>
-                  <div>
-                    <span className="text-faint text-[10px] uppercase font-sans">Multi-Engine Sources</span>
-                    <p className="text-lg font-bold text-brass">{selectedInst.honeypotMultiSource.length} Verified</p>
-                  </div>
-                  <div>
-                    <span className="text-faint text-[10px] uppercase font-sans">Social Presence</span>
-                    <p className="text-lg font-bold text-cream">{selectedInst.socialIntelligence.length} Feeds</p>
-                  </div>
-                </div>
+                {/* Score Breakdown Bar — pending until a live audit lands */}
+                {(() => {
+                  const audited = selectedInst.honeypotMultiSource.some(
+                    (c) => !/unverified/i.test(c.source),
+                  );
+                  return (
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 rounded-xl border border-line bg-panel-2 p-3 font-mono text-xs">
+                      <div>
+                        <span className="text-faint text-[10px] uppercase font-sans">Security Score</span>
+                        {audited ? (
+                          <p
+                            className={cn(
+                              "text-lg font-bold",
+                              selectedInst.overallSafetyScore >= 80 ? "text-gain" : selectedInst.overallSafetyScore >= 50 ? "text-brass" : "text-loss",
+                            )}
+                          >
+                            {selectedInst.overallSafetyScore} / 100
+                          </p>
+                        ) : (
+                          <p className="text-lg font-bold text-faint">Pending audit</p>
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-faint text-[10px] uppercase font-sans">Audit Confidence</span>
+                        {audited ? (
+                          <p className="text-lg font-bold text-cream">{selectedInst.overallConfidence}%</p>
+                        ) : (
+                          <p className="text-lg font-bold text-faint">—</p>
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-faint text-[10px] uppercase font-sans">Audit Sources</span>
+                        <p className="text-lg font-bold text-brass">
+                          {audited
+                            ? `${selectedInst.honeypotMultiSource.length} Live`
+                            : "0 Live"}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-faint text-[10px] uppercase font-sans">Social Presence</span>
+                        <p className="text-lg font-bold text-cream">
+                          {selectedInst.socialIntelligence.length > 0
+                            ? `${selectedInst.socialIntelligence.length} Live`
+                            : "None yet"}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Multi-Engine Honeypot & Safety Checks */}
                 <div className="flex flex-col gap-2.5">
@@ -869,6 +896,11 @@ export function LearnView() {
                   </div>
 
                   <div className="flex flex-col gap-2">
+                    {selectedInst.honeypotMultiSource.length === 0 && (
+                      <p className="rounded-lg border border-dashed border-line p-4 text-center text-xs text-faint">
+                        No security audit yet — use Search or Re-Audit to run a real on-chain check.
+                      </p>
+                    )}
                     {selectedInst.honeypotMultiSource.map((check, idx) => (
                       <div
                         key={idx}
@@ -876,7 +908,9 @@ export function LearnView() {
                           "rounded-lg border p-3 text-xs",
                           check.isHoneypot
                             ? "border-loss/60 bg-loss/10"
-                            : "border-line bg-panel-2",
+                            : check.verdict === "UNVERIFIED"
+                              ? "border-amber-500/40 bg-amber-500/5"
+                              : "border-line bg-panel-2",
                         )}
                       >
                         <div className="flex items-center justify-between">
@@ -886,7 +920,9 @@ export function LearnView() {
                               "rounded px-2 py-0.5 text-[10px] font-bold uppercase",
                               check.isHoneypot
                                 ? "bg-loss text-ink"
-                                : "bg-gain/20 text-gain border border-gain/40",
+                                : check.verdict === "UNVERIFIED"
+                                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                                  : "bg-gain/20 text-gain border border-gain/40",
                             )}
                           >
                             {check.verdict}
@@ -913,6 +949,11 @@ export function LearnView() {
                     <Label>Social Media Presence & Decrypt News Wire</Label>
                   </div>
 
+                  {selectedInst.socialIntelligence.length === 0 && (
+                    <p className="rounded-lg border border-dashed border-line p-4 text-center text-xs text-faint">
+                      No social data — verify X or LunarCrush in Integrations, then pull live socials.
+                    </p>
+                  )}
                   <div className="grid gap-2 sm:grid-cols-2">
                     {selectedInst.socialIntelligence.map((social, idx) => (
                       <div key={idx} className="rounded-lg border border-line bg-panel-2 p-3 text-xs">

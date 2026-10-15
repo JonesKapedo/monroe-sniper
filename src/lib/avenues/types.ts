@@ -33,7 +33,8 @@ export interface AvenueOpportunity {
   stopLossPrice: number;
   targetPrice: number;
   stopLossPct: number;
-  estimatedAtrPct: number;
+  /** Absent when no live volatility read exists — never estimated. */
+  estimatedAtrPct?: number;
   maxCapitalAllocationUsd: number;
   
   // Discipline gates

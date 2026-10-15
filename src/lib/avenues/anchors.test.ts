@@ -9,6 +9,8 @@ const tape = [
   { symbol: "BONK", priceUsd: 0.000022, liquidityUsd: 9_000_000 },
 ];
 
+const liveSol = [{ coin: "SOL", markPx: 190.5, funding1h: -0.00001, openInterest: 1000 }];
+
 describe("avenue anchors", () => {
   it("resolves an anchor to the deepest pool quote", () => {
     assert.equal(avenueAnchorPrice("SOL", tape), 180);
@@ -21,47 +23,40 @@ describe("avenue anchors", () => {
     assert.equal(avenueAnchorPrice("SOL", []), null);
   });
 
-  it("maps every anchored avenue id", () => {
-    const anchors = avenueAnchors(emptyBook());
+  it("maps live avenue ids to their anchors", () => {
+    const anchors = avenueAnchors(emptyBook(), undefined, Date.now(), { funding: liveSol });
     assert.equal(anchors.get("perp-sol-funding"), "SOL");
-    assert.equal(anchors.get("arb-bonk-sol"), "BONK");
-    assert.equal(anchors.get("yield-jitosol-basis"), "SOL");
-    // Synthetic launches stay anchorless (simulated drift).
-    assert.ok(!anchors.has("ipo-pump-grad-sol"));
-    assert.ok(!anchors.has("ipo-base-fairlaunch"));
   });
 
-  it("caps playbooks below auto-entry and hides unfunded perps without live data", () => {
+  it("returns no avenues without live funding — nothing fabricated", () => {
     const cold = scanAllAvenues(emptyBook());
-    for (const a of cold) {
-      assert.ok(a.confidenceScore < 80, `${a.id} must not auto-fire without live data`);
-      assert.equal(a.disciplineApproved, false);
-      assert.equal(a.liveData, false);
-    }
+    assert.deepEqual(cold, []);
   });
 
   it("hydrates perp quotes with live funding and flags them", () => {
-    const avenues = scanAllAvenues(emptyBook());
-    const before = avenues.find((a) => a.id === "perp-sol-funding");
-    const hydrated = hydrateAvenuesWithFunding(avenues, [
-      { coin: "SOL", markPx: 190.5, funding1h: 0.00001, openInterest: 1000 },
-    ]);
-    const sol = hydrated.find((a) => a.id === "perp-sol-funding");
+    const cold = scanAllAvenues(emptyBook());
+    assert.deepEqual(cold, []);
+    const hot = scanAllAvenues(emptyBook(), undefined, Date.now(), { funding: liveSol });
+    const sol = hot.find((a) => a.id === "perp-sol-funding");
     assert.equal(sol?.priceA, 190.5);
-    assert.equal(sol?.fundingRate8h, 0.00008);
+    assert.equal(sol?.fundingRate8h, -0.00008);
     assert.equal(sol?.liveData, true);
-    assert.equal(before?.liveData, false);
-    // Non-perps stay playbook-flagged.
-    const arb = hydrated.find((a) => a.id === "arb-bonk-sol");
-    assert.equal(arb?.liveData, false);
+    assert.equal(sol?.disciplineApproved, true);
+    const hydrated = hydrateAvenuesWithFunding(hot, liveSol);
+    assert.equal(hydrated.find((a) => a.id === "perp-sol-funding")?.priceA, 190.5);
   });
 
   it("auto-entry reads only live-validated avenues", () => {
-    const hot = scanAllAvenues(emptyBook(), undefined, Date.now(), {
-      funding: [{ coin: "SOL", markPx: 190.5, funding1h: 0.00001, openInterest: 1000 }],
-    });
+    const hot = scanAllAvenues(emptyBook(), undefined, Date.now(), { funding: liveSol });
     const auto = hot.filter((a) => a.disciplineApproved && a.confidenceScore >= 80);
     assert.ok(auto.length > 0);
     assert.ok(auto.every((a) => a.liveData === true));
+  });
+
+  it("skips positive funding (long-only book cannot express shorts)", () => {
+    const longOnly = scanAllAvenues(emptyBook(), undefined, Date.now(), {
+      funding: [{ coin: "SOL", markPx: 190.5, funding1h: 0.00001, openInterest: 1000 }],
+    });
+    assert.deepEqual(longOnly, []);
   });
 });

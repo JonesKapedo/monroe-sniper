@@ -3,13 +3,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
-  Coins,
   Crosshair,
   Globe2,
   Pause,
   Play,
   RefreshCw,
-  Rocket,
   Scale,
   Search,
   Shield,
@@ -21,7 +19,7 @@ import {
 } from "lucide-react";
 import { useFeedHealth } from "@/lib/feeds/status";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
-import { scanAllAvenues } from "@/lib/avenues/engine";
+import { scanAllAvenues, tapeContextFor } from "@/lib/avenues/engine";
 import type { AvenueCategory, AvenueOpportunity } from "@/lib/avenues/types";
 import {
   equity,
@@ -133,6 +131,10 @@ export function Desk() {
 
   const snipeAvenue = useCallback(
     (opp: AvenueOpportunity) => {
+      // Manual snipes use the same live tape context as the bot — no entry
+      // without a live quote for the anchor.
+      const ctx = tapeContextFor(opp.anchorSymbol, tape);
+      if (!ctx) return;
       const aveCand: Candidate = {
         id: opp.id,
         symbol: opp.symbol,
@@ -141,18 +143,18 @@ export function Desk() {
         chain: opp.chain,
         venue: opp.venueA.toLowerCase().includes("binance") ? "binance" : "dex",
         priceUsd: opp.priceA,
-        change24h: (opp.grossSpreadPct ?? 2.5) * (opp.perpSide === "SHORT" ? -1 : 1),
-        volume24h: 850_000,
-        liquidityUsd: 420_000,
+        change24h: ctx.change24h,
+        volume24h: ctx.volume24h,
+        liquidityUsd: ctx.liquidityUsd,
         score: opp.confidenceScore,
-        pairAgeHours: 24,
+        pairAgeHours: null,
         url: null,
         flags: [],
         rationale: [opp.title, ...(opp.disciplineNotes ?? [])],
       };
       manualEnter(aveCand);
     },
-    [manualEnter],
+    [manualEnter, tape],
   );
 
   // Initial feed load
@@ -519,13 +521,13 @@ export function Desk() {
           <div>
             <div className="flex items-center gap-2">
               <Sparkles className="size-4 text-brass" />
-              <h2 className="text-lg font-bold text-cream">Universal Money-Making Avenues</h2>
+              <h2 className="text-lg font-bold text-cream">Live Funding Avenues</h2>
               <span className="rounded bg-brass/10 px-2 py-0.5 text-xs font-semibold text-brass">
-                Perps · Arbitrage · Early IPOs · Yield Basis
+                Live Hyperliquid funding only
               </span>
             </div>
             <p className="mt-0.5 text-xs text-faint">
-              Autonomous sniper exploring diverse market revenue streams with quantitative discipline.
+              Perps funding setups confirmed by the live feed this cycle. Nothing is shown without live verification.
             </p>
           </div>
 
@@ -563,41 +565,16 @@ export function Desk() {
               avenueFilter === "PERPS" ? "bg-brass text-ink" : "bg-panel-2 text-faint hover:text-cream",
             )}
           >
-            <Zap className="size-3" /> Perps & Funding (3)
-          </button>
-          <button
-            type="button"
-            onClick={() => setAvenueFilter("ARBITRAGE")}
-            className={cn(
-              "flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors",
-              avenueFilter === "ARBITRAGE" ? "bg-brass text-ink" : "bg-panel-2 text-faint hover:text-cream",
-            )}
-          >
-            <Scale className="size-3" /> DEX-CEX Arbitrage (2)
-          </button>
-          <button
-            type="button"
-            onClick={() => setAvenueFilter("EARLY_IPO")}
-            className={cn(
-              "flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors",
-              avenueFilter === "EARLY_IPO" ? "bg-brass text-ink" : "bg-panel-2 text-faint hover:text-cream",
-            )}
-          >
-            <Rocket className="size-3" /> Early IPOs & Launches (2)
-          </button>
-          <button
-            type="button"
-            onClick={() => setAvenueFilter("YIELD_BASIS")}
-            className={cn(
-              "flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors",
-              avenueFilter === "YIELD_BASIS" ? "bg-brass text-ink" : "bg-panel-2 text-faint hover:text-cream",
-            )}
-          >
-            <Coins className="size-3" /> Staking Yield Basis (1)
+            <Zap className="size-3" /> Perps & Funding ({avenues.filter((a) => a.category === "PERPS").length})
           </button>
         </div>
 
         {/* Avenue Cards Grid */}
+        {avenues.filter((a) => (avenueFilter === "ALL" ? true : a.category === avenueFilter)).length === 0 ? (
+          <p className="rounded-lg border border-dashed border-line p-4 text-center text-xs text-faint">
+            No live-verified avenues this cycle — the funding feed is quiet or unreachable. Tape sniping continues below.
+          </p>
+        ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {avenues
             .filter((a) => (avenueFilter === "ALL" ? true : a.category === avenueFilter))
@@ -637,9 +614,9 @@ export function Desk() {
                                 ? "bg-gain/20 text-gain"
                                 : "bg-panel-2 text-faint",
                             )}
-                            title={opp.liveData ? "Live Hyperliquid funding" : "Simulated playbook values"}
+                            title={opp.liveData ? "Live Hyperliquid funding" : "Awaiting live verification"}
                           >
-                            {opp.liveData ? "Live" : "Playbook"}
+                            {opp.liveData ? "Live" : "Unverified"}
                           </span>
                         </div>
                         <p className="mt-0.5 text-xs font-medium text-cream">{opp.title}</p>
@@ -753,6 +730,7 @@ export function Desk() {
               );
             })}
         </div>
+        )}
       </div>
 
       {/* Global Opportunities Scanner / Ticker Strip */}

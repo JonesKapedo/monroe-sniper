@@ -24,7 +24,7 @@ import { useSupabaseGate } from "@/lib/supabase-gate";
 import { getSupabase } from "@/lib/supabase";
 import { LoginView } from "@/components/login-view";
 import { useDyorStore } from "@/lib/dyor/store";
-import { equity } from "@/lib/paper";
+import { equity, exposure } from "@/lib/paper";
 import { Button } from "@/components/ui";
 import { WalletButton, WalletModal } from "@/components/wallet-modal";
 import { Money, capitalMoodClass } from "@/components/money";
@@ -362,6 +362,7 @@ function Shell({ children }: { children: ReactNode }) {
 
   const activeBook = mode === "live" ? live : demo;
   const activeEq = equity(activeBook);
+  const activeLocked = exposure(activeBook);
   const turboRunning = useDesk((s) => s.turboPhase) === "running";
   const nairobi = formatNairobiTime(botStartedAt, nowTs);
   const readiness = getReadiness ? getReadiness() : null;
@@ -451,6 +452,19 @@ function Shell({ children }: { children: ReactNode }) {
               </span>
             </div>
             <p className="num mt-1 text-base font-semibold text-cream">${activeEq.toFixed(2)}</p>
+            <div className="mt-1.5 flex flex-col gap-0.5 font-mono text-[11px] text-faint">
+              <div className="flex items-center justify-between">
+                <span>Available cash</span>
+                <span className="text-cream">${activeBook.cash.toFixed(2)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Locked in {activeBook.positions.length} position{activeBook.positions.length === 1 ? "" : "s"}</span>
+                <span className="text-brass">${activeLocked.toFixed(2)}</span>
+              </div>
+            </div>
+            <p className="mt-1.5 text-[10px] leading-relaxed text-faint">
+              Each entry moves cash into locked; each exit returns it plus P&L.
+            </p>
           </div>
         </div>
         <p className="px-5 py-3 text-[11px] text-faint">
@@ -534,12 +548,15 @@ function Shell({ children }: { children: ReactNode }) {
               <WalletButton compact />
             </div>
 
-            {/* Active Equity Display */}
+            {/* Balance breakdown: equity moves with P&L, cash drops at entry and returns at exit */}
             <div className="hidden text-right font-mono sm:block" suppressHydrationWarning>
               <span className="text-[10px] tracking-wider text-faint uppercase">
                 Paper balance:
               </span>{" "}
               <Money value={activeEq} kind="balance" className={`text-sm font-semibold ${capitalMoodClass(activeBook.dayPnl)}`} />
+              <span className="ml-2 text-[10px] text-faint">
+                cash ${activeBook.cash.toFixed(2)} · locked ${activeLocked.toFixed(2)}
+              </span>
             </div>
             <DbBadge />
 

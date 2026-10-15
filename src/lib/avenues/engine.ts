@@ -74,286 +74,90 @@ export function scanAllAvenues(
   live: AvenueLive = {},
 ): AvenueOpportunity[] {
   const currentEquity = equity(book);
-  const fundingByCoin = new Map(
-    (live.funding ?? []).map((r) => [normCoin(r.coin), r]),
-  );
-
-  // 1. Perpetuals & Funding Rate Opportunities
-  const perpSetups: AvenueOpportunity[] = [
-    {
-      id: "perp-sol-funding",
+  const rows = live.funding ?? [];
+  // Live-only universe: an opportunity exists only when a live Hyperliquid
+  // funding row confirms it. No funding feed -> no avenues. Nothing here is
+  // a playbook, estimate, or placeholder.
+  const out: AvenueOpportunity[] = [];
+  for (const row of rows) {
+    if (row.markPx === null || !(row.markPx > 0)) continue;
+    if (row.funding1h === null) continue;
+    const rate8h = funding8hRate(row.funding1h) ?? 0;
+    const apr = fundingAprPct(row.funding1h) ?? 0;
+    const aprAbs = Math.abs(apr);
+    // Policy floor (disclosed): ignore dust funding below 5% APR.
+    if (aprAbs < 5) continue;
+    // The paper book is long-only, so only negative funding (shorts pay
+    // longs) is expressible as a LONG harvest. Positive funding would need
+    // a short and is skipped rather than mis-modeled.
+    if (!(rate8h < 0)) continue;
+    const coin = row.coin.toUpperCase();
+    const symbol = `${coin}-PERP`;
+    const price = row.markPx;
+    // Discipline policy (not market data): 2.2% stop, R:R from house rules.
+    const stopPct = 0.022;
+    const rewardMultiple = Math.max(2.5, rules.minRiskRewardRatio);
+    const stopLossPrice = price * (1 - stopPct);
+    const targetPrice = price * (1 + stopPct * rewardMultiple);
+    const rr = Math.round(((targetPrice - price) / (price - stopLossPrice)) * 10) / 10;
+    out.push({
+      id: `perp-${coin.toLowerCase()}-funding`,
       category: "PERPS",
-      symbol: "SOL-PERP",
-      title: "Solana Basis / Positive Funding Harvest",
-      venueA: "Hyperliquid / Binance Futures",
+      symbol,
+      title: `${coin} long funding harvest (live Hyperliquid)`,
+      venueA: "Hyperliquid Perps",
       chain: "solana",
-      priceA: 184.45,
-      fundingRate8h: 0.032, // +0.032% per 8h
-      fundingApr: 35.04, // 35% APR annualized
-      perpSide: "DELTA_NEUTRAL",
-      leverageMax: 3,
-      riskRewardRatio: 3.2,
-      stopLossPct: 0.022,
-      stopLossPrice: 180.39,
-      targetPrice: 197.36,
-      estimatedAtrPct: 0.024,
+      priceA: price,
+      fundingRate8h: rate8h,
+      fundingApr: apr,
+      perpSide: "LONG",
+      leverageMax: 2,
+      riskRewardRatio: rr,
+      stopLossPct: stopPct,
+      stopLossPrice,
+      targetPrice,
       maxCapitalAllocationUsd: currentEquity * 0.2,
       disciplineApproved: true,
       disciplineNotes: [
-        "Passes 2.5:1 R:R floor (3.2:1)",
-        "Delta-neutral basis captures positive funding without directional exposure",
-        "Strict 2.2% trailing stop active",
-      ],
-      confidenceScore: 88,
-      discoveredAt: now - 180000,
-      anchorSymbol: "SOL",
-    },
-    {
-      id: "perp-sui-momentum",
-      category: "PERPS",
-      symbol: "SUI-PERP",
-      title: "Breakout Long with Trailing Volatility Stop",
-      venueA: "Bybit / Binance Futures",
-      chain: "arbitrum",
-      priceA: 2.84,
-      fundingRate8h: 0.015,
-      fundingApr: 16.42,
-      perpSide: "LONG",
-      leverageMax: 2,
-      riskRewardRatio: 2.8,
-      stopLossPct: 0.035,
-      stopLossPrice: 2.74,
-      targetPrice: 3.12,
-      estimatedAtrPct: 0.038,
-      maxCapitalAllocationUsd: currentEquity * 0.15,
-      disciplineApproved: true,
-      disciplineNotes: [
-        "Passes 2.5:1 R:R floor (2.8:1)",
+        `Live 8h funding ${(rate8h * 100).toFixed(3)}% (${apr.toFixed(1)}% APR) — shorts pay longs`,
+        `Stop ${(stopPct * 100).toFixed(1)}% policy, target ${rr.toFixed(1)}:1 R:R from house rules`,
         "Leverage strictly capped at 2x",
-        "Stop loss anchored at 1.8x ATR",
       ],
-      confidenceScore: 82,
-      discoveredAt: now - 340000,
-      anchorSymbol: "SUI",
-    },
-    {
-      id: "perp-pepe-short-hedge",
-      category: "PERPS",
-      symbol: "1000PEPE-PERP",
-      title: "High Negative Funding Short Squeeze Arbitrage",
-      venueA: "Binance Perps",
-      chain: "ethereum",
-      priceA: 0.0108,
-      fundingRate8h: -0.048,
-      fundingApr: 52.56,
-      perpSide: "SHORT",
-      leverageMax: 2,
-      riskRewardRatio: 2.6,
-      stopLossPct: 0.04,
-      stopLossPrice: 0.01123,
-      targetPrice: 0.00968,
-      estimatedAtrPct: 0.045,
-      maxCapitalAllocationUsd: currentEquity * 0.12,
-      disciplineApproved: true,
-      disciplineNotes: [
-        "Passes 2.5:1 R:R floor (2.6:1)",
-        "Captures negative funding yield buffer",
-        "Hard stop placed above 4h swing high",
-      ],
-      confidenceScore: 79,
-      discoveredAt: now - 520000,
-      anchorSymbol: "PEPE",
-    },
-  ];
-
-  // 2. Cross-Exchange & DEX-CEX Arbitrage Opportunities
-  const arbSetups: AvenueOpportunity[] = [
-    {
-      id: "arb-bonk-sol",
-      category: "ARBITRAGE",
-      symbol: "BONK/USDT",
-      title: "Raydium CLMM vs Binance Spot Spatial Arbitrage",
-      venueA: "Raydium CLMM",
-      venueB: "Binance Spot",
-      chain: "solana",
-      priceA: 0.0000221,
-      priceB: 0.0000226,
-      grossSpreadPct: 2.26,
-      netProfitUsd: 14.8, // Net profit after gas and taker fee
-      riskRewardRatio: 4.8, // High R:R due to zero market direction risk
-      stopLossPct: 0.004,
-      stopLossPrice: 0.000022,
-      targetPrice: 0.0000226,
-      estimatedAtrPct: 0.012,
-      maxCapitalAllocationUsd: currentEquity * 0.22,
-      disciplineApproved: true,
-      disciplineNotes: [
-        "Spatial atomic arbitrage: Buy on Raydium ($0.00002210) -> Sell on Binance ($0.00002260)",
-        "Net spread after priority fee: +1.84%",
-        "Simultaneous atomic execution eliminates overnight market delta",
-      ],
-      confidenceScore: 94,
-      discoveredAt: now - 90000,
-      anchorSymbol: "BONK",
-    },
-    {
-      id: "arb-wif-orca",
-      category: "ARBITRAGE",
-      symbol: "WIF/USDC",
-      title: "Orca Whirlpools vs Bybit Spot Arbitrage",
-      venueA: "Orca Whirlpools",
-      venueB: "Bybit Spot",
-      chain: "solana",
-      priceA: 2.41,
-      priceB: 2.46,
-      grossSpreadPct: 2.07,
-      netProfitUsd: 9.2,
-      riskRewardRatio: 4.1,
-      stopLossPct: 0.005,
-      stopLossPrice: 2.398,
-      targetPrice: 2.46,
-      estimatedAtrPct: 0.02,
-      maxCapitalAllocationUsd: currentEquity * 0.18,
-      disciplineApproved: true,
-      disciplineNotes: [
-        "Calculated spread exceeds 1.5% threshold",
-        "Slippage budget constrained to 15 bps",
-        "Zero directional holding time",
-      ],
-      confidenceScore: 91,
-      discoveredAt: now - 220000,
-      anchorSymbol: "WIF",
-    },
-  ];
-
-  // 3. Early IPOs / Token Presales / Fair Launches
-  const earlyIpoSetups: AvenueOpportunity[] = [
-    {
-      id: "ipo-pump-grad-sol",
-      category: "EARLY_IPO",
-      symbol: "APEX/SOL",
-      title: "Bonding Curve Graduation Snipe with Locked Liquidity",
-      venueA: "Raydium CPMM (Post-Graduation)",
-      chain: "solana",
-      priceA: 0.042,
-      launchStage: "BONDING_CURVE",
-      liquidityLockDays: 180, // 6 months locked
-      rugScore: 92, // 92/100 safe
-      riskRewardRatio: 3.5,
-      stopLossPct: 0.048,
-      stopLossPrice: 0.0399,
-      targetPrice: 0.0567,
-      estimatedAtrPct: 0.065,
-      maxCapitalAllocationUsd: currentEquity * 0.1, // Conservative allocation for new launches
-      disciplineApproved: true,
-      disciplineNotes: [
-        "Liquidity locked for 180 days (Passes >30d rule)",
-        "Mint authority revoked, freeze authority disabled",
-        "Strict 4.8% stop loss prevents tail-risk drawdown",
-      ],
-      confidenceScore: 86,
-      discoveredAt: now - 450000,
-    },
-    {
-      id: "ipo-base-fairlaunch",
-      category: "EARLY_IPO",
-      symbol: "NEXUS/WETH",
-      title: "Base L2 Fair Launch Auction (Uniswap v3 LBP)",
-      venueA: "Uniswap v3 Base",
-      chain: "base",
-      priceA: 0.00185,
-      launchStage: "FAIR_LAUNCH",
-      liquidityLockDays: 365,
-      rugScore: 95,
-      riskRewardRatio: 3.8,
-      stopLossPct: 0.05,
-      stopLossPrice: 0.00175,
-      targetPrice: 0.00255,
-      estimatedAtrPct: 0.07,
-      maxCapitalAllocationUsd: currentEquity * 0.08,
-      disciplineApproved: true,
-      disciplineNotes: [
-        "100% Team tokens vested over 12 months",
-        "Top 10 holders own less than 18% of float",
-        "Initial ticket capped at 8% book equity",
-      ],
-      confidenceScore: 89,
-      discoveredAt: now - 600000,
-    },
-  ];
-
-  // 4. Yield Farming & Delta-Neutral Basis Arbitrage
-  const yieldSetups: AvenueOpportunity[] = [
-    {
-      id: "yield-jitosol-basis",
-      category: "YIELD_BASIS",
-      symbol: "JitoSOL/SOL",
-      title: "Liquid Staking MEV Spread + Concentrated LP Rebalance",
-      venueA: "Meteora DLMM / Kamino",
-      chain: "solana",
-      priceA: 1.094,
-      expectedApy: 22.8, // 22.8% APY
-      perpSide: "DELTA_NEUTRAL",
-      riskRewardRatio: 5.5,
-      stopLossPct: 0.008,
-      stopLossPrice: 1.085,
-      targetPrice: 1.138,
-      estimatedAtrPct: 0.006,
-      maxCapitalAllocationUsd: currentEquity * 0.25,
-      disciplineApproved: true,
-      disciplineNotes: [
-        "Peg-stability supported by Solana validator stake proof",
-        "Near-zero impermanent loss risk in concentrated bin",
-        "Generates steady yield during low-volatility regimes",
-      ],
-      confidenceScore: 96,
-      discoveredAt: now - 720000,
-      anchorSymbol: "SOL",
-    },
-  ];
-
-  // Combine, validate against live data, then sort by confidence score
-  const all = [...perpSetups, ...arbSetups, ...earlyIpoSetups, ...yieldSetups];
-  const validated = all.map((a) => {
-    if (a.category === "PERPS") {
-      const row = fundingByCoin.get(normCoin(a.symbol.split("-")[0]));
-      if (row) {
-        const rate8h = funding8hRate(row.funding1h);
-        const apr = fundingAprPct(row.funding1h);
-        const aprAbs = Math.abs(apr ?? 0);
-        return {
-          ...a,
-          priceA: row.markPx ?? a.priceA,
-          fundingRate8h: rate8h ?? a.fundingRate8h,
-          fundingApr: apr ?? a.fundingApr,
-          confidenceScore: Math.round(Math.min(96, 70 + Math.min(26, aprAbs * 1.2))),
-          liveData: true,
-        };
-      }
-      return {
-        ...a,
-        confidenceScore: Math.min(a.confidenceScore, 79),
-        disciplineApproved: false,
-        liveData: false,
-        disciplineNotes: [...a.disciplineNotes, "No live funding — hidden from auto-entry until Hyperliquid responds."],
-      };
-    }
-    // ARBITRAGE / EARLY_IPO / YIELD_BASIS: spreads, locks, and yields cannot
-    // be verified live by any feed in this architecture. They stay visible
-    // for manual review but can never auto-fire.
-    return {
-      ...a,
-      confidenceScore: Math.min(a.confidenceScore, 79),
-      disciplineApproved: false,
-      liveData: false,
-      disciplineNotes: [...a.disciplineNotes, "Playbook values — unverifiable live, manual entry only."],
-    };
-  });
-  return validated.sort((a, b) => b.confidenceScore - a.confidenceScore);
+      confidenceScore: Math.round(Math.min(96, 70 + Math.min(26, aprAbs * 1.2))),
+      discoveredAt: now,
+      anchorSymbol: coin,
+      liveData: true,
+    });
+  }
+  return out.sort((a, b) => b.confidenceScore - a.confidenceScore);
 }
 
 function tapeBaseOf(symbol: string): string {
   return symbol.toUpperCase().split(/[/:_\-]/)[0];
+}
+
+/**
+ * Live tape context for an avenue's anchor symbol (deepest pool wins).
+ * Returns null when the tape carries no quote for the anchor — callers must
+ * skip the entry (fail-closed) rather than invent volume or volatility.
+ */
+export function tapeContextFor(
+  anchor: string | undefined,
+  tape: Array<{ symbol: string; priceUsd: number; liquidityUsd: number; volume24h: number; change24h: number }>,
+): { volume24h: number; liquidityUsd: number; change24h: number; priceUsd: number } | null {
+  if (!anchor) return null;
+  const want = anchor.toUpperCase();
+  let best: { volume24h: number; liquidityUsd: number; change24h: number; priceUsd: number } | null = null;
+  let bestLiq = -1;
+  for (const c of tape) {
+    if (tapeBaseOf(c.symbol) !== want) continue;
+    if (!(c.priceUsd > 0) || !(c.liquidityUsd > 0)) continue;
+    if (c.liquidityUsd > bestLiq) {
+      bestLiq = c.liquidityUsd;
+      best = { volume24h: c.volume24h, liquidityUsd: c.liquidityUsd, change24h: c.change24h, priceUsd: c.priceUsd };
+    }
+  }
+  return best;
 }
 
 /**
@@ -382,9 +186,10 @@ export function avenueAnchors(
   book: Book,
   rules: DisciplineRules = defaultDisciplineRules,
   now: number = Date.now(),
+  live: AvenueLive = {},
 ): Map<string, string> {
   const map = new Map<string, string>();
-  for (const a of scanAllAvenues(book, rules, now)) {
+  for (const a of scanAllAvenues(book, rules, now, live)) {
     if (a.anchorSymbol) map.set(a.id, a.anchorSymbol);
   }
   return map;
@@ -394,20 +199,34 @@ export function avenueAnchors(
  * Calculates a paper-performance scorecard; it does not assess live-trading readiness.
  * Demonstrates discipline and statistical edge before handling real funds.
  *
+ * Only QUALIFYING trades count: bracket-resolved closes (TARGET / STOP /
+ * BREAKEVEN). Time stops, manual flattens, expiries and simulated marks are
+ * excluded — they teach nothing about edge. Win rate is the primary gate
+ * (55% of the score) with a hard 65% floor: below it the score is capped
+ * near zero no matter how many trades closed.
+ *
  * `history` is the deduped close list (persisted DB events + local book trades).
- * Every close moves the score: 40% sample size, 25% win rate, 20% profit factor,
- * 15% drawdown discipline. No caps, no plateaus — each trade nudges the bar.
  */
 export function calculatePaperReadiness(
   book: Book,
-  history: Array<{ pnl: number }> | null = null,
+  history: Array<{ pnl: number; reason?: string; simulated?: boolean }> | null = null,
 ): PaperReadiness {
   const closes = history ?? book.trades;
-  const completedDemoTrades = closes.length;
-  const targetDemoTrades = 30;
+  // Qualifying trades only: stop hits are disciplined exits, target hits are
+  // successful trades. Everything else (time, manual, expiry, simulated) is
+  // excluded from learning and scoring.
+  const qualifying = closes.filter((t) => {
+    if (t.simulated) return false;
+    const r = (t.reason ?? "").toUpperCase();
+    return r === "TARGET" || r === "STOP" || r === "BREAKEVEN";
+  });
+  const completedDemoTrades = qualifying.length;
+  const targetDemoTrades = 200;
 
-  const wins = closes.filter((t) => t.pnl > 0);
-  const losses = closes.filter((t) => t.pnl < 0);
+  const targetHits = qualifying.filter((t) => (t.reason ?? "").toUpperCase() === "TARGET");
+  const stopHits = qualifying.filter((t) => (t.reason ?? "").toUpperCase() !== "TARGET");
+  const wins = qualifying.filter((t) => t.pnl > 0);
+  const losses = qualifying.filter((t) => t.pnl < 0);
 
   const totalWinPnl = wins.reduce((sum, t) => sum + t.pnl, 0);
   const totalLossPnl = Math.abs(losses.reduce((sum, t) => sum + t.pnl, 0));
@@ -419,26 +238,32 @@ export function calculatePaperReadiness(
   const peak = Math.max(book.peakEquity, currentEquity);
   const maxDrawdownPct = peak > 0 ? ((peak - currentEquity) / peak) * 100 : 0;
 
-  // Checklist of rigorous discipline criteria (unchanged honest gates)
+  // Hard floor: fewer than 20 qualifying trades or a win rate below 65%
+  // means there is no evidence of edge — cap the score at 25.
+  const MIN_QUALIFYING = 20;
+  const MIN_WIN_RATE = 65;
+  const floored = completedDemoTrades < MIN_QUALIFYING || winRate < MIN_WIN_RATE;
+
+  // Checklist of rigorous discipline criteria (honest gates)
   const checklist = [
     {
       id: "sample_size",
-      label: "Statistical Sample Size",
+      label: "Statistical Sample Size (qualifying TP/SL trades)",
       met: completedDemoTrades >= targetDemoTrades,
-      currentValue: `${completedDemoTrades} demo trades`,
-      requiredValue: `≥ ${targetDemoTrades} simulated trades`,
+      currentValue: `${completedDemoTrades} qualifying trades (${targetHits.length} target, ${stopHits.length} stop)`,
+      requiredValue: `≥ ${targetDemoTrades} qualifying trades`,
     },
     {
       id: "win_rate",
       label: "Consistent Win Rate",
-      met: winRate >= 55.0 && completedDemoTrades >= 5,
+      met: winRate >= MIN_WIN_RATE && completedDemoTrades >= MIN_QUALIFYING,
       currentValue: `${winRate.toFixed(1)}%`,
-      requiredValue: "≥ 55.0% win rate",
+      requiredValue: `≥ ${MIN_WIN_RATE.toFixed(1)}% win rate (min ${MIN_QUALIFYING} qualifying)`,
     },
     {
       id: "profit_factor",
       label: "Profit Factor (Gross Win / Gross Loss)",
-      met: profitFactor >= 1.6 && completedDemoTrades >= 5,
+      met: profitFactor >= 1.6 && completedDemoTrades >= MIN_QUALIFYING,
       currentValue: profitFactor.toFixed(2),
       requiredValue: "≥ 1.60 profit factor",
     },
@@ -458,34 +283,43 @@ export function calculatePaperReadiness(
     },
   ];
 
-  // Continuous score: every close moves the bar. 40% sample size,
-  // 25% win rate vs the 55% target, 20% profit factor vs 1.6, 15% drawdown
-  // discipline. No plateau caps — a better win rate always reads higher.
+  // Win-rate-led score: 55% win rate vs the 65% floor, 20% log-scaled sample
+  // vs 200 trades, 15% profit factor vs 1.6, 10% drawdown discipline.
   const clamp100 = (n: number) => Math.max(0, Math.min(100, n));
-  const sampleScore = clamp100((completedDemoTrades / targetDemoTrades) * 100);
-  const winScore = completedDemoTrades === 0 ? 0 : clamp100((winRate / 55) * 100);
-  const pfScore = completedDemoTrades === 0 ? 0 : clamp100((profitFactor / 1.6) * 100);
+  const sampleScore =
+    completedDemoTrades === 0
+      ? 0
+      : clamp100((Math.log10(completedDemoTrades + 1) / Math.log10(targetDemoTrades + 1)) * 100);
+  const winScore = completedDemoTrades === 0 ? 0 : clamp100((winRate / MIN_WIN_RATE) * 100);
+  const pfScore =
+    completedDemoTrades < MIN_QUALIFYING ? 0 : clamp100((profitFactor / 1.6) * 100);
   const ddScore =
     maxDrawdownPct <= 4.5 ? 100 : Math.max(0, 100 - (maxDrawdownPct - 4.5) * 12);
-  const readinessScore = Math.round(
-    0.4 * sampleScore + 0.25 * winScore + 0.2 * pfScore + 0.15 * ddScore,
+  const rawScore = Math.round(
+    0.55 * winScore + 0.2 * sampleScore + 0.15 * pfScore + 0.1 * ddScore,
   );
+  const readinessScore = floored ? Math.min(25, rawScore) : rawScore;
 
   let status: "TRAINING" | "QUALIFYING" | "PAPER_PROVEN" = "TRAINING";
-  let   statusMessage = "Paper training is active; simulated closes are used to estimate the strategy's edge.";
+  let statusMessage =
+    "Paper training is active; only bracket-resolved trades (targets and stops) count toward the edge estimate.";
   let recommendation =
-  "Keep the bot in paper mode while it collects a representative sample of simulated outcomes.";
+    "Keep the bot in paper mode while it collects 200 qualifying trades at a 65%+ win rate.";
 
-  if (readinessScore >= 85 && completedDemoTrades >= targetDemoTrades) {
-  status = "PAPER_PROVEN";
-  statusMessage = "Paper thresholds met. This is not approval or readiness for real-money trading.";
+  if (!floored && readinessScore >= 85 && completedDemoTrades >= targetDemoTrades) {
+    status = "PAPER_PROVEN";
+    statusMessage = "Paper thresholds met: 200+ qualifying trades at 65%+ win rate. This is not approval for real-money trading.";
     recommendation =
-    "The simulated sample meets the configured paper thresholds. Live execution remains unavailable.";
-  } else if (readinessScore >= 60) {
+      "The qualifying sample meets the configured paper thresholds. Live execution remains unavailable.";
+  } else if (!floored && readinessScore >= 60) {
     status = "QUALIFYING";
-  statusMessage = "Paper review in progress; collecting more simulated outcomes.";
+    statusMessage = "Paper review in progress; collecting qualifying target/stop outcomes.";
     recommendation =
-      "Bot is performing well in simulated market flow. Allow it to finish remaining sample trades to confirm drawdown stability.";
+      "Bot is performing well in simulated market flow. Allow it to finish the 200-trade qualifying sample to confirm drawdown stability.";
+  } else if (floored && completedDemoTrades >= MIN_QUALIFYING) {
+    statusMessage = `Win rate ${winRate.toFixed(1)}% is below the 65% floor — score capped until edge improves.`;
+    recommendation =
+      "Losses are outpacing wins on bracket-resolved trades. Let the bot keep learning; the score only rises with a genuine edge.";
   }
 
   let consecutiveWins = 0;
@@ -501,7 +335,7 @@ export function calculatePaperReadiness(
     completedDemoTrades,
     targetDemoTrades,
     currentWinRatePct: Math.round(winRate * 10) / 10,
-    targetWinRatePct: 55.0,
+    targetWinRatePct: 65.0,
     profitFactor: Math.round(profitFactor * 100) / 100,
     targetProfitFactor: 1.6,
     maxObservedDrawdownPct: Math.round(maxDrawdownPct * 10) / 10,
