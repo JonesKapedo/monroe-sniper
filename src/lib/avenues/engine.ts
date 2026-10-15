@@ -506,7 +506,7 @@ export function calculatePaperReadiness(
     targetProfitFactor: 1.6,
     maxObservedDrawdownPct: Math.round(maxDrawdownPct * 10) / 10,
     maxAllowedDrawdownPct: 4.5,
-    disciplineAdherenceScore: 100,
+    disciplineAdherenceScore: clamp100((checklist.filter((c) => c.met).length / checklist.length * 100)),
     consecutiveWinsCurrent: consecutiveWins,
     totalDemoProfitUsd: Math.round((currentEquity - DEMO_START) * 100) / 100,
     recommendation,

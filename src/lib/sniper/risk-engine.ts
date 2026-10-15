@@ -142,8 +142,64 @@ export function evaluateRiskAndSize(
   const currentExposure = exposure(book);
   const peak = Math.max(book.peakEquity, currentEquity);
   const drawdown = peak > 0 ? (peak - currentEquity) / peak : 0;
+  const dailyLossLimit = profile.id === "[degen]" ? 0.15 : profile.id === "[elvis]" ? 0.1 : 0.08;
+  const maxPositions = profile.id === "[degen]" ? 8 : profile.id === "[elvis]" ? 6 : 4;
   const isDuplicate = book.positions.some((p) => p.tokenId === candidate.id);
   const cooling = book.cooldownUntil !== null && now < book.cooldownUntil;
+
+  // 2. Circuit breaker – halt if daily loss exceeds profile limit
+  const dailyPnL = (book.peakEquity - equity(book)) / book.peakEquity;
+  const circuitBreakerTrip = dailyPnL > dailyLossLimit;
+
+  // 3. Max positions guard
+  const currentPositionCount = book.positions.length;
+  const positionsExceeded = currentPositionCount >= maxPositions;
+
+  // 4. Duplicate guard already checked above
+
+  // Early return if circuit breaker trips
+  if (circuitBreakerTrip) {
+    return {
+      allowed: false,
+      notional: 0,
+      qty: 0,
+      entryPrice: candidate.priceUsd,
+      stopPrice: candidate.priceUsd,
+      targetPrice: candidate.priceUsd,
+      stopLossPct: 0,
+      takeProfitPct: 0,
+      riskRewardRatio: 0,
+      riskAmount: 0,
+      valueAtRisk95: 0,
+      volatility: profile.id === "[degen]" ? "ELEVATED" : "NORMAL",
+      volatilityRegime: profile.id === "[degen]" ? "ELEVATED" : "NORMAL",
+      valueAtRisk95: 0,
+      checks: [...checks, "circuit-breaker"],
+      reasons: [...reasons, ],
+    };
+  }
+
+  // Early return if max positions exceeded
+  if (positionsExceeded) {
+    return {
+      allowed: false,
+      notional: 0,
+      qty: 0,
+      entryPrice: candidate.priceUsd,
+      stopPrice: candidate.priceUsd,
+      targetPrice: candidate.priceUsd,
+      stopLossPct: 0,
+      takeProfitPct: 0,
+      riskRewardRatio: 0,
+      riskAmount: 0,
+      valueAtRisk95: 0,
+      volatility: profile.id === "[degen]" ? "ELEVATED" : "NORMAL",
+      volatilityRegime: profile.id === "[degen]" ? "ELEVATED" : "NORMAL",
+      valueAtRisk95: 0,
+      checks: [...checks, "max-positions"],
+      reasons: [...reasons, ],
+    };
+  }
 
   // 1. Estimate asset-specific volatility and ATR
 const { volatility, atr, regime } = estimateVolatility(candidate);

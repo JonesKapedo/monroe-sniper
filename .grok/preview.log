@@ -1,0 +1,552 @@
+
+> preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/9/2026, 11:15:07 AM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 1:05:21 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 1:16:32 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+[trade-memory] Failed to store winning trade: Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+[db] PGLite bootstrap failed: Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+
+Node.js v22.22.1
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 1:18:34 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 1:45:07 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 1:48:44 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 6:25:15 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+[db] PGLite bootstrap failed: Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+
+Node.js v22.22.1
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 6:28:05 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+[db] PGLite bootstrap failed: Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+
+Node.js v22.22.1
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 7:09:56 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+[db] PGLite bootstrap failed: Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+
+Node.js v22.22.1
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 11:22:06 PM    │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+[db] PGLite bootstrap failed: Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+
+Node.js v22.22.1
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/13/2026, 11:38:12 PM    │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+[db] PGLite bootstrap failed: Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+Error: ENOENT: no such file or directory, open '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+    at async open (node:internal/fs/promises:636:25)
+    at async Module.readFile (node:internal/fs/promises:1235:14)
+    at async Object.w$2 (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/electric-sql__pglite.mjs:114:16) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/pglite.data'
+}
+
+Node.js v22.22.1
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 12:10:57 PM    │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 2:50:45 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 2:58:06 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 3:46:14 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 3:58:48 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 4:13:51 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 5:54:05 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 6:40:00 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+(node:28423) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 7:40:40 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+(node:43411) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 8:15:50 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+(node:50783) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 8:24:59 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+(node:53497) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+> app-builder-workspace@0.0.0 preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 10/14/2026, 9:47:37 PM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+ReferenceError: loadSelectedModel is not defined
+    at persist.name (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/router-eOv7W1qF.mjs:5224:17)
+    ... 8 lines matching cause stack trace ...
+    at async loadEntries (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/ssr.mjs:1657:52) {
+  cause: ReferenceError: loadSelectedModel is not defined
+      at persist.name (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/router-eOv7W1qF.mjs:5224:17)
+      at file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/zustand.mjs:126:23
+      at createStoreImpl (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/zustand.mjs:28:31)
+      at createStore (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/zustand.mjs:31:51)
+      at createImpl (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/zustand.mjs:41:14)
+      at file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/router-eOv7W1qF.mjs:5187:23
+      at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+      at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+      at async Promise.all (index 0)
+      at async loadEntries (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/ssr.mjs:1657:52),
+  status: 500,
+  statusText: undefined,
+  headers: undefined,
+  data: undefined,
+  body: undefined,
+  unhandled: true
+}
+(node:66476) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+ReferenceError: loadSelectedModel is not defined
+    at persist.name (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/router-eOv7W1qF.mjs:5224:17)
+    ... 8 lines matching cause stack trace ...
+    at async loadEntries (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/ssr.mjs:1657:52) {
+  cause: ReferenceError: loadSelectedModel is not defined
+      at persist.name (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/router-eOv7W1qF.mjs:5224:17)
+      at file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/zustand.mjs:126:23
+      at createStoreImpl (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/zustand.mjs:28:31)
+      at createStore (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/zustand.mjs:31:51)
+      at createImpl (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_libs/zustand.mjs:41:14)
+      at file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/router-eOv7W1qF.mjs:5187:23
+      at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+      at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+      at async Promise.all (index 0)
+      at async loadEntries (file:///home/turb1n3z/Desktop/SNIPER/.vercel/output/functions/__server.func/_ssr/ssr.mjs:1657:52),
+  status: 500,
+  statusText: undefined,
+  headers: undefined,
+  data: undefined,
+  body: undefined,
+  unhandled: true
+}
