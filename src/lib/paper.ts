@@ -334,7 +334,9 @@ export function enter(
     const fail = v.lines.filter((l) => !l.pass).map((l) => l.label);
     return { book, ok: false, note: fail.join(", ") || "Blocked" };
   }
-  const notionalToUse = Math.min(book.cash, customSizing?.notional ?? v.notional);
+  // Defense in depth: a custom notional can never exceed the risk-sized
+  // verdict nor the free cash — no caller can over-stake through this path.
+  const notionalToUse = Math.min(book.cash, v.notional, customSizing?.notional ?? v.notional);
   const qtyToUse = notionalToUse > 0 ? notionalToUse / v.sim.fill : v.sim.qty;
   const stopToUse = customSizing?.stop ?? v.sim.fill * 0.92;
   const targetToUse = customSizing?.target ?? v.sim.fill * 1.06;
