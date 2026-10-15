@@ -4,9 +4,11 @@
  * equity guard, and profit locking. State persists in Neon Postgres
  * so the bot keeps working with the browser closed.
  *
- * Trigger: Vercel Cron every 5 minutes (`/api/cron/trading-cycle`)
- * or Neon Function with continuous loop. This module exposes a single
- * `runTradingCycle` entrypoint usable from either host.
+ * Trigger: Desk "5-min cycle" button, Frame auto-cycle (~5 min while
+ * open), or `GET /api/trading-cycle` (manual / Pro-plan cron — Hobby
+ * plans allow daily crons only, so no sub-daily cron ships in vercel.json).
+ * This module exposes a single `runTradingCycle` entrypoint usable
+ * from any host.
  */
 
 import { createServerFn } from "@tanstack/react-start";
