@@ -438,13 +438,20 @@ export function evaluateRiskAndSize(
     if (stacked) reasons.push("Candidate duplicates the character of an open position");
   }
 
-  // Gate: Minimum Liquidity
-  const liqPass = candidate.liquidityUsd >= settings.minLiquidity;
+  // Gate: Minimum Liquidity. CEX majors publish no pool depth
+  // (liquidityUnknown) — Binance spot books are deep by construction, so the
+  // thin-pool gate that guards DEX honeypots does not apply to them.
+  const liqUnknownCex = candidate.liquidityUnknown === true && candidate.venue === "binance";
+  const liqPass = liqUnknownCex || candidate.liquidityUsd >= settings.minLiquidity;
   checks.push({
     id: "liq",
-    label: `Pool liquidity (≥$${(settings.minLiquidity / 1000).toFixed(0)}k)`,
+    label: liqUnknownCex
+      ? "CEX spot depth (unpublished, majors only)"
+      : `Pool liquidity (≥$${(settings.minLiquidity / 1000).toFixed(0)}k)`,
     pass: liqPass,
-    detail: `$${Math.round(candidate.liquidityUsd).toLocaleString()}`,
+    detail: liqUnknownCex
+      ? "CEX depth unpublished"
+      : `$${Math.round(candidate.liquidityUsd).toLocaleString()}`,
   });
   if (!liqPass) reasons.push(`Liquidity $${Math.round(candidate.liquidityUsd)} is below safe threshold`);
 

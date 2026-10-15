@@ -34,6 +34,7 @@ import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 import { getDbHealth, getTradeLearningEvents } from "@/lib/trade-memory.functions";
 
 import { loadFeeds, loadFxSpot, loadPerpFunding, verifyInstrument } from "@/lib/market.functions";
+import { scanAllAvenues } from "@/lib/avenues/engine";
 import { loadCorpEvents } from "@/lib/events.functions";
 import { listWhaleWatches, refreshWhaleMoves } from "@/lib/whales.functions";
 import { FX_PAIRS } from "@/lib/fx/twelvedata";
@@ -109,6 +110,34 @@ export function Frame({ children }: { children: ReactNode }) {
           }
           if (combined.length) {
             const current = useDesk.getState();
+            // Anchor prefetch (awaited): live quotes for avenue anchors missing
+            // from the tape, so autoStep below never invents market context.
+            if (current.power) {
+              try {
+                const avenues = scanAllAvenues(current[current.mode], current.disciplineRules, Date.now(), {
+                  funding: current.perpFunding,
+                });
+                const onTape = new Set(
+                  combined.map((c) => c.symbol.toUpperCase().split(/[/:_\-]/)[0]),
+                );
+                const missing = [
+                  ...new Set(
+                    avenues
+                      .map((a) => (a.anchorSymbol ?? "").toUpperCase())
+                      .filter((a) => a && !onTape.has(a)),
+                  ),
+                ];
+                if (missing.length) {
+                  const { loadAnchorQuotes } = await import("@/lib/market.functions");
+                  const aq = await loadAnchorQuotes({ data: { symbols: missing } });
+                  for (const row of aq.rows) {
+                    if (!combined.some((c) => c.id === row.id)) combined.push(row);
+                  }
+                }
+              } catch {
+                // Best-effort; autoStep fail-closes without anchor context.
+              }
+            }
             current.setTape(combined, feeds.note);
             const prices: Record<string, number> = {};
             for (const c of combined) {

@@ -138,23 +138,52 @@ function tapeBaseOf(symbol: string): string {
 
 /**
  * Live tape context for an avenue's anchor symbol (deepest pool wins).
- * Returns null when the tape carries no quote for the anchor — callers must
- * skip the entry (fail-closed) rather than invent volume or volatility.
+ * CEX rows carry no published depth (liquidityUnknown) — they are still
+ * valid context because Binance spot majors price and size off live quotes
+ * and volatility, never pool depth. Returns null only when the tape carries
+ * no quote at all for the anchor — callers must then resolve the anchor
+ * live (loadAnchorQuotes) or skip the entry, never invent numbers.
  */
 export function tapeContextFor(
   anchor: string | undefined,
-  tape: Array<{ symbol: string; priceUsd: number; liquidityUsd: number; volume24h: number; change24h: number }>,
-): { volume24h: number; liquidityUsd: number; change24h: number; priceUsd: number } | null {
+  tape: Array<{
+    symbol: string;
+    priceUsd: number;
+    liquidityUsd: number | null;
+    volume24h: number | null;
+    change24h: number | null;
+    liquidityUnknown?: boolean;
+  }>,
+): {
+  volume24h: number;
+  liquidityUsd: number | null;
+  change24h: number;
+  priceUsd: number;
+  liquidityUnknown: boolean;
+} | null {
   if (!anchor) return null;
   const want = anchor.toUpperCase();
-  let best: { volume24h: number; liquidityUsd: number; change24h: number; priceUsd: number } | null = null;
+  let best: {
+    volume24h: number;
+    liquidityUsd: number | null;
+    change24h: number;
+    priceUsd: number;
+    liquidityUnknown: boolean;
+  } | null = null;
   let bestLiq = -1;
   for (const c of tape) {
     if (tapeBaseOf(c.symbol) !== want) continue;
-    if (!(c.priceUsd > 0) || !(c.liquidityUsd > 0)) continue;
-    if (c.liquidityUsd > bestLiq) {
-      bestLiq = c.liquidityUsd;
-      best = { volume24h: c.volume24h, liquidityUsd: c.liquidityUsd, change24h: c.change24h, priceUsd: c.priceUsd };
+    if (!(c.priceUsd > 0)) continue;
+    const liq = c.liquidityUsd ?? 0;
+    if (liq > bestLiq) {
+      bestLiq = liq;
+      best = {
+        volume24h: c.volume24h ?? 0,
+        liquidityUsd: c.liquidityUsd,
+        change24h: c.change24h ?? 0,
+        priceUsd: c.priceUsd,
+        liquidityUnknown: c.liquidityUnknown === true || c.liquidityUsd == null,
+      };
     }
   }
   return best;
@@ -283,13 +312,15 @@ export function calculatePaperReadiness(
     },
   ];
 
-  // Win-rate-led score: 55% win rate vs the 65% floor, 20% log-scaled sample
+  // Win-rate-led score: 55% win rate vs the 65% floor, 20% linear sample
   // vs 200 trades, 15% profit factor vs 1.6, 10% drawdown discipline.
+  // Sample-gated cap: the score can never exceed 25 + 75% of sample
+  // completeness, so a small perfect run (e.g. 23/200) reads ~34, not 90+.
   const clamp100 = (n: number) => Math.max(0, Math.min(100, n));
   const sampleScore =
     completedDemoTrades === 0
       ? 0
-      : clamp100((Math.log10(completedDemoTrades + 1) / Math.log10(targetDemoTrades + 1)) * 100);
+      : clamp100((completedDemoTrades / targetDemoTrades) * 100);
   const winScore = completedDemoTrades === 0 ? 0 : clamp100((winRate / MIN_WIN_RATE) * 100);
   const pfScore =
     completedDemoTrades < MIN_QUALIFYING ? 0 : clamp100((profitFactor / 1.6) * 100);
@@ -298,7 +329,8 @@ export function calculatePaperReadiness(
   const rawScore = Math.round(
     0.55 * winScore + 0.2 * sampleScore + 0.15 * pfScore + 0.1 * ddScore,
   );
-  const readinessScore = floored ? Math.min(25, rawScore) : rawScore;
+  const sampleCap = Math.round(25 + (75 * Math.min(completedDemoTrades, targetDemoTrades)) / targetDemoTrades);
+  const readinessScore = floored ? Math.min(25, rawScore) : Math.min(rawScore, sampleCap);
 
   let status: "TRAINING" | "QUALIFYING" | "PAPER_PROVEN" = "TRAINING";
   let statusMessage =

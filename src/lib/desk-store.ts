@@ -289,6 +289,9 @@ function venueFor(c: Candidate): ExecutionVenue {
 
 const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 
+/** Last skip-log timestamp per avenue id — throttles no-quote notices. */
+const lastAnchorSkipLog = new Map<string, number>();
+
 /** Winner feature vectors from persisted closes for resemblance scoring. */
 function winnerVectors(): SetupVector[] {
   return useDesk
@@ -1108,9 +1111,17 @@ export const useDesk = create<DeskState>()(
         if (unheldAvenue) {
           const tapeCtx = tapeContextFor(unheldAvenue.anchorSymbol, s.tape);
           if (!tapeCtx) {
-            set({
-              log: pushLog(s.log, `Avenue skipped (no live tape context): ${unheldAvenue.symbol}`),
-            });
+            // Throttled: one skip line per avenue per 30 minutes, not per cycle.
+            const lastSkip = lastAnchorSkipLog.get(unheldAvenue.id) ?? 0;
+            if (Date.now() - lastSkip > 30 * 60_000) {
+              lastAnchorSkipLog.set(unheldAvenue.id, Date.now());
+              set({
+                log: pushLog(
+                  s.log,
+                  `Avenue waiting on live quote: ${unheldAvenue.symbol} (anchor ${unheldAvenue.anchorSymbol ?? "?"} not on tape — resolving)`,
+                ),
+              });
+            }
           } else {
           const aveCand: Candidate = {
             id: unheldAvenue.id,
@@ -1122,7 +1133,8 @@ export const useDesk = create<DeskState>()(
             priceUsd: unheldAvenue.priceA,
             change24h: tapeCtx.change24h,
             volume24h: tapeCtx.volume24h,
-            liquidityUsd: tapeCtx.liquidityUsd,
+            liquidityUsd: tapeCtx.liquidityUsd ?? 0,
+            liquidityUnknown: tapeCtx.liquidityUnknown || undefined,
             score: unheldAvenue.confidenceScore,
             pairAgeHours: null,
             url: null,

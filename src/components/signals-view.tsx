@@ -6,13 +6,10 @@ import {
   History,
   Search,
 } from "lucide-react";
-import { pct } from "@/lib/sniper/format";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
-import { useSniper } from "@/lib/sniper/store";
 import { useDesk } from "@/lib/desk-store";
 import { useFeedHealth } from "@/lib/feeds/status";
 import { getTradeLearningEvents, type TradeLearningEvent } from "@/lib/trade-memory.functions";
-import { type QuoteSignal, type Side } from "@/lib/sniper/types";
 import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
@@ -20,14 +17,13 @@ const EXIT_PAGE_SIZE = 13;
 const ARCHIVE_PAGE_SIZE = 50;
 
 export function SignalsView() {
-  const sniperBook = useSniper((s) => s.book);
   const mode = useDesk((s) => s.mode);
   const demo = useDesk((s) => s.demo);
   const live = useDesk((s) => s.live);
   const executions = useDesk((s) => s.executions);
+  const tape = useDesk((s) => s.tape);
 
   const activeBook = mode === "live" ? live : demo;
-  const rows = sniperBook.symbols.map((sym) => ({ sym, set: sniperBook.signals[sym.symbol] }));
   const feedRows = useFeedHealth((s) => s.rows);
   const feedById = new Map(feedRows.map((r) => [r.id, r]));
   const feedDot = (state: string | undefined) =>
@@ -119,32 +115,8 @@ export function SignalsView() {
         }
       });
 
-    // 3. Sniper Book Positions if available (engine brackets + confidence)
-    sniperBook.positions.forEach((p) => {
-      if (!list.some((existing) => existing.symbol === p.symbol)) {
-        const denom = p.entry - p.stop;
-        const rr = denom !== 0 ? Math.abs((p.target - p.entry) / denom) : null;
-        list.push({
-          id: `snip-${p.id}`,
-          ts: p.openedAt,
-          symbol: p.symbol,
-          venue: "Simulated DMA",
-          side: p.side,
-          entryPrice: p.entry,
-          notional: p.entry * p.qty,
-          qty: p.qty,
-          stopPrice: p.stop,
-          targetPrice: p.target,
-          riskRewardRatio: rr !== null ? Math.round(rr * 10) / 10 : null,
-          score: Math.round(p.confidence * 100),
-          rationale: "Engine position",
-          status: "OPEN",
-        });
-      }
-    });
-
     return list.sort((a, b) => b.ts - a.ts);
-  }, [activeBook.positions, executions, sniperBook.positions]);
+  }, [activeBook.positions, executions]);
 
   // Trade Exits from authentic closed-trade records only.
   // Rows without recorded entry/exit prices are skipped — never estimated.
@@ -201,39 +173,8 @@ export function SignalsView() {
       });
     });
 
-    // Sniper Closed Trades
-    sniperBook.trades.forEach((t) => {
-      if (!list.some((existing) => existing.id === t.id)) {
-        const isWin = t.pnl > 0;
-        const pnlPct = t.entry > 0 ? ((t.exit - t.entry) / t.entry) * 100 * (t.side === "LONG" ? 1 : -1) : 0;
-        let badge: "TARGET" | "STOP" | "TIME" | "SIGNAL" | "MANUAL" = "TARGET";
-        if (t.reason === "STOP") badge = "STOP";
-        else if (t.reason === "TIME") badge = "TIME";
-        else if (t.reason === "SIGNAL") badge = "SIGNAL";
-        else if (t.reason === "MANUAL") badge = "MANUAL";
-
-        const durationMinutes = Math.max(1, Math.round((t.closedAt - t.openedAt) / 60000));
-        const holdingTime = durationMinutes < 60 ? `${durationMinutes}m` : `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`;
-
-        list.push({
-          id: `snip-trade-${t.id}`,
-          ts: t.closedAt,
-          symbol: t.symbol,
-          side: t.side,
-          entryPrice: t.entry,
-          exitPrice: t.exit,
-          pnlUsd: Math.round(t.pnl * 100) / 100,
-          pnlPct: Math.round(pnlPct * 10) / 10,
-          reason: t.reason === "TARGET" ? "Take-Profit Target Filled" : t.reason === "STOP" ? "Defensive Stop Hit" : t.reason,
-          reasonBadge: badge,
-          holdingTime,
-          outcome: isWin ? "WIN" : "LOSS",
-        });
-      }
-    });
-
     return list.sort((a, b) => b.ts - a.ts);
-  }, [activeBook.trades, sniperBook.trades]);
+  }, [activeBook.trades]);
 
   // Statistics calculation
   const totalTrades = exitReports.length;
@@ -381,7 +322,7 @@ export function SignalsView() {
           </div>
           <p className="mt-1 text-xs text-cream">Invo + Finviz + Simul8or composite</p>
           <p className="mt-2 text-[11px] text-brass font-mono">
-            Computed live per symbol below · {rows.length} symbols
+            Computed live per symbol below · {tape.length} symbols
           </p>
         </Card>
       </div>
@@ -836,53 +777,68 @@ export function SignalsView() {
         )}
       </Card>
 
-      {/* Primary Equities & Crypto Universe Consensus */}
+      {/* Live Tape Signals — real-time scored candidates from live feeds */}
       <Card className="border-line bg-panel">
         <div className="flex items-center justify-between border-b border-line pb-3">
           <div>
-            <Label>Microstructure Tick Signals</Label>
-            <p className="text-xs text-faint">Breakdown of votes from Invo, Finviz, and Simul8or models.</p>
+            <Label>Live Tape Signals</Label>
+            <p className="text-xs text-faint">
+              Real-time scored candidates from live feeds — price, 24h move, volume and score update as the tape refreshes.
+            </p>
           </div>
         </div>
 
-        <ul className="mt-2 divide-y divide-line/40">
-          {rows.map(({ sym, set }) => (
-            <li key={sym.symbol} className="py-3">
-              <div className="flex items-baseline justify-between gap-3">
-                <p className="font-semibold text-cream">
-                  {sym.symbol} <span className="text-xs font-normal text-faint">({sym.sector})</span>
-                </p>
-                <p className="font-mono text-xs text-cream">${sym.price.toFixed(2)}</p>
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
-                <Sig label="Invo Desk" sig={set?.invo} />
-                <Sig label="Finviz Geometry" sig={set?.finviz} />
-                <Sig label="Simul8or Queue" sig={set?.simul8or} />
-                <Sig label="Ensemble Composite" sig={set?.ensemble} strong />
-              </div>
-            </li>
-          ))}
-        </ul>
+        {tape.length === 0 ? (
+          <p className="py-8 text-center text-xs text-faint">
+            No live tape yet — feeds are unreachable or still loading. No signals are shown rather than estimated ones.
+          </p>
+        ) : (
+          <ul className="mt-2 divide-y divide-line/40">
+            {[...tape]
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 14)
+              .map((c) => (
+                <li key={c.id} className="py-3">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="font-semibold text-cream">
+                      {c.symbol}{" "}
+                      <span className="text-xs font-normal text-faint">
+                        ({c.venue === "binance" ? "Binance" : c.chain})
+                      </span>
+                    </p>
+                    <p className="font-mono text-xs text-cream">
+                      ${c.priceUsd >= 1 ? c.priceUsd.toFixed(2) : c.priceUsd.toPrecision(4)}
+                    </p>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <div className="rounded-lg border border-line bg-panel-2 p-2">
+                      <p className="text-[10px] text-faint uppercase">Score</p>
+                      <p className="font-mono text-xs font-semibold text-brass">{c.score}/100</p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-panel-2 p-2">
+                      <p className="text-[10px] text-faint uppercase">24h move</p>
+                      <p className={cn("font-mono text-xs font-semibold", c.change24h >= 0 ? "text-gain" : "text-loss")}>
+                        {c.change24h >= 0 ? "+" : ""}{c.change24h.toFixed(2)}%
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-panel-2 p-2">
+                      <p className="text-[10px] text-faint uppercase">24h volume</p>
+                      <p className="font-mono text-xs text-cream">${Math.round(c.volume24h).toLocaleString()}</p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-panel-2 p-2">
+                      <p className="text-[10px] text-faint uppercase">Flags</p>
+                      <p className="truncate text-[11px] text-faint">
+                        {c.flags.length ? c.flags.join(" · ") : c.rationale[0] ?? "—"}
+                      </p>
+                    </div>
+                  </div>
+                </li>
+              ))}
+          </ul>
+        )}
       </Card>
     </div>
   );
 }
 
-function Sig({ label, sig, strong = false }: { label: string; sig?: QuoteSignal; strong?: boolean }) {
-  if (!sig) return <span className="text-faint">—</span>;
-  return (
-    <div className="rounded-lg border border-line bg-panel-2 p-2">
-      <p className="text-[10px] text-faint uppercase">{label}</p>
-      <p className={cn("font-mono text-xs font-semibold", tone(sig.action), strong && "text-sm font-bold")}>
-        {sig.action} {pct(sig.confidence)}
-      </p>
-      <p className="text-[11px] text-faint truncate">{sig.note}</p>
-    </div>
-  );
-}
 
-function tone(action: Side) {
-  if (action === "BUY") return "text-gain";
-  if (action === "SELL") return "text-loss";
-  return "text-faint";
-}

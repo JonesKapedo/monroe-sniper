@@ -275,6 +275,87 @@ export const loadFeeds = createServerFn({ method: "POST" })
     });
   });
 
+const anchorCache = createCache<{ rows: Candidate[]; note: string }>(100);
+const ANCHOR_CACHE_MS = 5 * 60_000;
+
+/**
+ * Live quotes for avenue anchor symbols missing from the tape (e.g. a
+ * Hyperliquid funding coin with no Binance-listed or DEX pair on screen).
+ * Binance single-symbol 24h ticker first (live quote + volume + change, depth
+ * unpublished like the rest of the CEX feed), DexScreener search as fallback.
+ * Anything unresolved is omitted — never estimated.
+ */
+export const loadAnchorQuotes = createServerFn({ method: "POST" })
+  .validator((input: { symbols?: string[] }) => ({
+    symbols: (Array.isArray(input?.symbols) ? input.symbols : [])
+      .map((s) => String(s).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20))
+      .filter(Boolean)
+      .slice(0, 12),
+  }))
+  .handler(async ({ data }): Promise<{ rows: Candidate[]; note: string }> => {
+    if (!data.symbols.length) return { rows: [], note: "No anchor symbols requested" };
+    const cacheKey = [...data.symbols].sort().join(",");
+    return fetchCached(anchorCache, cacheKey, ANCHOR_CACHE_MS, async () => {
+      const rows: Candidate[] = [];
+      for (const base of data.symbols) {
+        const pair = `${base}USDT`;
+        try {
+          const t = await getJson<{ symbol?: string; lastPrice?: string; quoteVolume?: string; priceChangePercent?: string }>(
+            `https://api.binance.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(pair)}`,
+          );
+          const c = scoreCandidate({
+            symbol: base,
+            name: `${base} / USDT`,
+            chain: "binance",
+            address: t.symbol ?? pair,
+            priceUsd: num(t.lastPrice),
+            liquidityUsd: null,
+            volume24h: num(t.quoteVolume),
+            change24h: num(t.priceChangePercent),
+            pairCreatedAt: null,
+            url: `https://www.binance.com/en/trade/${pair}`,
+            venue: "binance",
+            liquidityUnknown: true,
+          });
+          if (c) {
+            rows.push(c);
+            continue;
+          }
+        } catch {
+          // Fall through to DexScreener search.
+        }
+        try {
+          const metrics = await dexSearch(base);
+          const ranked = [...metrics].sort((a, b) => (b.liquidityUsd ?? 0) - (a.liquidityUsd ?? 0));
+          const m = ranked[0];
+          if (!m) continue;
+          const c = scoreCandidate({
+            symbol: m.symbol,
+            name: m.name,
+            chain: m.chain,
+            address: m.address,
+            priceUsd: m.priceUsd,
+            liquidityUsd: m.liquidityUsd,
+            volume24h: m.volume24h,
+            change24h: m.priceChange24h,
+            pairCreatedAt: m.pairCreatedAt,
+            url: m.url,
+            venue: "dex",
+          });
+          if (c) rows.push(c);
+        } catch {
+          // Unresolved anchors stay unresolved — omitted, never estimated.
+        }
+      }
+      return {
+        rows,
+        note: rows.length
+          ? `Live anchor quotes: ${rows.map((r) => r.symbol).join(", ")}`
+          : "No live quotes for the requested anchors",
+      };
+    });
+  });
+
 const INTERVALS = new Set(["1m", "5m", "15m", "1h"]);
 const candleCache = createCache<{ candles: Candle[]; note: string }>(200);
 const CANDLE_CACHE_MS = 12_000;
