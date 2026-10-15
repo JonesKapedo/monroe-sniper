@@ -4,6 +4,7 @@ import { auditAcademicSafeguards } from "./investopedia-mistakes-guard";
 import { fibExtensions, snapToFib } from "../math/fib";
 import { isCorrelatedDuplicate, setupVector, winnerResemblance, type SetupVector } from "../math/vectors";
 import { MODELS, selectModel, type RiskModelProfile } from "./risk-models";
+import { TIER_CONFIGS, applyStakeBudget, detectTier } from "./tier-config";
 
 export type SizingModel = "VOLATILITY_PARITY" | "FRACTIONAL_KELLY" | "FIXED_FRACTION";
 export type SizingProfile = "CONSERVATIVE" | "OPTIMUM_SWEET_SPOT" | "AGGRESSIVE" | "TURBO" | "[paranoid]" | "[elvis]" | "gradient" | "[degen]";
@@ -314,18 +315,35 @@ export function evaluateRiskAndSize(
     rawSize = currentEquity * baseRiskFraction * 5 * conviction;
   }
 
-  // Ensure minimum viable sizing on small balances so user is not starved in micro pennies
+  // Portfolio stake budget — the hard ceiling across ALL open positions.
+  // Small books are guarded hardest (a $50 book caps at $10 staked total).
+  const stakeTier = TIER_CONFIGS[detectTier(currentEquity)];
+  const stakeBudgetTotal = Math.round(currentEquity * stakeTier.maxPortfolioExposure * 100) / 100;
+  const stakeRemaining = Math.max(0, Math.round((stakeBudgetTotal - currentExposure) * 100) / 100);
+
+  // Ensure minimum viable sizing on small balances so user is not starved in micro pennies.
+  // The floor can never exceed the remaining stake budget — protection first.
   if (currentEquity <= 250 && book.cash >= 25) {
-    rawSize = Math.max(rawSize, Math.min(35, book.cash));
+    rawSize = Math.max(rawSize, Math.min(35, book.cash, stakeRemaining));
   }
 
-  // Apply binding risk ceilings
+  // Apply binding risk ceilings (stake budget binds alongside book cap)
   const bindingNotional = Math.max(
     0,
-    Math.min(rawSize, maxIdeaCash, cashPerSlot, bookCapRemaining, book.cash),
+    Math.min(rawSize, maxIdeaCash, cashPerSlot, bookCapRemaining, stakeRemaining, book.cash),
   );
 
-  const roundedNotional = Math.round(bindingNotional * 100) / 100;
+  // Proportional split by target: bigger targets earn a bigger share of the
+  // remaining budget (0.5x–1.5x around a 6% reference), total never exceeds it.
+  const stakeSplit = applyStakeBudget({
+    equity: currentEquity,
+    tier: stakeTier,
+    currentExposure,
+    riskNotional: bindingNotional,
+    targetPct: calculatedTargetPct,
+  });
+
+  const roundedNotional = stakeSplit.blocked ? 0 : Math.round(stakeSplit.notional * 100) / 100;
   const qty = roundedNotional > 0 && entryPrice > 0 ? roundedNotional / entryPrice : 0;
 
   // 95% 1-day Value at Risk (parametric normal VaR = 1.645 * volatility * notional)
@@ -383,6 +401,19 @@ export function evaluateRiskAndSize(
     detail: `${book.positions.length}/${settings.maxPositions} held`,
   });
   if (!slotPass) reasons.push("Maximum concurrent positions reached");
+
+  // Gate: Portfolio stake budget — total staked across ALL open positions
+  // must stay within the tier budget (e.g. $10 on a $50 book).
+  const stakePass = !stakeSplit.blocked;
+  checks.push({
+    id: "stake",
+    label: `Stake budget ($${currentExposure.toFixed(0)} of $${stakeBudgetTotal.toFixed(0)} staked)`,
+    pass: stakePass,
+    detail: stakePass
+      ? `Share $${roundedNotional.toFixed(2)} at ${(stakeSplit.targetScale * 100).toFixed(0)}% target weight`
+      : stakeSplit.reason,
+  });
+  if (!stakePass) reasons.push(stakeSplit.reason);
 
   // Gate: Duplicate check
   checks.push({

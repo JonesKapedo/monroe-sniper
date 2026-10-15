@@ -19,7 +19,7 @@ export interface TierConfig {
   maxBalance: number | null;
   maxRiskPerTrade: number;      // % of equity per trade
   maxPositions: number;
-  maxPortfolioExposure: number; // % of equity at risk simultaneously
+  maxPortfolioExposure: number; // % of equity staked across ALL open positions (hard budget)
   stopLossPct: number;          // ATR multiplier or fixed %
   stopLossType: "fixed" | "atr";
   atrMultiplier: number;
@@ -36,14 +36,14 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     maxBalance: 50,
     maxRiskPerTrade: 0.005,      // 0.5%
     maxPositions: 1,
-    maxPortfolioExposure: 0.25,  // 25%
+    maxPortfolioExposure: 0.20,  // 20% — $10 max on a $50 book
     stopLossPct: 0.08,           // 8% fixed
     stopLossType: "fixed",
     atrMultiplier: 2.5,
     leverageCap: 1,
     minNotional: 5,
     compoundingAllowed: true,
-    description: "Guarded growth - single position, wide stops, spot only",
+    description: "Guarded growth - single position, max 20% staked ($10 on $50), wide stops, spot only",
   },
   seed: {
     name: "seed",
@@ -51,7 +51,7 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     maxBalance: 100,
     maxRiskPerTrade: 0.0075,     // 0.75%
     maxPositions: 1,
-    maxPortfolioExposure: 0.30,  // 30%
+    maxPortfolioExposure: 0.25,  // 25%
     stopLossPct: 0.06,           // 6% ATR-based
     stopLossType: "atr",
     atrMultiplier: 2.0,
@@ -66,7 +66,7 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     maxBalance: 250,
     maxRiskPerTrade: 0.01,       // 1.0%
     maxPositions: 2,
-    maxPortfolioExposure: 0.40,  // 40%
+    maxPortfolioExposure: 0.30,  // 30%
     stopLossPct: 0.05,           // 5% ATR
     stopLossType: "atr",
     atrMultiplier: 1.8,
@@ -81,14 +81,14 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     maxBalance: 500,
     maxRiskPerTrade: 0.0125,     // 1.25%
     maxPositions: 2,
-    maxPortfolioExposure: 0.50,  // 50%
+    maxPortfolioExposure: 0.35,  // 35%
     stopLossPct: 0.04,           // 4% ATR
     stopLossType: "atr",
     atrMultiplier: 1.6,
     leverageCap: 1,
     minNotional: 25,
     compoundingAllowed: true,
-    description: "Position scaling - 50% exposure, tighter stops",
+    description: "Position scaling - 35% exposure, tighter stops",
   },
   accelerate: {
     name: "accelerate",
@@ -96,14 +96,14 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     maxBalance: 1000,
     maxRiskPerTrade: 0.015,      // 1.5%
     maxPositions: 3,
-    maxPortfolioExposure: 0.60,  // 60%
+    maxPortfolioExposure: 0.45,  // 45%
     stopLossPct: 0.035,          // 3.5% ATR
     stopLossType: "atr",
     atrMultiplier: 1.4,
     leverageCap: 2,
     minNotional: 50,
     compoundingAllowed: true,
-    description: "Leverage unlock - 2x cap, 3 positions, 60% exposure",
+    description: "Leverage unlock - 2x cap, 3 positions, 45% exposure",
   },
   momentum: {
     name: "momentum",
@@ -111,14 +111,14 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     maxBalance: 5000,
     maxRiskPerTrade: 0.02,       // 2.0%
     maxPositions: 3,
-    maxPortfolioExposure: 0.70,  // 70%
+    maxPortfolioExposure: 0.55,  // 55%
     stopLossPct: 0.03,           // 3% ATR
     stopLossType: "atr",
     atrMultiplier: 1.3,
     leverageCap: 2,
     minNotional: 100,
     compoundingAllowed: true,
-    description: "Momentum scaling - 70% exposure, 3% ATR stops",
+    description: "Momentum scaling - 55% exposure, 3% ATR stops",
   },
   professional: {
     name: "professional",
@@ -126,14 +126,14 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     maxBalance: 10000,
     maxRiskPerTrade: 0.025,      // 2.5%
     maxPositions: 4,
-    maxPortfolioExposure: 0.75,  // 75%
+    maxPortfolioExposure: 0.60,  // 60%
     stopLossPct: 0.025,          // 2.5% ATR
     stopLossType: "atr",
     atrMultiplier: 1.2,
     leverageCap: 3,
     minNotional: 250,
     compoundingAllowed: true,
-    description: "Professional tier - 3x leverage, 4 positions, 75% exposure",
+    description: "Professional tier - 3x leverage, 4 positions, 60% exposure",
   },
   institutional: {
     name: "institutional",
@@ -141,14 +141,14 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     maxBalance: null,
     maxRiskPerTrade: 0.03,       // 3.0%
     maxPositions: 4,
-    maxPortfolioExposure: 0.80,  // 80%
+    maxPortfolioExposure: 0.65,  // 65%
     stopLossPct: 0.02,           // 2% ATR
     stopLossType: "atr",
     atrMultiplier: 1.1,
     leverageCap: 3,
     minNotional: 500,
     compoundingAllowed: true,
-    description: "Institutional scale - max exposure, tightest stops",
+    description: "Institutional scale - max 65% exposure, tightest stops",
   },
 };
 
@@ -337,4 +337,81 @@ export function getTierDisplayName(tier: TierName): string {
 
 export function getTierShortName(tier: TierName): string {
   return tier.charAt(0).toUpperCase() + tier.slice(1);
+}
+
+/**
+ * Portfolio stake budget — the SINGLE source of truth for how much of the
+ * book may sit in open positions at once. Small books are guarded hardest:
+ * a $50 book may never have more than $10 staked across ALL positions.
+ */
+export function stakeBudgetFor(equityValue: number): {
+  budget: number;
+  pct: number;
+  tier: TierName;
+} {
+  const tier = detectTier(Math.max(0, equityValue));
+  const config = TIER_CONFIGS[tier];
+  const budget = Math.max(0, Math.round(equityValue * config.maxPortfolioExposure * 100) / 100);
+  return { budget, pct: config.maxPortfolioExposure, tier };
+}
+
+export interface StakeBudgetInput {
+  equity: number;
+  tier: TierConfig;
+  /** Current staked total across open positions (use exposure(book)). */
+  currentExposure: number;
+  /** Risk-sized notional from the sizing model, before budget rules. */
+  riskNotional: number;
+  /** Expected upside of THIS position as a fraction, e.g. 0.06 = +6% target. */
+  targetPct: number;
+}
+
+export interface StakeBudgetResult {
+  notional: number;
+  blocked: boolean;
+  reason: string;
+  budget: number;
+  remaining: number;
+  targetScale: number;
+}
+
+/**
+ * Split the stakable budget proportionally to each position's target.
+ * Bigger targets earn a bigger share of the remaining budget (anchored to a
+ * 6% reference target, clamped 0.5x–1.5x), but the portfolio total can never
+ * exceed the tier budget — so losses can never take the whole book.
+ */
+export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
+  const { equity, tier, currentExposure, riskNotional, targetPct } = input;
+  const budget = Math.max(0, Math.round(equity * tier.maxPortfolioExposure * 100) / 100);
+  const remaining = Math.max(0, Math.round((budget - currentExposure) * 100) / 100);
+  if (remaining < tier.minNotional) {
+    return {
+      notional: 0,
+      blocked: true,
+      reason: `Stake budget exhausted: $${currentExposure.toFixed(2)} of $${budget.toFixed(2)} already staked`,
+      budget,
+      remaining,
+      targetScale: 1,
+    };
+  }
+  // Proportional split by target: a 12% target earns up to 1.5x share of the
+  // remaining budget, a 3% target earns 0.5x. Reference = 6% typical target.
+  const targetScale = Math.min(1.5, Math.max(0.5, targetPct / 0.06));
+  const notional = Math.max(
+    0,
+    Math.min(riskNotional * targetScale, remaining, Math.max(0, equity * 0.95)),
+  );
+  const rounded = Math.round(notional * 100) / 100;
+  if (rounded < tier.minNotional) {
+    return {
+      notional: 0,
+      blocked: true,
+      reason: `Budget share $${rounded.toFixed(2)} below $${tier.minNotional.toFixed(2)} minimum ticket`,
+      budget,
+      remaining,
+      targetScale,
+    };
+  }
+  return { notional: rounded, blocked: false, reason: "", budget, remaining, targetScale };
 }

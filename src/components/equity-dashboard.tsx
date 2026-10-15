@@ -1,6 +1,6 @@
 import { useDesk } from "@/lib/desk-store";
-import { equity } from "@/lib/paper";
-import { getTierDisplayName, getTierColor, getTierBg } from "@/lib/sniper/tier-config";
+import { equity, exposure } from "@/lib/paper";
+import { getTierDisplayName, getTierColor, getTierBg, stakeBudgetFor } from "@/lib/sniper/tier-config";
 import { formatGuardStatus } from "@/lib/sniper/equity-guard";
 import { calculateTrailingStop } from "@/lib/sniper/profit-lock";
 import { cn } from "@/lib/cn";
@@ -16,6 +16,8 @@ export function EquityDashboard() {
 
   const book = mode === "live" ? live : demo;
   const currentEquity = equity(book);
+  const staked = exposure(book);
+  const stake = stakeBudgetFor(currentEquity);
   const trailingStop = calculateTrailingStop(profitLockState.peakEquity, 0.1);
   const guard = formatGuardStatus(equityGuardState);
   const unrealized = currentEquity - profitLockState.baseEquity;
@@ -72,6 +74,12 @@ export function EquityDashboard() {
           <p className="text-[10px] uppercase tracking-wider text-faint">Trailing stop</p>
           <p className="num mt-0.5 font-mono text-sm font-bold text-loss">
             ${trailingStop.toFixed(2)}
+          </p>
+        </div>
+        <div className="rounded-lg border border-line/60 bg-panel-2 p-2.5">
+          <p className="text-[10px] uppercase tracking-wider text-faint">Staked / budget</p>
+          <p className="num mt-0.5 font-mono text-sm font-bold text-cream">
+            ${staked.toFixed(2)} <span className="text-faint">/ ${stake.budget.toFixed(2)}</span>
           </p>
         </div>
         <div className="rounded-lg border border-line/60 bg-panel-2 p-2.5">

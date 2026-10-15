@@ -389,14 +389,14 @@ export function SignalsView() {
         <div className="grid grid-cols-2 gap-3 py-4 border-b border-line/60 sm:grid-cols-5">
           <div className="rounded-lg border border-line/60 bg-panel-2 p-3">
             <span className="text-[10px] font-semibold tracking-wider text-faint uppercase">
-              Closed Trades
+              Closed Trades (session)
             </span>
             <p className="font-mono text-lg font-bold text-cream mt-0.5">{totalTrades}</p>
           </div>
 
           <div className="rounded-lg border border-line/60 bg-panel-2 p-3">
             <span className="text-[10px] font-semibold tracking-wider text-faint uppercase">
-              Win Rate
+              Win Rate (session exits)
             </span>
             <p className={cn("font-mono text-lg font-bold mt-0.5", winRate >= 50 ? "text-gain" : "text-amber-400")}>
               {winRate}%

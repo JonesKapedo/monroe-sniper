@@ -16,6 +16,7 @@ import {
   setKill,
   withdraw,
   equity,
+  exposure,
   DEMO_START,
 } from "./paper";
 import {
@@ -28,6 +29,7 @@ import {
 import { MODELS, type RiskModelProfile } from "./sniper/risk-models";
 import {
   TIER_CONFIGS,
+  applyStakeBudget,
   detectTier,
   type TierConfig,
   type TierName,
@@ -291,6 +293,34 @@ const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 
 /** Last skip-log timestamp per avenue id — throttles no-quote notices. */
 const lastAnchorSkipLog = new Map<string, number>();
+
+/**
+ * Final portfolio-stake guard shared by every entry path (bot avenue, bot
+ * tape, manual, whale-via-manual). Caps the position so total staked across
+ * ALL open positions never exceeds the tier budget, splitting the remaining
+ * budget proportionally to this position's target.
+ */
+function clampToStakeBudget(
+  tier: TierConfig,
+  book: Book,
+  riskNotional: number,
+  targetPct: number,
+): { notional: number; blocked: boolean; reason: string; budget: number; remaining: number } {
+  const res = applyStakeBudget({
+    equity: equity(book),
+    tier,
+    currentExposure: exposure(book),
+    riskNotional,
+    targetPct,
+  });
+  return {
+    notional: res.notional,
+    blocked: res.blocked,
+    reason: res.reason,
+    budget: res.budget,
+    remaining: res.remaining,
+  };
+}
 
 /** Winner feature vectors from persisted closes for resemblance scoring. */
 function winnerVectors(): SetupVector[] {
@@ -1152,12 +1182,26 @@ export const useDesk = create<DeskState>()(
           );
 
           if (verdict.allowed && verdict.notional > 0) {
-            const notional = Math.min(verdict.notional, unheldAvenue.maxCapitalAllocationUsd);
-            const result = enter(currentBook, aveCand, Date.now(), scoreFloor, {
-              notional,
-              stop: unheldAvenue.stopLossPrice,
-              target: unheldAvenue.targetPrice,
-            });
+            // Final stake guard: portfolio budget split by this position's target.
+            const stake = clampToStakeBudget(
+              s.tierConfig,
+              currentBook,
+              Math.min(verdict.notional, unheldAvenue.maxCapitalAllocationUsd),
+              verdict.takeProfitPct,
+            );
+            if (stake.blocked) {
+              set({
+                log: pushLog(s.log, `Stake guard blocked ${unheldAvenue.symbol}: ${stake.reason}`),
+              });
+            }
+            const notional = stake.blocked ? 0 : stake.notional;
+            const result = stake.blocked
+              ? { ok: false as const, note: stake.reason, book: currentBook }
+              : enter(currentBook, aveCand, Date.now(), scoreFloor, {
+                  notional,
+                  stop: unheldAvenue.stopLossPrice,
+                  target: unheldAvenue.targetPrice,
+                });
 
             if (result.ok) {
               const hashStr = unheldAvenue.chain === "solana" ? makeSolHash() : makeHash();
@@ -1221,9 +1265,23 @@ export const useDesk = create<DeskState>()(
 
           if (!verdict.allowed || verdict.notional <= 0) return;
 
+          // Final stake guard: portfolio budget split by this position's target.
+          const tapeStake = clampToStakeBudget(
+            live.tierConfig,
+            tapeBook,
+            verdict.notional,
+            verdict.takeProfitPct,
+          );
+          if (tapeStake.blocked) {
+            useDesk.setState((prev) => ({
+              log: pushLog(prev.log, `Stake guard blocked ${pick.symbol}: ${tapeStake.reason}`),
+            }));
+            return;
+          }
+
           // Execute with risk-engine volatility-adjusted sizing and brackets
           const result = enter(tapeBook, pick, Date.now(), floorNow, {
-            notional: verdict.notional,
+            notional: tapeStake.notional,
             stop: verdict.stopPrice,
             target: verdict.targetPrice,
           });
@@ -1242,19 +1300,19 @@ export const useDesk = create<DeskState>()(
           venue: venueName,
           side: "BUY",
           price: pick.priceUsd,
-          qty: verdict.qty,
-          notional: verdict.notional,
+          qty: pick.priceUsd > 0 ? tapeStake.notional / pick.priceUsd : verdict.qty,
+          notional: tapeStake.notional,
           latencyMs: latency,
           slippageBps: 0.4,
           type: "BOT_ENTRY",
           avenue: "SPOT_MOMENTUM",
-          note: `Sniper BUY ${pick.symbol} · Vol Sized $${verdict.notional.toFixed(2)} (ATR ${(verdict.atr * 100).toFixed(2)}%, R:R ${verdict.riskRewardRatio}R)`,
+          note: `Sniper BUY ${pick.symbol} · Stake-sized $${tapeStake.notional.toFixed(2)} of $${tapeStake.budget.toFixed(2)} budget (ATR ${(verdict.atr * 100).toFixed(2)}%, R:R ${verdict.riskRewardRatio}R)`,
           atr: verdict.atr,
           riskReward: verdict.riskRewardRatio,
         };
 
         const edge = assessEdge(pick);
-        const noteLine = `${edge.stance === "EARLY" ? "Early position" : "Risk-sized buy"}: ${pick.symbol} $${verdict.notional.toFixed(2)} on ${venueName}. ${edge.why}`;
+        const noteLine = `${edge.stance === "EARLY" ? "Early position" : "Risk-sized buy"}: ${pick.symbol} $${tapeStake.notional.toFixed(2)} on ${venueName}. ${edge.why}`;
 
         // Fresh state: a turbo avenue entry may have landed above in this cycle.
         const fresh = useDesk.getState();
@@ -1295,7 +1353,24 @@ export const useDesk = create<DeskState>()(
           mathOverlays(currentBook),
         );
 
-        const notional = verdict.allowed ? verdict.notional : 20;
+        // Final stake guard (also covers the fallback path — a rejected
+        // verdict never bypasses the portfolio budget with a fixed $20).
+        const manualStake = clampToStakeBudget(
+          s.tierConfig,
+          currentBook,
+          verdict.allowed ? verdict.notional : s.tierConfig.minNotional,
+          verdict.takeProfitPct,
+        );
+        if (!verdict.allowed || manualStake.blocked) {
+          return {
+            ok: false,
+            note: !verdict.allowed
+              ? (verdict.reasons[0] ?? `Entry rejected by risk gates for ${c.symbol}.`)
+              : `Stake guard blocked ${c.symbol}: ${manualStake.reason}`,
+            verdict,
+          };
+        }
+        const notional = manualStake.notional;
         const result = enter(currentBook, c, Date.now(), floor, {
           notional,
           stop: verdict.stopPrice,

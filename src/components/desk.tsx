@@ -20,6 +20,7 @@ import {
 import { useFeedHealth } from "@/lib/feeds/status";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
 import { scanAllAvenues, tapeContextFor } from "@/lib/avenues/engine";
+import { stakeBudgetFor } from "@/lib/sniper/tier-config";
 import type { AvenueCategory, AvenueOpportunity } from "@/lib/avenues/types";
 import {
   equity,
@@ -471,7 +472,7 @@ export function Desk() {
         <StatCard
           label="AVAILABLE CASH"
           value={<Money value={book.cash} kind="balance" className={`text-lg font-bold sm:text-xl ${capitalMoodClass(book.dayPnl)}`} />}
-          sub={`Risk cap: ${money(eq * 0.6)}`}
+          sub={`Stakable: ${money(Math.max(0, stakeBudgetFor(eq).budget - exp))} of ${money(stakeBudgetFor(eq).budget)} budget`}
         />
         <StatCard
           label="HIT RATE"
@@ -481,7 +482,7 @@ export function Desk() {
         <StatCard
           label="OPEN RISK"
           value={<Money value={exp} kind="balance" className={`text-lg font-bold sm:text-xl ${capitalMoodClass(book.dayPnl)}`} />}
-          sub={`${book.positions.length}/3 positions held`}
+          sub={`${book.positions.length} positions · $${exp.toFixed(0)} of $${stakeBudgetFor(eq).budget.toFixed(0)} budget`}
         />
         <StatCard
           label="ADAPTIVE BRAIN"
