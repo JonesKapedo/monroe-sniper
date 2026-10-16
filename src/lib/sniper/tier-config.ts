@@ -380,11 +380,26 @@ export interface StakeBudgetResult {
   targetScale: number;
 }
 
+/** Number of consecutive admissible tickets the budget must always reserve (I1). */
+export const FLOW_RESERVE_TICKETS = 3;
+
 /**
  * Split the stakable budget proportionally to each position's target.
  * Bigger targets earn a bigger share of the remaining budget (anchored to a
  * 6% reference target, clamped 0.5x–1.5x), but the portfolio total can never
  * exceed the tier budget — so losses can never take the whole book.
+ *
+ * Flow reservation (Architecture Blueprint v2, invariant I1): whenever the
+ * desk is not hard-halted, at least 3 consecutive entries must stay
+ * admissible. Two mechanisms enforce that here:
+ *   1. perSlotCap divides the remaining stake by min(slotsLeft, 3) so up to
+ *      three tickets can fill concurrently instead of the first trade
+ *      eating the whole budget.
+ *   2. If even the guard-scaled minimum floor would starve 3 tickets
+ *      (remaining < 3 × floor), the floor adapts down to remaining/3 —
+ *      never below $5 — with a "flow reserve" note in the rejection reason.
+ *      Genuinely insufficient capital (remaining < $5) is the only allowed
+ *      block, and it says so explicitly.
  */
 export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
   const { equity, tier, currentExposure, riskNotional, targetPct, openPositionCount = 0 } = input;
@@ -394,11 +409,21 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
   // after a REDUCE_RISK the desk halves tickets, and an unscaled floor would
   // reject every shrunk ticket forever — REDUCE_RISK must shrink entries,
   // never deadlock them. Full-guard (riskNotional >= floor) keeps the floor.
-  const effectiveMinNotional = Math.max(
+  const baseFloor = Math.max(
     5,
     Math.round(Math.min(tier.minNotional, riskNotional) * 100) / 100,
   );
-  if (remaining < effectiveMinNotional) {
+  // I1 flow reserve: adapt the floor so 3 consecutive tickets stay admissible.
+  let floor = baseFloor;
+  let flowReserve = false;
+  if (remaining > 0 && remaining < baseFloor * FLOW_RESERVE_TICKETS) {
+    const flowFloor = Math.max(5, Math.round((remaining / FLOW_RESERVE_TICKETS) * 100) / 100);
+    if (flowFloor < baseFloor) {
+      floor = flowFloor;
+      flowReserve = true;
+    }
+  }
+  if (remaining < floor) {
     return {
       notional: 0,
       blocked: true,
@@ -411,20 +436,23 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
   // Reserve equal slices so concurrent positions can fill (don't stuff one trade).
   const slotsLeft = Math.max(1, tier.maxPositions - openPositionCount);
   // Single-slot tiers (micro/seed, maxPositions 1): slotsLeft is always 1,
-// which handed the whole remaining budget to the first trade and starved
+  // which handed the whole remaining budget to the first trade and starved
   // every later signal. Cap a lone slot at 60% of remaining stake instead.
-  const perSlotCap = slotsLeft === 1 ? remaining * 0.6 : remaining / slotsLeft;
+  // Multi-slot tiers split by min(slotsLeft, 3) so THREE tickets can fill
+  // concurrently — the flow guarantee.
+  const perSlotCap =
+    slotsLeft === 1 ? remaining * 0.6 : remaining / Math.min(slotsLeft, FLOW_RESERVE_TICKETS);
   const targetScale = Math.min(1.5, Math.max(0.5, targetPct / 0.06));
   const notional = Math.max(
     0,
     Math.min(riskNotional * targetScale, perSlotCap, remaining, Math.max(0, equity * 0.95)),
   );
   const rounded = Math.round(notional * 100) / 100;
-  if (rounded < effectiveMinNotional) {
+  if (rounded < floor) {
     return {
       notional: 0,
       blocked: true,
-      reason: `Budget share $${rounded.toFixed(2)} below $${effectiveMinNotional.toFixed(2)} minimum ticket`,
+      reason: `Budget share $${rounded.toFixed(2)} below $${floor.toFixed(2)} minimum ticket${flowReserve ? " (flow reserve active — floor adapted so 3 consecutive tickets stay admissible)" : ""}`,
       budget,
       remaining,
       targetScale,
