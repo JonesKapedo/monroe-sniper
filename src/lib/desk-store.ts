@@ -375,6 +375,30 @@ function clampToStakeBudget(
   };
 }
 
+/**
+ * Re-anchor profit-lock and guard baselines after manual capital moves
+ * (deposits, withdrawals, resets, rebalances). Without this, a deposit
+ * inflates "daily loss %" instantly and locks profits it never earned.
+ */
+function reanchorBaselines(
+  profitLockState: ProfitLockState,
+  equityGuardState: EquityGuardState,
+  newEquity: number,
+): { profitLockState: ProfitLockState; equityGuardState: EquityGuardState } {
+  return {
+    profitLockState: {
+      ...profitLockState,
+      baseEquity: newEquity,
+      peakEquity: Math.max(profitLockState.peakEquity, newEquity),
+    },
+    equityGuardState: {
+      ...equityGuardState,
+      startOfDayEquity: newEquity,
+      startOfWeekEquity: newEquity,
+    },
+  };
+}
+
 /** Winner feature vectors from persisted closes for resemblance scoring. */
 function winnerVectors(): SetupVector[] {
   return useDesk
@@ -595,8 +619,8 @@ export const useDesk = create<DeskState>()(
         totalCompounded: 0,
       },
       profitLockConfig: DEFAULT_PROFIT_LOCK_CONFIG,
-      currentTier: "micro",
-      tierConfig: TIER_CONFIGS.micro,
+      currentTier: detectTier(DEMO_START, "scale"),
+      tierConfig: TIER_CONFIGS[detectTier(DEMO_START, "scale")],
       // Equity guard
       equityGuardState: {
         isHalted: false,
@@ -1226,14 +1250,16 @@ export const useDesk = create<DeskState>()(
         if (guardResult.actions.length > 0) {
           set({ equityGuardState: guardResult.newState });
           if (!guardResult.allowed) {
-            // Log the halt reason
             for (const action of guardResult.actions) {
-              if (action.type === "HALT" || action.type === "COOLDOWN" || action.type === "REDUCE_RISK") {
-                return; // Halt new entries
+              if (action.type === "HALT" || action.type === "COOLDOWN") {
+                return; // Hard halt — entries blocked until the halt clears
               }
+              // REDUCE_RISK: entries continue at a shrunk size via the
+              // riskMultiplier below instead of deadlocking the desk.
             }
           }
         }
+        const guardRisk = guardResult.newState.riskMultiplier ?? 1;
         if (currentBook.positions.length >= s.riskSettings.maxPositions) return;
         const isTurbo = s.selectedModel.id === "[degen]";
         const profileFloor = s.selectedModel.minScore ?? 48;
@@ -1336,7 +1362,7 @@ export const useDesk = create<DeskState>()(
             const stake = clampToStakeBudget(
               s.tierConfig,
               currentBook,
-              Math.min(verdict.notional, unheldAvenue.maxCapitalAllocationUsd),
+              Math.min(verdict.notional * guardRisk, unheldAvenue.maxCapitalAllocationUsd),
               verdict.takeProfitPct,
             );
             if (stake.blocked) {
@@ -1424,7 +1450,7 @@ export const useDesk = create<DeskState>()(
           const tapeStake = clampToStakeBudget(
             live.tierConfig,
             tapeBook,
-            verdict.notional,
+            verdict.notional * guardRisk,
             verdict.takeProfitPct,
           );
           if (tapeStake.blocked) {
@@ -1650,6 +1676,7 @@ export const useDesk = create<DeskState>()(
           };
           set({
             demo: updatedBook,
+            ...reanchorBaselines(s.profitLockState, s.equityGuardState, equity(updatedBook)),
             walletHistory: [tx, ...s.walletHistory],
             note: `Added $${amount.toFixed(2)} to the paper balance.`,
             log: pushLog(s.log, `Paper balance +$${amount.toFixed(2)}`),
@@ -1679,6 +1706,7 @@ export const useDesk = create<DeskState>()(
 
         set({
           demo: wResult.book,
+          ...reanchorBaselines(s.profitLockState, s.equityGuardState, equity(wResult.book)),
           walletHistory: [tx, ...s.walletHistory],
           note: `Removed $${amount.toFixed(2)} from the paper balance.`,
           log: pushLog(s.log, `Paper balance -$${amount.toFixed(2)}`),
@@ -1689,6 +1717,9 @@ export const useDesk = create<DeskState>()(
       resetDemo: () =>
         set((s) => ({
           demo: emptyBook(DEMO_START),
+          ...reanchorBaselines(s.profitLockState, s.equityGuardState, DEMO_START),
+          currentTier: detectTier(DEMO_START, "scale"),
+          tierConfig: TIER_CONFIGS[detectTier(DEMO_START, "scale")],
           note: `Paper ledger reset to $${DEMO_START}.00. Archived trade learning remains intact.`,
           log: pushLog(s.log, `Demo reset to $${DEMO_START}.00`),
         })),
@@ -1698,6 +1729,9 @@ export const useDesk = create<DeskState>()(
           const val = Math.max(50, amount);
           return {
             demo: emptyBook(val),
+            ...reanchorBaselines(s.profitLockState, s.equityGuardState, val),
+            currentTier: detectTier(val, s.currentTier),
+            tierConfig: TIER_CONFIGS[detectTier(val, s.currentTier)],
             note: `Demo desk capital rebalanced to $${val.toLocaleString("en-US", { minimumFractionDigits: 2 })}. Dynamic sweet-spot sizing active.`,
             log: pushLog(s.log, `Demo balance rebalanced to $${val.toLocaleString("en-US", { minimumFractionDigits: 2 })}`),
           };
@@ -2027,8 +2061,8 @@ export const useDesk = create<DeskState>()(
           // Restore tier
           if (state.currentTier) {
             useDesk.setState({ 
-              currentTier: state.currentTier,
-              tierConfig: TIER_CONFIGS[state.currentTier],
+              currentTier: detectTier(state.demo ? equity(state.demo) : DEMO_START, state.currentTier),
+              tierConfig: TIER_CONFIGS[detectTier(state.demo ? equity(state.demo) : DEMO_START, state.currentTier)],
             });
           }
           // Restore equity guard
