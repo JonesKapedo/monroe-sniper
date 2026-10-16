@@ -10,8 +10,6 @@
  * trade records and produces a report. The desk wires it later (P5 UI).
  */
 
-import type { TierConfig } from "../sniper/tier-config";
-import { applyStakeBudget } from "../sniper/tier-config";
 import { ladderExpectancy } from "../sniper/exits";
 
 export interface ReplayTradeInput {
@@ -54,6 +52,9 @@ export interface ReplayReport {
   wouldTakeWinRate: number;
 }
 
+/** CEX round-trip cost approximation for the replay pass (execution-v2 wired in P4). */
+const CEX_ROUND_TRIP_COST = 0.0035;
+
 /** Simple momentum edge screen mirroring emh.ts' major/momentum path. */
 function passesCurrentEdgeScreen(t: ReplayTradeInput): boolean {
   if (Math.abs(t.change24h) >= 1.2 && t.score >= 52) return true;
@@ -62,11 +63,7 @@ function passesCurrentEdgeScreen(t: ReplayTradeInput): boolean {
   return false;
 }
 
-export function replayTrades(
-  trades: ReplayTradeInput[],
-  tier: TierConfig,
-  equity: number,
-): ReplayReport {
+export function replayTrades(trades: ReplayTradeInput[]): ReplayReport {
   const outcomes: ReplayOutcome[] = [];
   let grossWin = 0;
   let grossLoss = 0;
@@ -77,11 +74,12 @@ export function replayTrades(
 
   for (const t of trades) {
     const passed = passesCurrentEdgeScreen(t);
-    // Net P&L through execution-v2 cost model (cex assumption for replay;
-    // the desk passes the real venue per trade later).
-    const net = t.pnl * 0.9965; // ≈ cex round-trip cost model
-    const riskUsd = Math.max(1, Math.abs(t.entryPrice - t.exitPrice) * Math.max(1, t.pnl / Math.max(0.0001, Math.abs(t.entryPrice - t.exitPrice))));
-    const rMultiple = riskUsd > 0 ? t.pnl / riskUsd : 0;
+    const net = t.pnl * (1 - CEX_ROUND_TRIP_COST);
+    // R-multiple: gross P&L against the |entry→exit| move scaled to the
+    // position's own risk (|move| is the realized risk distance).
+    const moveUsd = Math.abs(t.entryPrice - t.exitPrice);
+    const riskProxyUsd = moveUsd > 0 ? moveUsd * Math.max(1, Math.abs(t.pnl) / moveUsd) : 1;
+    const rMultiple = riskProxyUsd > 0 ? t.pnl / riskProxyUsd : 0;
     outcomes.push({
       id: t.id,
       symbol: t.symbol,
