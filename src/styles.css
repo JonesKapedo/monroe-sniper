@@ -82,7 +82,6 @@
   --color-gain: var(--theme-gain);
   --color-loss: var(--theme-loss);
   --color-warn: var(--theme-warn);
-
   --color-bg: var(--theme-bg);
   --color-surface: var(--theme-surface);
   --color-surface-2: var(--theme-surface-2);
@@ -94,137 +93,59 @@
   --radius-card: 0.75rem;
 }
 
-@layer base {
-  html {
-    color-scheme: dark;
-  }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    background: var(--color-ink);
-    color: var(--color-cream);
-    font-family: var(--font-sans);
-    line-height: 1.5;
-    overflow-x: hidden;
-  }
-  button:not(:disabled),
-  [role="button"]:not(:disabled) {
-    cursor: pointer;
-  }
-  :focus-visible {
-    outline: 2px solid var(--color-brass);
-    outline-offset: 2px;
-  }
-  input,
-  button {
-    font: inherit;
-  }
-  ::selection {
-    background: var(--color-brass);
-    color: var(--color-brass-ink);
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .pulse-dot {
-      animation: none;
-    }
-    .mascot-turbo-eyes,
-    .mascot-pupils,
-    .mascot-float,
-    .mascot-flame,
-    .mascot-smoke {
-      animation: none;
-    }
-  }
+html,
+body,
+#root {
+  min-height: 100%;
 }
 
-@layer components {
-  .field {
-    width: 100%;
-    border-radius: 0.75rem;
-    border: 1px solid var(--color-line);
-    background: var(--color-panel-2);
-    color: var(--color-cream);
-    padding: 0.625rem 0.75rem;
-    min-height: 2.75rem;
-    font-family: var(--font-mono);
-  }
-  .pulse-dot {
-    animation: monroe-pulse 1.6s ease-in-out infinite;
-  }
-  .panel-quiet {
-    border: 1px dashed var(--color-line);
-    border-radius: 0.75rem;
-    padding: 0.75rem;
-  }
-  .stroodle {
-    display: flex;
-    flex-direction: column;
-  }
-  .node {
-    border-left: 2px solid var(--color-line);
-    padding: 0.5rem 0 0.5rem 0.875rem;
-    margin-left: 0.35rem;
-  }
-  .chain-arrow {
-    color: var(--color-faint);
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    padding: 0.125rem 0 0.125rem 0.9rem;
-  }
-  .glyph-on {
-    border-color: var(--color-brass);
-    color: var(--color-brass);
-  }
-  .glyph-off {
-    border-color: var(--color-line);
-    color: var(--color-faint);
-  }
-  .theme-swatch[data-theme-swatch="monroe"] {
-    background: linear-gradient(90deg, #10120e 50%, #d7b56a 50%);
-  }
-  .theme-swatch[data-theme-swatch="paper"] {
-    background: linear-gradient(90deg, #f4f1e8 50%, #8b6721 50%);
-  }
-  .theme-swatch[data-theme-swatch="midnight"] {
-    background: linear-gradient(90deg, #000000 50%, #d7b56a 50%);
-  }
+body {
+  margin: 0;
+  background: var(--color-ink);
+  color: var(--color-cream);
+  font-family: var(--font-sans);
 }
 
-@keyframes monroe-pulse {
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
   50% {
     opacity: 0.35;
   }
 }
 
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
 @keyframes turbo-eye-flicker {
-  0%, 100% {
-    opacity: 1;
+  0%,
+  100% {
+    filter: drop-shadow(0 0 2px #ff3b1f) drop-shadow(0 0 6px #ff3b1f);
   }
-  45% {
-    opacity: 0.55;
-  }
-  60% {
-    opacity: 0.95;
+  40% {
+    filter: drop-shadow(0 0 4px #ff6a3a) drop-shadow(0 0 10px #ff3b1f);
   }
 }
 
 @keyframes mascot-gaze {
-  0%, 100% {
+  0%,
+  100% {
     transform: translate(0, 0);
   }
-  25% {
-    transform: translate(0.7px, 0.3px);
+  30% {
+    transform: translate(0.6px, 0.3px);
   }
-  50% {
-    transform: translate(-0.5px, 0.5px);
-  }
-  75% {
-    transform: translate(0.3px, -0.6px);
+  60% {
+    transform: translate(-0.3px, -0.6px);
   }
 }
 
 @keyframes mascot-breathe {
-  0%, 100% {
+  0%,
+  100% {
     transform: translateY(0);
   }
   50% {
@@ -233,7 +154,8 @@
 }
 
 @keyframes turbo-flame-flicker {
-  0%, 100% {
+  0%,
+  100% {
     transform: translateX(-50%) scaleY(1) skewX(-2deg);
   }
   30% {
@@ -258,13 +180,11 @@
   }
 }
 
-/* Turbo mascot: glowing hot-red eyes, flaming crown, rising smoke. */
 .mascot-turbo-eyes {
   filter: drop-shadow(0 0 2px #ff3b1f) drop-shadow(0 0 6px #ff3b1f);
   animation: turbo-eye-flicker 0.9s ease-in-out infinite;
 }
 
-/* Living mascot: slow gaze drift, glowing pupils, gentle breathing float. */
 .mascot-float {
   animation: mascot-breathe 5s ease-in-out infinite;
 }
@@ -308,7 +228,8 @@
 }
 
 @keyframes live-pulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
     transform: scale(1);
   }
@@ -338,4 +259,40 @@
 @utility num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* Desk tape / operator strip liveliness */
+@keyframes desk-tick {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.72;
+  }
+}
+@keyframes pnl-flash-gain {
+  0% {
+    background-color: color-mix(in srgb, var(--color-gain) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+@keyframes pnl-flash-loss {
+  0% {
+    background-color: color-mix(in srgb, var(--color-loss) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.desk-tick {
+  animation: desk-tick 2.4s ease-in-out infinite;
+}
+.pnl-flash-gain {
+  animation: pnl-flash-gain 0.85s ease-out forwards;
+}
+.pnl-flash-loss {
+  animation: pnl-flash-loss 0.85s ease-out forwards;
 }
