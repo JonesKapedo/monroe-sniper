@@ -39,13 +39,13 @@ export function assessEdge(input: EdgeInput): Edge {
     return { act: false, edge: 0, stance: "SKIP", why: "Book too thin to clear costs." };
   }
 
-const change = Number.isFinite(input.change24h) ? input.change24h : 0;
+  const change = Number.isFinite(input.change24h) ? input.change24h : 0;
   const age = input.pairAgeHours;
   const sentiment = input.sentiment;
   let edge = input.score;
   const notes: string[] = [];
 
-if (typeof sentiment === "number" && Number.isFinite(sentiment)) {
+  if (typeof sentiment === "number" && Number.isFinite(sentiment)) {
     const sentimentDir = Math.sign(sentiment);
     const changeDir = Math.sign(change);
     if (sentimentDir !== 0 && changeDir !== 0 && sentimentDir !== changeDir) {
@@ -67,11 +67,11 @@ if (typeof sentiment === "number" && Number.isFinite(sentiment)) {
     notes.push("No social feed");
   }
 
-if (depthUnknown) {
+  if (depthUnknown) {
     notes.push("CEX depth unpublished");
   }
 
-// CEX majors: liquidity-weighted novelty filters are meaningless (depth
+  // CEX majors: liquidity-weighted novelty filters are meaningless (depth
   // unpublished, pairs are never "fresh"), so the screen is purely momentum.
   // A major printing a real move is tradeable regardless of pool metrics.
   if (depthUnknown) {
@@ -92,7 +92,7 @@ if (depthUnknown) {
     };
   }
 
-const quiet = Math.abs(change) < 0.45;
+  const quiet = Math.abs(change) < 0.45;
   const mature = age == null || age > 48;
   if (quiet && mature && input.score < 78) {
     return {
@@ -103,7 +103,7 @@ const quiet = Math.abs(change) < 0.45;
     };
   }
 
-const young = age != null && age >= 0 && age < 8;
+  const young = age != null && age >= 0 && age < 8;
   if (young && input.score >= 68 && input.liquidityUsd >= 20_000 && change > -3) {
     return {
       act: true,
@@ -113,7 +113,7 @@ const young = age != null && age >= 0 && age < 8;
     };
   }
 
-const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidityUsd : 0;
+  const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidityUsd : 0;
   const trending = change >= 1.2 && participation >= 0.08 && input.score >= 62;
   const strongBook = input.score >= 80 && change > 0;
   if (trending || strongBook) {
@@ -125,7 +125,7 @@ const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidity
     };
   }
 
-return {
+  return {
     act: false,
     edge: Math.max(0, edge),
     stance: "SKIP",
