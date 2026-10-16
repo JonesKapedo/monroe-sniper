@@ -360,7 +360,10 @@ export interface StakeBudgetInput {
   tier: TierConfig;
   /** Current staked total across open positions (use exposure(book)). */
   currentExposure: number;
-  /** Risk-sized notional from the sizing model, before budget rules. */
+  /** Risk-sized notional from the sizing model, before budget rules.
+   *  NOTE: the desk applies the equity-guard riskMultiplier to this value
+   *  BEFORE calling in (verdict.notional * guardRisk), so a 0.5× guard
+   *  arrives here as an already-halved notional. */
   riskNotional: number;
   /** Expected upside of THIS position as a fraction, e.g. 0.06 = +6% target. */
   targetPct: number;
@@ -387,7 +390,15 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
   const { equity, tier, currentExposure, riskNotional, targetPct, openPositionCount = 0 } = input;
   const budget = Math.max(0, Math.round(equity * tier.maxPortfolioExposure * 100) / 100);
   const remaining = Math.max(0, Math.round((budget - currentExposure) * 100) / 100);
-  if (remaining < tier.minNotional) {
+  // The tier minimum ticket must clamp to the (guard-scaled) risk notional:
+  // after a REDUCE_RISK the desk halves tickets, and an unscaled floor would
+  // reject every shrunk ticket forever — REDUCE_RISK must shrink entries,
+  // never deadlock them. Full-guard (riskNotional >= floor) keeps the floor.
+  const effectiveMinNotional = Math.max(
+    5,
+    Math.round(Math.min(tier.minNotional, riskNotional) * 100) / 100,
+  );
+  if (remaining < effectiveMinNotional) {
     return {
       notional: 0,
       blocked: true,
@@ -400,7 +411,7 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
   // Reserve equal slices so concurrent positions can fill (don't stuff one trade).
   const slotsLeft = Math.max(1, tier.maxPositions - openPositionCount);
   // Single-slot tiers (micro/seed, maxPositions 1): slotsLeft is always 1,
-  // which handed the whole remaining budget to the first trade and starved
+// which handed the whole remaining budget to the first trade and starved
   // every later signal. Cap a lone slot at 60% of remaining stake instead.
   const perSlotCap = slotsLeft === 1 ? remaining * 0.6 : remaining / slotsLeft;
   const targetScale = Math.min(1.5, Math.max(0.5, targetPct / 0.06));
@@ -409,11 +420,11 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
     Math.min(riskNotional * targetScale, perSlotCap, remaining, Math.max(0, equity * 0.95)),
   );
   const rounded = Math.round(notional * 100) / 100;
-  if (rounded < tier.minNotional) {
+  if (rounded < effectiveMinNotional) {
     return {
       notional: 0,
       blocked: true,
-      reason: `Budget share $${rounded.toFixed(2)} below $${tier.minNotional.toFixed(2)} minimum ticket`,
+      reason: `Budget share $${rounded.toFixed(2)} below $${effectiveMinNotional.toFixed(2)} minimum ticket`,
       budget,
       remaining,
       targetScale,
