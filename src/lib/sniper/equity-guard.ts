@@ -31,7 +31,8 @@ export const DEFAULT_EQUITY_GUARD_CONFIG: EquityGuardConfig = {
   winStreakMaxReduction: 0.25,
   dailyProfitTargetPct: 0.05,
   weeklyProfitTargetPct: 0.15,
-  profitTargetAction: "halt",
+  // Blueprint P0: a winning day keeps trading at half size — flow over pride.
+  profitTargetAction: "reduce",
 };
 
 export interface EquityGuardState {
