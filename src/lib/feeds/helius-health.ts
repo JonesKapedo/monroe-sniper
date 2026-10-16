@@ -95,7 +95,7 @@ export async function probeHeliusRpc(
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": " integration/json" },
+        headers: { "Content-Type": "application/json" },
         body,
         signal: controller.signal,
       });
