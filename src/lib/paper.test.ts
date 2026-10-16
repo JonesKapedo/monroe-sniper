@@ -133,11 +133,11 @@ describe("paper desk", () => {
   it("gates on the most specific bucket with a voice", () => {
     let book = emptyBucketBook();
     for (let i = 0; i < 5; i += 1) book = learnBuckets(book, "dex", "TARGET", "BONK", 10);
-    const global = { seen: 0, wins: 0, losses: 0, realized: 0, minScore: 62 };
-    // Symbol bucket (5 wins → floor 60) outranks the aggregate.
-    assert.equal(floorFor(book, global, "dex", "TARGET", "BONK"), 60);
+    const global = { seen: 0, wins: 0, losses: 0, realized: 0, minScore: 52 };
+    // Symbol bucket: 5 wins → floor max(48, 52 - (5-3)) = 50, outranks the aggregate.
+    assert.equal(floorFor(book, global, "dex", "TARGET", "BONK"), 50);
     // A reason with no evidence falls back to global.
-    assert.equal(floorFor(book, global, "dex", "STOP", "WIF"), 62);
+    assert.equal(floorFor(book, global, "dex", "STOP", "WIF"), 52);
   });
 
   it("vetoes verified hard-rejects no matter the score", () => {
