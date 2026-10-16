@@ -106,6 +106,32 @@ body {
   font-family: var(--font-sans);
 }
 
+/* ── Graceful themed placeholders ─────────────────────────────────────────
+   Placeholders melt into the panel instead of floating browser-default gray
+   on top of it: a muted, slightly translucent tone drawn from the active
+   theme, gently deepened letter-spacing for a tidy desk feel. On focus the
+   tone warms toward the desk's brass accent, so the active field reads at a
+   glance. Works for every input/textarea on the desk, in all three themes. */
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--theme-muted) 64%, transparent);
+  opacity: 1;
+  letter-spacing: 0.015em;
+  transition: color 180ms ease, letter-spacing 180ms ease;
+}
+
+input:focus::placeholder,
+textarea:focus::placeholder {
+  color: color-mix(in srgb, var(--theme-brass) 58%, transparent);
+  letter-spacing: 0.03em;
+}
+
+/* Sleek selection tone to match the placeholder treatment. */
+::selection {
+  background: color-mix(in srgb, var(--theme-brass) 30%, transparent);
+  color: var(--theme-fg);
+}
+
 @keyframes pulse-dot {
   0%,
   100% {
