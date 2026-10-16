@@ -573,7 +573,7 @@ function Shell({ children }: { children: ReactNode }) {
       </div>
 
       {locked && <PinGate />}
-      {showStandbyModal && <StandbyPositionsModal onClose={() => setShowStandbyModal(false)} />}
+      {showStandbyModal && <StandbyPositionsModal isOpen={showStandbyModal} onClose={() => setShowStandbyModal(false)} />}
       <WalletModal />
     </div>
   );
@@ -639,7 +639,7 @@ function PinGate() {
         className="w-full max-w-xs space-y-4 rounded-2xl border border-line bg-panel p-6"
         onSubmit={(e) => {
           e.preventDefault();
-          void unlock(hashPin(pin));
+          void hashPin(pin).then(() => unlock());
         }}
       >
         <p className="text-sm font-medium text-cream">Desk PIN</p>
