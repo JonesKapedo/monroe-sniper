@@ -145,22 +145,22 @@ export function auditAcademicSafeguards(
   });
 
   // 6. INVESTOPEDIA: Dynamic Portfolio Sizing & Capital Compounding
-  // Validates that notional is in the "Sweet Spot" (not micro toy $1, and not reckless 50%)
+  // Validates that notional is in the "Sweet Spot" (not micro toy $1, and not reckless >55%)
   const notionalEquityFraction = portfolioBalance > 0 ? plannedNotional / portfolioBalance : 0;
   const isSweetSpotSizing =
     plannedNotional >= 15 &&
     notionalEquityFraction >= 0.08 &&
-    notionalEquityFraction <= 0.35;
+    notionalEquityFraction <= 0.55;
   audits.push({
     rule: "Compounding Sweet-Spot Position Sizing",
     source: "Medium & Investopedia: Dynamic Capital Allocation",
     passed: isSweetSpotSizing,
     metric: `Size: $${plannedNotional.toFixed(2)} (${(notionalEquityFraction * 100).toFixed(1)}% of $${portfolioBalance.toFixed(2)})`,
     description: isSweetSpotSizing
-      ? "Position sizing dynamically scaled to current balance in the optimal compounding corridor (10%-35%)."
+      ? "Position sizing dynamically scaled to current balance in the optimal compounding corridor (8%-55%)."
       : plannedNotional < 15
         ? "Micro-sizing detected (<$15); profit potential will be trivial. Sizing should be bumped."
-        : "Oversized exposure detected (>35% equity); trimmed for capital preservation.",
+        : "Oversized exposure detected (>55% equity); trimmed for capital preservation.",
   });
 
   // Calculate composite score
