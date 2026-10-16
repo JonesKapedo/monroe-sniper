@@ -364,6 +364,7 @@ function clampToStakeBudget(
     currentExposure: exposure(book),
     riskNotional,
     targetPct,
+    openPositionCount: book.positions.length,
   });
   return {
     notional: res.notional,

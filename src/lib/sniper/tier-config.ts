@@ -364,6 +364,8 @@ export interface StakeBudgetInput {
   riskNotional: number;
   /** Expected upside of THIS position as a fraction, e.g. 0.06 = +6% target. */
   targetPct: number;
+  /** Open positions already held — reserve stake for remaining slots. */
+  openPositionCount?: number;
 }
 
 export interface StakeBudgetResult {
@@ -382,7 +384,7 @@ export interface StakeBudgetResult {
  * exceed the tier budget — so losses can never take the whole book.
  */
 export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
-  const { equity, tier, currentExposure, riskNotional, targetPct } = input;
+  const { equity, tier, currentExposure, riskNotional, targetPct, openPositionCount = 0 } = input;
   const budget = Math.max(0, Math.round(equity * tier.maxPortfolioExposure * 100) / 100);
   const remaining = Math.max(0, Math.round((budget - currentExposure) * 100) / 100);
   if (remaining < tier.minNotional) {
@@ -395,12 +397,13 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
       targetScale: 1,
     };
   }
-  // Proportional split by target: a 12% target earns up to 1.5x share of the
-  // remaining budget, a 3% target earns 0.5x. Reference = 6% typical target.
+  // Reserve equal slices so concurrent positions can fill (don't stuff one trade).
+  const slotsLeft = Math.max(1, tier.maxPositions - openPositionCount);
+  const perSlotCap = remaining / slotsLeft;
   const targetScale = Math.min(1.5, Math.max(0.5, targetPct / 0.06));
   const notional = Math.max(
     0,
-    Math.min(riskNotional * targetScale, remaining, Math.max(0, equity * 0.95)),
+    Math.min(riskNotional * targetScale, perSlotCap, remaining, Math.max(0, equity * 0.95)),
   );
   const rounded = Math.round(notional * 100) / 100;
   if (rounded < tier.minNotional) {

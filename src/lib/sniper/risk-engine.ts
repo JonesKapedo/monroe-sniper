@@ -177,8 +177,13 @@ export function evaluateRiskAndSize(
   const rawConviction = Math.min(1.35, Math.max(0.65, (candidate.score / 75) * (0.9 + 0.2 * resemblance)));
   const modelConviction = convictionForModel(effectiveEdge * 12, 20);
   const conviction = Math.min(1.35, Math.max(0.65, rawConviction * modelConviction));
-  const openSlots = Math.max(1, settings.maxPositions - book.positions.length);
+  const stakeTierForSlots = TIER_CONFIGS[detectTier(currentEquity)];
+  const maxSlots = Math.min(settings.maxPositions, stakeTierForSlots.maxPositions, profileMaxPositions);
+  const openSlots = Math.max(1, maxSlots - book.positions.length);
   const cashPerSlot = book.cash / openSlots;
+  const stakeBudgetTotalPreview = Math.round(currentEquity * stakeTierForSlots.maxPortfolioExposure * 100) / 100;
+  const stakeRemainingPreview = Math.max(0, stakeBudgetTotalPreview - currentExposure);
+  const stakePerSlot = stakeRemainingPreview / openSlots;
   const profileMaxIdea = profile.id === "[degen]" ? 0.55 : profile.id === "[elvis]" ? 0.40 : profile.id === "[paranoid]" ? 0.15 : 0.30;
   const maxIdeaCash = Math.max(currentEquity <= 250 ? Math.min(book.cash, 35) : 0, currentEquity * profileMaxIdea * conviction);
   const maxBookExposure = profile.id === "[degen]" ? 0.85 : profile.id === "[elvis]" ? 0.70 : profile.id === "[paranoid]" ? 0.40 : 0.65;
@@ -205,8 +210,8 @@ export function evaluateRiskAndSize(
   if (currentEquity <= 250 && book.cash >= 25) {
     rawSize = Math.max(rawSize, Math.min(35, book.cash, stakeRemaining));
   }
-  const bindingNotional = Math.max(0, Math.min(rawSize, maxIdeaCash, cashPerSlot, bookCapRemaining, stakeRemaining, book.cash));
-  const stakeSplit = applyStakeBudget({ equity: currentEquity, tier: stakeTier, currentExposure, riskNotional: bindingNotional, targetPct: calculatedTargetPct });
+  const bindingNotional = Math.max(0, Math.min(rawSize, maxIdeaCash, cashPerSlot, bookCapRemaining, stakeRemaining, stakePerSlot, book.cash));
+  const stakeSplit = applyStakeBudget({ equity: currentEquity, tier: stakeTier, currentExposure, riskNotional: bindingNotional, targetPct: calculatedTargetPct, openPositionCount: book.positions.length });
   const roundedNotional = stakeSplit.blocked ? 0 : Math.round(stakeSplit.notional * 100) / 100;
   const qty = roundedNotional > 0 && entryPrice > 0 ? roundedNotional / entryPrice : 0;
   const valueAtRisk95 = Math.round(roundedNotional * volatility * 1.645 * 100) / 100;
@@ -222,8 +227,8 @@ export function evaluateRiskAndSize(
   const ddPass = drawdown <= settings.maxDrawdownBreaker;
   checks.push({ id: "drawdown", label: `Max drawdown breaker (<${(settings.maxDrawdownBreaker * 100).toFixed(0)}%)`, pass: ddPass, detail: `Current drawdown ${(drawdown * 100).toFixed(1)}%` });
   if (!ddPass) reasons.push(`Portfolio drawdown ${(drawdown * 100).toFixed(1)}% breached safety limit`);
-  const slotPass = book.positions.length < settings.maxPositions;
-  checks.push({ id: "slots", label: `Max positions (${settings.maxPositions})`, pass: slotPass, detail: `${book.positions.length}/${settings.maxPositions} held` });
+  const slotPass = book.positions.length < maxSlots;
+  checks.push({ id: "slots", label: `Max positions (${maxSlots})`, pass: slotPass, detail: `${book.positions.length}/${maxSlots} held` });
   if (!slotPass) reasons.push("Maximum concurrent positions reached");
   const stakePass = !stakeSplit.blocked;
   checks.push({ id: "stake", label: `Stake budget ($${currentExposure.toFixed(0)} of $${stakeBudgetTotal.toFixed(0)} staked)`, pass: stakePass, detail: stakePass ? `Share $${roundedNotional.toFixed(2)} at ${(stakeSplit.targetScale * 100).toFixed(0)}% target weight` : stakeSplit.reason });
