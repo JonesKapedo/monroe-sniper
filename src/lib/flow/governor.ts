@@ -52,7 +52,7 @@ export const ALERT_RING_SIZE = 50;
 
 export function initFlowGovernor(): FlowGovernorState {
   return {
-    starvedCycles: number = 0,
+    starvedCycles: 0,
     relaxStep: 0,
     rejections: [],
     lastEntryAt: null,
@@ -90,7 +90,7 @@ export function tickGovernor(
   if (cycle.entriesFilled > 0) {
     if (state.starvedCycles !== 0) {
       return {
-        state: { ...state, starvedCycles: 0, relaxStep: state.relaxStep },
+        state: { ...state, starvedCycles: 0 },
         scoreFloorRelax: currentRelax(state),
         alert: null,
       };
@@ -107,14 +107,15 @@ export function tickGovernor(
   if (starved >= MAX_STARVED_CYCLES_BEFORE_RELAX && state.relaxStep < MAX_RELAX_STEPS) {
     const step = FLOW_RELAX_STEPS[state.relaxStep];
     const alert = `FLOW GOVERNOR: ${starved} starved cycles — relaxing gate "${step.key}": ${step.description}`;
+    const next: FlowGovernorState = {
+      ...state,
+      starvedCycles: 0,
+      relaxStep: state.relaxStep + 1,
+      alerts: [alert, ...state.alerts].slice(0, ALERT_RING_SIZE),
+    };
     return {
-      state: {
-        ...state,
-        starvedCycles: 0,
-        relaxStep: state.relaxStep + 1,
-        alerts: [alert, ...state.alerts].slice(0, ALERT_RING_SIZE),
-      },
-      scoreFloorRelax: currentRelax({ ...state, relaxStep: state.relaxStep + 1 }),
+      state: next,
+      scoreFloorRelax: currentRelax(next),
       alert,
     };
   }
