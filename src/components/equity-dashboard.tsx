@@ -13,6 +13,7 @@ export function EquityDashboard() {
   const currentTier = useDesk((s) => s.currentTier);
   const tierConfig = useDesk((s) => s.tierConfig);
   const equityGuardState = useDesk((s) => s.equityGuardState);
+  const selectedModel = useDesk((s) => s.selectedModel);
 
   const book = mode === "live" ? live : demo;
   const currentEquity = equity(book);
@@ -27,7 +28,7 @@ export function EquityDashboard() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-faint">
-            Equity protection
+            Equity protection · {selectedModel?.name ?? "Sweet Spot"}
           </p>
           <p className="mt-0.5 text-xs text-faint">
             80% of gains lock automatically · 20% compounds (max $1000) · bot stays armed
