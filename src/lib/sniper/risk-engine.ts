@@ -112,6 +112,8 @@ export function evaluateRiskAndSize(
   now = Date.now(),
   math?: RiskMathOverlays,
   modelId: RiskModelProfile["id"] = "gradient",
+  /** Equity-guard risk multiplier (0-1): scales the dollar risk budget before all caps. */
+  riskMultiplier = 1.0,
 ): SizingVerdict {
   const profile: RiskModelProfile =
     selectModel(modelId) ?? selectModel("gradient") ?? MODELS["gradient"];
@@ -191,7 +193,8 @@ export function evaluateRiskAndSize(
   let rawSize = 0;
   if (settings.sizingModel === "VOLATILITY_PARITY") {
     const riskFraction = profile.id === "[degen]" ? 0.05 : profile.id === "[elvis]" ? 0.035 : profile.id === "[paranoid]" ? 0.015 : settings.riskPerTrade;
-    const dollarRiskBudget = Math.max(currentEquity <= 250 ? 1.5 : 0, currentEquity * riskFraction * conviction);
+    const guardMult = Math.max(0, Math.min(1, riskMultiplier));
+    const dollarRiskBudget = Math.max(currentEquity <= 250 ? 1.5 : 0, currentEquity * riskFraction * conviction) * guardMult;
     rawSize = dollarRiskBudget / calculatedStopPct;
   } else if (settings.sizingModel === "FRACTIONAL_KELLY") {
     const winProb = Math.min(0.85, Math.max(0.48, candidate.score / 100));
@@ -207,9 +210,9 @@ export function evaluateRiskAndSize(
   const stakeTier = TIER_CONFIGS[detectTier(currentEquity)];
   const stakeBudgetTotal = Math.round(currentEquity * stakeTier.maxPortfolioExposure * 100) / 100;
   const stakeRemaining = Math.max(0, Math.round((stakeBudgetTotal - currentExposure) * 100) / 100);
-  if (currentEquity <= 250 && book.cash >= 25) {
-    rawSize = Math.max(rawSize, Math.min(35, book.cash, stakeRemaining));
-  }
+  // Small-book floor removed: inflating rawSize toward $35 forced tickets
+  // ~2.6x the intended risk just to clear minNotional. The stake guard and
+  // minTicket gate handle viability without distorting the risk budget.
   const bindingNotional = Math.max(0, Math.min(rawSize, maxIdeaCash, cashPerSlot, bookCapRemaining, stakeRemaining, stakePerSlot, book.cash));
   const stakeSplit = applyStakeBudget({ equity: currentEquity, tier: stakeTier, currentExposure, riskNotional: bindingNotional, targetPct: calculatedTargetPct, openPositionCount: book.positions.length });
   const roundedNotional = stakeSplit.blocked ? 0 : Math.round(stakeSplit.notional * 100) / 100;
