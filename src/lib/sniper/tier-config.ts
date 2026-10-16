@@ -399,7 +399,10 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
   }
   // Reserve equal slices so concurrent positions can fill (don't stuff one trade).
   const slotsLeft = Math.max(1, tier.maxPositions - openPositionCount);
-  const perSlotCap = remaining / slotsLeft;
+  // Single-slot tiers (micro/seed, maxPositions 1): slotsLeft is always 1,
+  // which handed the whole remaining budget to the first trade and starved
+  // every later signal. Cap a lone slot at 60% of remaining stake instead.
+  const perSlotCap = slotsLeft === 1 ? remaining * 0.6 : remaining / slotsLeft;
   const targetScale = Math.min(1.5, Math.max(0.5, targetPct / 0.06));
   const notional = Math.max(
     0,
