@@ -163,7 +163,10 @@ describe("Flow Governor — starvation watchdog", () => {
   it("relaxes gates in ranked order after 30 starved cycles and never touches HALTs", () => {
     let g = initFlowGovernor();
     let alert: string | null = null;
-    for (let i = 0; i < 31; i++) {
+    // Exactly 30 ticks: starvation counter reaches the threshold ON the 30th
+    // tick, which fires the relax and its alert. (A 31st tick would reset the
+    // counter to 0 after the relax and overwrite `alert` with null.)
+    for (let i = 0; i < 30; i++) {
       const res = tickGovernor(g, { entriesFilled: 0, guardHalted: false, feedsAlive: 2 });
       g = res.state;
       alert = res.alert;
