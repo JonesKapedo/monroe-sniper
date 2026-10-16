@@ -51,7 +51,7 @@ export const defaultDisciplineRules: DisciplineRules = {
   autoBreakEvenAtMultiple: 1.5, // Move stop to break-even once 1.5R profit reached
   haltOnConsecutiveLosses: 3, // Cooldown after 3 back-to-back losses
   blacklistedTokenCheck: true,
-  reentryCooldownMinutes: 30, // Sit-out after any close on the same symbol
+  reentryCooldownMinutes: 12, // Sit-out after any close on the same symbol
 };
 
 /**

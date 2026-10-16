@@ -108,7 +108,7 @@ export function evaluateRiskAndSize(
   book: Book,
   candidate: Candidate,
   settings: RiskEngineSettings = defaultRiskSettings,
-  minScore = 62,
+  minScore = 52,
   now = Date.now(),
   math?: RiskMathOverlays,
   modelId: RiskModelProfile["id"] = "gradient",

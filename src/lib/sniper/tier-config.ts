@@ -80,8 +80,8 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     minBalance: 250,
     maxBalance: 500,
     maxRiskPerTrade: 0.0125,     // 1.25%
-    maxPositions: 2,
-    maxPortfolioExposure: 0.35,  // 35%
+    maxPositions: 3,
+    maxPortfolioExposure: 0.40,  // 40%
     stopLossPct: 0.04,           // 4% ATR
     stopLossType: "atr",
     atrMultiplier: 1.6,

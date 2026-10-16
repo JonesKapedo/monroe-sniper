@@ -1236,8 +1236,10 @@ export const useDesk = create<DeskState>()(
         }
         if (currentBook.positions.length >= s.riskSettings.maxPositions) return;
         const isTurbo = s.selectedModel.id === "[degen]";
-        // Model-profile score floor: [degen] drops 15 points, never below 45.
-        const scoreFloor = isTurbo ? Math.max(45, s.memory.minScore - 15) : s.memory.minScore;
+        const profileFloor = s.selectedModel.minScore ?? 48;
+        const scoreFloor = isTurbo
+          ? Math.max(40, Math.min(s.memory.minScore, profileFloor) - 12)
+          : Math.min(s.memory.minScore, profileFloor);
         const overlays = mathOverlays(currentBook);
 
         // Re-entry discipline, all modes: any symbol closed within the
@@ -1276,7 +1278,7 @@ export const useDesk = create<DeskState>()(
           (a) =>
             !currentBook.positions.some((p) => p.tokenId === a.id) &&
             a.disciplineApproved &&
-            a.confidenceScore >= 80 &&
+            a.confidenceScore >= 65 &&
             !fibBlocked(a.symbol) &&
             !isHalted(a.symbol, s.eventHalts),
         );
@@ -1326,6 +1328,7 @@ export const useDesk = create<DeskState>()(
             scoreFloor,
             Date.now(),
             overlays,
+            s.selectedModel.id,
           );
 
           if (verdict.allowed && verdict.notional > 0) {
@@ -1395,7 +1398,10 @@ export const useDesk = create<DeskState>()(
           const tapeBook = live[live.mode];
           if (tapeBook.positions.length >= live.riskSettings.maxPositions) return;
           const turboNow = live.riskSettings.sizingProfile === "TURBO";
-          const floorNow = turboNow ? Math.max(45, live.memory.minScore - 15) : live.memory.minScore;
+          const profileFloorNow = live.selectedModel.minScore ?? 48;
+          const floorNow = turboNow
+            ? Math.max(40, Math.min(live.memory.minScore, profileFloorNow) - 12)
+            : Math.min(live.memory.minScore, profileFloorNow);
           const pick = chooseEntry(tapeBook, live.tape, floorNow, Date.now(), (id) =>
             securityVerdictOf(live.security, id),
           );
@@ -1409,6 +1415,7 @@ export const useDesk = create<DeskState>()(
             floorNow,
             Date.now(),
             mathOverlays(tapeBook),
+            live.selectedModel.id,
           );
 
           if (!verdict.allowed || verdict.notional <= 0) return;

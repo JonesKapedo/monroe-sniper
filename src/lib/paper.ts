@@ -5,7 +5,7 @@ export const STARTING_CASH = DEMO_START;
 export const MAX_POSITIONS = 3;
 export const MAX_IDEA = 0.2;
 export const MAX_BOOK = 0.6;
-export const MIN_SCORE = 62;
+export const MIN_SCORE = 52;
 export const MIN_LIQ = 10_000;
 export const MIN_TICKET = 5;
 
@@ -643,9 +643,9 @@ function bucketLearn(memory: Memory, pnl: number): Memory {
   let minScore = memory.minScore;
   if (seen >= 4) {
     const winRate = wins / seen;
-    if (winRate < 0.4 || realized < 0) minScore = Math.min(85, 62 + 2 * (seen - 3));
-    else if (winRate > 0.55 && realized > 0) minScore = Math.max(55, 62 - (seen - 3));
-    else minScore = 62;
+    if (winRate < 0.4 || realized < 0) minScore = Math.min(78, 52 + 2 * (seen - 3));
+    else if (winRate > 0.55 && realized > 0) minScore = Math.max(48, 52 - (seen - 3));
+    else minScore = 52;
   }
   return { seen, wins, losses, realized, minScore };
 }
@@ -709,9 +709,9 @@ export function learn(memory: Memory, pnl: number): Memory {
   let minScore = memory.minScore;
   if (seen >= 4) {
     const winRate = wins / seen;
-    if (winRate < 0.4 || realized < 0) minScore = Math.min(85, 62 + 2 * (seen - 3));
-    else if (winRate > 0.55 && realized > 0) minScore = Math.max(55, 62 - (seen - 3));
-    else minScore = 62;
+    if (winRate < 0.4 || realized < 0) minScore = Math.min(78, 52 + 2 * (seen - 3));
+    else if (winRate > 0.55 && realized > 0) minScore = Math.max(48, 52 - (seen - 3));
+    else minScore = 52;
   }
   return { seen, wins, losses, realized, minScore };
 }
