@@ -16,8 +16,8 @@ describe("turbo sizing profile", () => {
     const cand = deepCandidate();
     const turbo = { ...defaultRiskSettings, sizingProfile: "TURBO" as const };
     const aggro = { ...defaultRiskSettings, sizingProfile: "AGGRESSIVE" as const };
-    const t = evaluateRiskAndSize(book, cand, turbo, 0);
-    const a = evaluateRiskAndSize(book, cand, aggro, 0);
+    const t = evaluateRiskAndSize(book, cand, turbo, 0, Date.now(), undefined, "[degen]");
+    const a = evaluateRiskAndSize(book, cand, aggro, 0, Date.now(), undefined, "[elvis]");
     assert.equal(t.allowed, true);
     assert.ok(t.notional >= a.notional);
     assert.ok(t.checks.some((c) => c.id === "fib-geometry"));
@@ -28,7 +28,7 @@ describe("turbo sizing profile", () => {
     const book = emptyBook();
     const cand = deepCandidate();
     const turbo = { ...defaultRiskSettings, sizingProfile: "TURBO" as const };
-    const v = evaluateRiskAndSize(book, cand, turbo, 0);
+    const v = evaluateRiskAndSize(book, cand, turbo, 0, Date.now(), undefined, "[degen]");
     assert.ok(v.stopLossPct > 0 && v.takeProfitPct > 0);
     assert.ok(v.riskRewardRatio >= 1.5);
   });
@@ -46,11 +46,11 @@ describe("turbo sizing profile", () => {
     const blocked = evaluateRiskAndSize(book, cand, turbo, 0, Date.now(), {
       winnerVectors: [],
       openVectors: [vec],
-    });
+    }, "[degen]");
     assert.ok(blocked.checks.some((c) => c.id === "correlation" && !c.pass));
     assert.equal(blocked.allowed, false);
     // Without overlays the same trade is untouched (existing callers safe).
-    const plain = evaluateRiskAndSize(book, cand, turbo, 0);
+    const plain = evaluateRiskAndSize(book, cand, turbo, 0, Date.now(), undefined, "[degen]");
     assert.ok(!plain.checks.some((c) => c.id === "correlation"));
   });
 
@@ -58,7 +58,7 @@ describe("turbo sizing profile", () => {
     const book = emptyBook();
     const cand = deepCandidate();
     const turbo = { ...defaultRiskSettings, sizingProfile: "TURBO" as const };
-    const gated = evaluateRiskAndSize(book, cand, turbo, 99);
+    const gated = evaluateRiskAndSize(book, cand, turbo, 99, Date.now(), undefined, "[degen]");
     assert.equal(gated.allowed, false);
   });
 });
