@@ -375,6 +375,7 @@ function clampToStakeBudget(
   book: Book,
   riskNotional: number,
   targetPct: number,
+  maxConcurrentPositions?: number,
 ): { notional: number; blocked: boolean; reason: string; budget: number; remaining: number } {
   const res = applyStakeBudget({
     equity: equity(book),
@@ -383,6 +384,7 @@ function clampToStakeBudget(
     riskNotional,
     targetPct,
     openPositionCount: book.positions.length,
+    maxConcurrentPositions,
   });
   return {
     notional: res.notional,
@@ -1403,6 +1405,7 @@ export const useDesk = create<DeskState>()(
               bookNow,
               Math.min(verdict.notional * guardRisk, avenue.maxCapitalAllocationUsd),
               verdict.takeProfitPct,
+              Math.max(st.riskSettings.maxPositions, st.tierConfig?.maxPositions ?? 1),
             );
             if (!verdict.allowed || stake.blocked || stake.notional < (st.tierConfig?.minNotional ?? 1)) {
               continue;
@@ -1502,6 +1505,7 @@ export const useDesk = create<DeskState>()(
             tapeBook,
             verdict.notional * guardRisk,
             verdict.takeProfitPct,
+            Math.max(live.riskSettings.maxPositions, live.tierConfig?.maxPositions ?? 1),
           );
           if (tapeStake.blocked) {
             useDesk.setState((prev) => ({

@@ -369,6 +369,11 @@ export interface StakeBudgetInput {
   targetPct: number;
   /** Open positions already held — reserve stake for remaining slots. */
   openPositionCount?: number;
+  /**
+   * Operator max concurrent positions (Settings). Total locked stake budget
+   * is divided equally by this number — each ticket ≤ budget/N.
+   */
+  maxConcurrentPositions?: number;
 }
 
 export interface StakeBudgetResult {
@@ -402,24 +407,28 @@ export const FLOW_RESERVE_TICKETS = 3;
  *      block, and it says so explicitly.
  */
 export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
-  const { equity, tier, currentExposure, riskNotional, targetPct, openPositionCount = 0 } = input;
+  const {
+    equity,
+    tier,
+    currentExposure,
+    riskNotional,
+    targetPct,
+    openPositionCount = 0,
+    maxConcurrentPositions,
+  } = input;
   const budget = Math.max(0, Math.round(equity * tier.maxPortfolioExposure * 100) / 100);
   const remaining = Math.max(0, Math.round((budget - currentExposure) * 100) / 100);
-  // The tier minimum ticket must clamp to the (guard-scaled) risk notional:
-  // after a REDUCE_RISK the desk halves tickets, and an unscaled floor would
-  // reject every shrunk ticket forever — REDUCE_RISK must shrink entries,
-  // never deadlock them. Full-guard (riskNotional >= floor) keeps the floor.
+  const maxPos = Math.max(1, Math.floor(maxConcurrentPositions ?? tier.maxPositions ?? 1));
+
   const absTicketFloor = equity < 30 ? 1 : equity < 100 ? 2 : 5;
   const baseFloor = Math.max(
     absTicketFloor,
     Math.round(Math.min(tier.minNotional, riskNotional) * 100) / 100,
   );
-  // I1 flow reserve: adapt the floor so 3 consecutive tickets stay admissible.
   let floor = baseFloor;
   let flowReserve = false;
-  if (remaining > 0 && remaining < baseFloor * FLOW_RESERVE_TICKETS) {
-    const absFloor = equity < 30 ? 1 : equity < 100 ? 2 : 5;
-    const flowFloor = Math.max(absFloor, Math.round((remaining / FLOW_RESERVE_TICKETS) * 100) / 100);
+  if (remaining > 0 && remaining < baseFloor * maxPos) {
+    const flowFloor = Math.max(absTicketFloor, Math.round((remaining / maxPos) * 100) / 100);
     if (flowFloor < baseFloor) {
       floor = flowFloor;
       flowReserve = true;
@@ -429,21 +438,16 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
     return {
       notional: 0,
       blocked: true,
-      reason: `Stake budget exhausted: $${currentExposure.toFixed(2)} of $${budget.toFixed(2)} already staked`,
+      reason: `Stake budget exhausted: $${currentExposure.toFixed(2)} of $${budget.toFixed(2)} already staked (${maxPos} slots)`,
       budget,
       remaining,
       targetScale: 1,
     };
   }
-  // Reserve equal slices so concurrent positions can fill (don't stuff one trade).
-  const slotsLeft = Math.max(1, tier.maxPositions - openPositionCount);
-  // Single-slot tiers (micro/seed, maxPositions 1): slotsLeft is always 1,
-  // which handed the whole remaining budget to the first trade and starved
-  // every later signal. Cap a lone slot at 60% of remaining stake instead.
-  // Multi-slot tiers split by min(slotsLeft, 3) so THREE tickets can fill
-  // concurrently — the flow guarantee.
-  const perSlotCap =
-    slotsLeft === 1 ? remaining * 0.6 : remaining / Math.min(slotsLeft, FLOW_RESERVE_TICKETS);
+
+  // HARD RULE: each position ≤ total locked budget / max concurrent positions
+  const equalSlotCap = Math.round((budget / maxPos) * 100) / 100;
+  const perSlotCap = Math.min(equalSlotCap, remaining);
   const targetScale = Math.min(1.5, Math.max(0.5, targetPct / 0.06));
   const notional = Math.max(
     0,
@@ -454,7 +458,7 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
     return {
       notional: 0,
       blocked: true,
-      reason: `Budget share $${rounded.toFixed(2)} below $${floor.toFixed(2)} minimum ticket${flowReserve ? " (flow reserve active — floor adapted so 3 consecutive tickets stay admissible)" : ""}`,
+      reason: `Budget share $${rounded.toFixed(2)} below $${floor.toFixed(2)} minimum (cap $${equalSlotCap.toFixed(2)} = $${budget.toFixed(2)}/${maxPos})${flowReserve ? " · adaptive floor" : ""}`,
       budget,
       remaining,
       targetScale,
