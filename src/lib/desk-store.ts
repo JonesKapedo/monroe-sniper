@@ -77,6 +77,10 @@ import { useDyorStore } from "./dyor/store";
 import { playHawkCry, playSoftChirp } from "./sound";
 import { assessEdge } from "./intel/emh";
 import {
+  selectDiversifiedEntries,
+  type RankedOpportunity,
+} from "./intel/entry-strategy";
+import {
   type TradingLedger,
   createPaperAccount,
   syncLedgerFromBook,
@@ -371,6 +375,7 @@ function clampToStakeBudget(
   book: Book,
   riskNotional: number,
   targetPct: number,
+  maxConcurrentPositions?: number,
 ): { notional: number; blocked: boolean; reason: string; budget: number; remaining: number } {
   const res = applyStakeBudget({
     equity: equity(book),
@@ -379,6 +384,7 @@ function clampToStakeBudget(
     riskNotional,
     targetPct,
     openPositionCount: book.positions.length,
+    maxConcurrentPositions,
   });
   return {
     notional: res.notional,
@@ -1299,7 +1305,7 @@ export const useDesk = create<DeskState>()(
         // Fib-spaced re-entry stacks on top for turbo stops.
         const cooldownMs = Math.max(
           5,
-          Math.min(120, s.disciplineRules.reentryCooldownMinutes ?? 30),
+          Math.min(120, s.disciplineRules.reentryCooldownMinutes ?? 12),
         ) * 60_000;
         const fibBlocked = (symbol: string): boolean => {
           const now = Date.now();
@@ -1320,115 +1326,129 @@ export const useDesk = create<DeskState>()(
           return; // Intraday loss limit circuit breaker triggers
         }
 
-        // 1. Check all money-making avenues (Perps, Arbitrage, Early IPOs, Yield Basis)
+        // 1. Professional avenue entries — diversified multi-slot (not one stuck perp).
         const avenues = scanAllAvenues(currentBook, s.disciplineRules, Date.now(), {
           funding: s.perpFunding,
         });
-        const unheldAvenue =
-          s.entrySources.avenues
-            ? avenues.find(
-                (a) =>
-                  !currentBook.positions.some((p) => p.tokenId === a.id) &&
-                  a.disciplineApproved &&
-                  a.confidenceScore >= 60 &&
-                  !fibBlocked(a.symbol) &&
-                  !isHalted(a.symbol, s.eventHalts) &&
-                  !!tapeContextFor(a.anchorSymbol, s.tape),
-              )
-            : undefined;
-
-        if (s.entrySources.avenues && unheldAvenue) {
-          const tapeCtx = tapeContextFor(unheldAvenue.anchorSymbol, s.tape);
-          if (!tapeCtx) {
-            /* filtered above */
-          } else {
-          const aveCand: Candidate = {
-            id: unheldAvenue.id,
-            symbol: unheldAvenue.symbol,
-            name: unheldAvenue.symbol,
-            address: unheldAvenue.id,
-            chain: "hyperliquid",
-            venue: "hyperliquid",
-            priceUsd: unheldAvenue.priceA,
-            change24h: tapeCtx.change24h,
-            volume24h: tapeCtx.volume24h,
-            liquidityUsd: tapeCtx.liquidityUsd ?? 0,
-            liquidityUnknown: tapeCtx.liquidityUnknown || undefined,
-            score: unheldAvenue.confidenceScore,
-            pairAgeHours: null,
-            url: null,
-            flags: [],
-            rationale: [unheldAvenue.title, ...(unheldAvenue.disciplineNotes ?? [])],
-          };
-
-          const verdict = evaluateRiskAndSize(
-            currentBook,
-            aveCand,
-            s.riskSettings,
-            scoreFloor,
-            Date.now(),
-            overlays,
-            s.selectedModel.id,
+        if (s.entrySources.avenues && avenues.length > 0) {
+          const maxSlots = cycleMaxSlots;
+          const slotsLeft = Math.max(0, maxSlots - currentBook.positions.length);
+          // Per-symbol cooldown only — a loss on BTC does not freeze SOL/ETH.
+          const ranked: RankedOpportunity[] = avenues
+            .filter(
+              (a) =>
+                a.disciplineApproved &&
+                !fibBlocked(a.symbol) &&
+                !isHalted(a.symbol, s.eventHalts),
+            )
+            .map((a) => ({
+              id: a.id,
+              symbol: a.symbol,
+              anchorSymbol: a.anchorSymbol ?? a.symbol,
+              category: a.category,
+              confidenceScore: a.confidenceScore,
+              entryScore: a.confidenceScore,
+              perpSide: a.perpSide,
+              fundingRate8h: a.fundingRate8h,
+              disciplineApproved: a.disciplineApproved,
+            }));
+          const picks = selectDiversifiedEntries(
+            ranked,
+            currentBook.positions.map((pos) => ({ tokenId: pos.tokenId, symbol: pos.symbol })),
+            Math.min(slotsLeft, 3),
+            55,
           );
+          for (const pick of picks) {
+            const st = useDesk.getState();
+            const bookNow = st[st.mode];
+            if (bookNow.positions.length >= maxSlots) break;
+            if (bookNow.positions.some((pos) => pos.tokenId === pick.id)) continue;
+            const avenue = avenues.find((a) => a.id === pick.id);
+            if (!avenue || !(avenue.priceA > 0)) continue;
 
-          if (verdict.allowed && verdict.notional > 0) {
-            // Final stake guard: portfolio budget split by this position's target.
-            const stake = clampToStakeBudget(
-              s.tierConfig,
-              currentBook,
-              Math.min(verdict.notional * guardRisk, unheldAvenue.maxCapitalAllocationUsd),
-              verdict.takeProfitPct,
+            const turboNow = st.selectedModel.id === "[degen]";
+            const profileFloorNow = st.selectedModel.minScore ?? 48;
+            const floor = turboNow
+              ? Math.max(40, Math.min(st.memory.minScore, profileFloorNow) - 12)
+              : Math.min(st.memory.minScore, profileFloorNow);
+
+            const aveCand: Candidate = {
+              id: avenue.id,
+              symbol: avenue.symbol,
+              name: avenue.symbol,
+              address: avenue.id,
+              chain: avenue.chain ?? "solana",
+              priceUsd: avenue.priceA,
+              liquidityUsd: 0,
+              volume24h: 0,
+              change24h: 0,
+              pairAgeHours: null,
+              url: null,
+              score: avenue.confidenceScore,
+              flags: [],
+              rationale: [avenue.title, ...(avenue.disciplineNotes ?? [])],
+              venue: "hyperliquid",
+              liquidityUnknown: true,
+            };
+
+            const verdict = evaluateRiskAndSize(
+              bookNow,
+              aveCand,
+              st.riskSettings,
+              floor,
+              Date.now(),
+              mathOverlays(bookNow),
+              st.selectedModel.id,
             );
-            if (stake.blocked) {
-              set({
-                log: pushLog(s.log, `Stake guard blocked ${unheldAvenue.symbol}: ${stake.reason}`),
-              });
+            const stake = clampToStakeBudget(
+              st.tierConfig,
+              bookNow,
+              Math.min(verdict.notional * guardRisk, avenue.maxCapitalAllocationUsd),
+              verdict.takeProfitPct,
+              Math.max(st.riskSettings.maxPositions, st.tierConfig?.maxPositions ?? 1),
+            );
+            if (!verdict.allowed || stake.blocked || stake.notional < (st.tierConfig?.minNotional ?? 1)) {
+              continue;
             }
-            const notional = stake.blocked ? 0 : stake.notional;
-            const result = stake.blocked
-              ? { ok: false as const, note: stake.reason, book: currentBook }
-              : enter(currentBook, aveCand, Date.now(), scoreFloor, {
-                  notional,
-                  stop: unheldAvenue.stopLossPrice,
-                  target: unheldAvenue.targetPrice,
-                  priceSource: `hyperliquid:${(unheldAvenue.anchorSymbol ?? unheldAvenue.symbol).toUpperCase()}`,
-                });
+            const notional = stake.notional;
+            const result = enter(bookNow, aveCand, Date.now(), floor, {
+              notional,
+              stop: avenue.stopLossPrice,
+              target: avenue.targetPrice,
+              priceSource: `hyperliquid:${(avenue.anchorSymbol ?? avenue.symbol).toUpperCase()}`,
+            });
+            if (!result.ok) continue;
 
-            if (result.ok) {
-              const hashStr = makeSolHash();
-              const exec: TapeExecution = {
-                id: `entry-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                hash: hashStr,
-                ts: Date.now(),
-                symbol: unheldAvenue.symbol,
-                venue: venueFor(aveCand),
-                side: unheldAvenue.perpSide === "SHORT" ? "SELL" : "BUY",
-                price: unheldAvenue.priceA,
-                qty: notional / unheldAvenue.priceA,
-                notional,
-                latencyMs: 28,
-                slippageBps: 0.2,
-                type: "BOT_ENTRY",
-                avenue: unheldAvenue.category,
-                note: `[${unheldAvenue.category}] ${unheldAvenue.title} · Sized $${notional.toFixed(2)} (R:R ${unheldAvenue.riskRewardRatio}R)`,
-                atr: unheldAvenue.estimatedAtrPct,
-                riskReward: unheldAvenue.riskRewardRatio,
-              };
-
-              const noteLine = `[${unheldAvenue.category}] Disciplined Sizing: ${unheldAvenue.symbol} $${notional.toFixed(2)} on ${unheldAvenue.venueA} (Stop $${unheldAvenue.stopLossPrice.toFixed(4)}, Target $${unheldAvenue.targetPrice.toFixed(4)})`;
-
-              set({
-                [targetKey]: result.book,
-          tradingLedger: touchLedgerFromBook(get().tradingLedger, result.book, "desk"),
-                note: noteLine,
-                log: pushLog(s.log, noteLine),
-                executions: [exec, ...s.executions].slice(0, 100),
-                turboEntries: s.turboEntries + (isTurbo ? 1 : 0),
-              });
-              telegramAlert(`Monroe paper entry\n${noteLine}`);
-              // Continue into tape when slots remain.
-            }
-          }
+            const hashStr = `ave-${avenue.id}-${Date.now().toString(36)}`;
+            const exec: TapeExecution = {
+              id: `ex-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              hash: hashStr,
+              ts: Date.now(),
+              symbol: avenue.symbol,
+              venue: "hyperliquid",
+              side: avenue.perpSide === "SHORT" ? "SELL" : "BUY",
+              price: avenue.priceA,
+              qty: notional / avenue.priceA,
+              notional,
+              latencyMs: 28,
+              slippageBps: 0.2,
+              type: "BOT_ENTRY",
+              avenue: avenue.category,
+              note: `[${avenue.category}] ${avenue.title} · $${notional.toFixed(2)} · score ${pick.entryScore}`,
+              atr: avenue.estimatedAtrPct,
+              riskReward: avenue.riskRewardRatio,
+            };
+            const sideTag = avenue.perpSide ?? "LONG";
+            const noteLine = `[${avenue.category}/${sideTag}] Diversified entry ${avenue.symbol} $${notional.toFixed(2)} · ${pick.entryScore}/100 · slots ${result.book.positions.length}/${maxSlots}`;
+            set({
+              [st.mode]: result.book,
+              tradingLedger: touchLedgerFromBook(get().tradingLedger, result.book, "desk"),
+              note: noteLine,
+              log: pushLog(st.log, noteLine),
+              executions: [exec, ...st.executions].slice(0, 100),
+              turboEntries: st.turboEntries + (turboNow ? 1 : 0),
+            });
+            telegramAlert(`Monroe paper entry\n${noteLine}`);
           }
         }
 
@@ -1485,6 +1505,7 @@ export const useDesk = create<DeskState>()(
             tapeBook,
             verdict.notional * guardRisk,
             verdict.takeProfitPct,
+            Math.max(live.riskSettings.maxPositions, live.tierConfig?.maxPositions ?? 1),
           );
           if (tapeStake.blocked) {
             useDesk.setState((prev) => ({

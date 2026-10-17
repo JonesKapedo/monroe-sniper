@@ -7,6 +7,7 @@ import type {
 import type { Book } from "../paper";
 import { equity, DEMO_START } from "../paper";
 import { funding8hRate, fundingAprPct, type PerpFunding } from "../perps/hyperliquid";
+import { interpretPerpRegime, scorePerpEntry } from "../intel/entry-strategy";
 
 function normCoin(symbol: string): string {
   return symbol
@@ -15,10 +16,6 @@ function normCoin(symbol: string): string {
     .replace(/^K(?=[A-Z]{2,})/, "");
 }
 
-/**
- * Overwrite synthetic perp quotes with live Hyperliquid funding and marks.
- * Rows that match nothing keep clearly-labeled playbook values.
- */
 export function hydrateAvenuesWithFunding(
   avenues: AvenueOpportunity[],
   rows: PerpFunding[],
@@ -43,30 +40,23 @@ export function hydrateAvenuesWithFunding(
 }
 
 export const defaultDisciplineRules: DisciplineRules = {
-  maxDailyDrawdownPct: 0.03, // 3.0% max daily drawdown circuit breaker
-  minRiskRewardRatio: 2.5, // 2.5:1 minimum R:R ratio
-  maxPortfolioRiskPerTradePct: 0.015, // 1.5% max equity risk per trade
-  maxAvenueExposurePct: 0.25, // 25% max allocation per avenue
-  requireLiquidityLockDays: 30, // At least 30 days locked liquidity for Early IPOs
-  autoBreakEvenAtMultiple: 1.5, // Move stop to break-even once 1.5R profit reached
-  haltOnConsecutiveLosses: 3, // Cooldown after 3 back-to-back losses
+  maxDailyDrawdownPct: 0.03,
+  minRiskRewardRatio: 2.5,
+  maxPortfolioRiskPerTradePct: 0.015,
+  maxAvenueExposurePct: 0.25,
+  requireLiquidityLockDays: 30,
+  autoBreakEvenAtMultiple: 1.5,
+  haltOnConsecutiveLosses: 3,
   blacklistedTokenCheck: true,
-  reentryCooldownMinutes: 12, // Sit-out after any close on the same symbol
+  reentryCooldownMinutes: 12,
 };
 
-/**
- * Generates and evaluates the current universe of money-making opportunities across all avenues.
- */
 export type AvenueLive = {
-  /** Live Hyperliquid funding rows; absence means playbook mode. */
   funding?: PerpFunding[];
 };
 
 /**
- * Generates the opportunity universe. PERPS hydrate from live funding when
- * provided; every other category is an unverifiable playbook — capped below
- * the auto-entry threshold and flagged, so the bot can never auto-fire on
- * numbers no feed confirmed.
+ * Live Hyperliquid funding universe with professional LONG/SHORT regime scoring.
  */
 export function scanAllAvenues(
   book: Book,
@@ -76,9 +66,6 @@ export function scanAllAvenues(
 ): AvenueOpportunity[] {
   const currentEquity = equity(book);
   const rows = live.funding ?? [];
-  // Live-only universe: an opportunity exists only when a live Hyperliquid
-  // funding row confirms it. No funding feed -> no avenues. Nothing here is
-  // a playbook, estimate, or placeholder.
   const out: AvenueOpportunity[] = [];
   for (const row of rows) {
     if (row.markPx === null || !(row.markPx > 0)) continue;
@@ -86,45 +73,54 @@ export function scanAllAvenues(
     const rate8h = funding8hRate(row.funding1h) ?? 0;
     const apr = fundingAprPct(row.funding1h) ?? 0;
     const aprAbs = Math.abs(apr);
-    // Policy floor (disclosed): ignore dust funding below 5% APR.
     if (aprAbs < 5) continue;
-    // The paper book is long-only, so only negative funding (shorts pay
-    // longs) is expressible as a LONG harvest. Positive funding would need
-    // a short and is skipped rather than mis-modeled.
-    if (!(rate8h < 0)) continue;
+
+    const regime = interpretPerpRegime(row.funding1h, row.openInterest);
+    if (!regime) continue;
+    if (Math.abs(regime.funding8h) < 0.00005) continue;
+
     const coin = row.coin.toUpperCase();
     const symbol = `${coin}-PERP`;
     const price = row.markPx;
-    // Discipline policy (not market data): 2.2% stop, R:R from house rules.
-    const stopPct = 0.022;
+    const stopPct = regime.extremeFunding ? 0.018 : 0.022;
     const rewardMultiple = Math.max(2.5, rules.minRiskRewardRatio);
-    const stopLossPrice = price * (1 - stopPct);
-    const targetPrice = price * (1 + stopPct * rewardMultiple);
-    const rr = Math.round(((targetPrice - price) / (price - stopLossPrice)) * 10) / 10;
+    const side = regime.side;
+    const stopLossPrice =
+      side === "LONG" ? price * (1 - stopPct) : price * (1 + stopPct);
+    const targetPrice =
+      side === "LONG"
+        ? price * (1 + stopPct * rewardMultiple)
+        : price * (1 - stopPct * rewardMultiple);
+    const riskUnit = Math.abs(price - stopLossPrice) || price * stopPct;
+    const rr = Math.round((Math.abs(targetPrice - price) / riskUnit) * 10) / 10;
+    const baseConf = Math.round(Math.min(96, 70 + Math.min(26, aprAbs * 1.2)));
+    const entryScore = scorePerpEntry(baseConf, regime);
+
     out.push({
       id: `perp-${coin.toLowerCase()}-funding`,
       category: "PERPS",
       symbol,
-      title: `${coin} long funding harvest (live Hyperliquid)`,
+      title: `${coin} ${side.toLowerCase()} funding harvest (live Hyperliquid)`,
       venueA: "Hyperliquid Perps",
       chain: "solana",
       priceA: price,
       fundingRate8h: rate8h,
       fundingApr: apr,
-      perpSide: "LONG",
+      perpSide: side,
       leverageMax: 2,
       riskRewardRatio: rr,
       stopLossPct: stopPct,
       stopLossPrice,
       targetPrice,
-      maxCapitalAllocationUsd: currentEquity * 0.2,
-      disciplineApproved: true,
+      maxCapitalAllocationUsd: currentEquity * (regime.extremeFunding ? 0.12 : 0.18),
+      disciplineApproved: entryScore >= 55,
       disciplineNotes: [
-        `Live 8h funding ${(rate8h * 100).toFixed(3)}% (${apr.toFixed(1)}% APR) — shorts pay longs`,
-        `Stop ${(stopPct * 100).toFixed(1)}% policy, target ${rr.toFixed(1)}:1 R:R from house rules`,
+        ...regime.notes,
+        `Stop ${(stopPct * 100).toFixed(1)}% policy, target ${rr.toFixed(1)}:1 R:R`,
         "Leverage strictly capped at 2x",
+        `Entry score ${entryScore}/100 (funding + OI regime)`,
       ],
-      confidenceScore: Math.round(Math.min(96, 70 + Math.min(26, aprAbs * 1.2))),
+      confidenceScore: entryScore,
       discoveredAt: now,
       anchorSymbol: coin,
       liveData: true,
@@ -137,14 +133,6 @@ function tapeBaseOf(symbol: string): string {
   return symbol.toUpperCase().split(/[/:_\-]/)[0];
 }
 
-/**
- * Live tape context for an avenue's anchor symbol (deepest pool wins).
- * CEX rows carry no published depth (liquidityUnknown) — they are still
- * valid context because Binance spot majors price and size off live quotes
- * and volatility, never pool depth. Returns null only when the tape carries
- * no quote at all for the anchor — callers must then resolve the anchor
- * live (loadAnchorQuotes) or skip the entry, never invent numbers.
- */
 export function tapeContextFor(
   anchor: string | undefined,
   tape: Array<{
@@ -190,10 +178,6 @@ export function tapeContextFor(
   return best;
 }
 
-/**
- * Live tape price for an avenue's anchor symbol; deepest pool wins so a thin
- * listing can't wag the mark.
- */
 export function avenueAnchorPrice(
   anchor: string,
   tape: Array<{ symbol: string; priceUsd: number; liquidityUsd: number }>,
@@ -211,7 +195,6 @@ export function avenueAnchorPrice(
   return best;
 }
 
-/** avenue id → anchor symbol for the current scan. */
 export function avenueAnchors(
   book: Book,
   rules: DisciplineRules = defaultDisciplineRules,
@@ -225,22 +208,8 @@ export function avenueAnchors(
   return map;
 }
 
-/**
- * Calculates a paper-performance scorecard; it does not assess live-trading readiness.
- * Demonstrates discipline and statistical edge before handling real funds.
- *
- * Only QUALIFYING trades count: bracket-resolved closes (TARGET / STOP /
- * BREAKEVEN). Time stops, manual flattens, expiries and simulated marks are
- * excluded — they teach nothing about edge. Win rate is the primary gate
- * (55% of the score) with a hard 65% floor: below it the score is capped
- * near zero no matter how many trades closed.
- *
- * `history` is the deduped close list (persisted DB events + local book trades).
- */
 export interface ReadinessTargets {
-  /** Qualifying TP/SL closes required (clamped 50–300). */
   trades: number;
-  /** Win-rate floor % (clamped 50–80). */
   winRate: number;
 }
 
@@ -252,9 +221,6 @@ export function calculatePaperReadiness(
   targets: Partial<ReadinessTargets> = {},
 ): PaperReadiness {
   const closes = history ?? book.trades;
-  // Qualifying trades only: stop hits are disciplined exits, target hits are
-  // successful trades. Everything else (time, manual, expiry, simulated) is
-  // excluded from learning and scoring.
   const qualifying = closes.filter((t) => {
     if (t.simulated) return false;
     const r = (t.reason ?? "").toUpperCase();
@@ -280,13 +246,10 @@ export function calculatePaperReadiness(
   const peak = Math.max(book.peakEquity, currentEquity);
   const maxDrawdownPct = peak > 0 ? ((peak - currentEquity) / peak) * 100 : 0;
 
-  // Hard floor: fewer than 20 qualifying trades or a win rate below the
-  // configured floor means there is no evidence of edge — cap at 25.
   const MIN_QUALIFYING = 20;
   const MIN_WIN_RATE = Math.min(80, Math.max(50, targets.winRate ?? DEFAULT_READINESS_TARGETS.winRate));
   const floored = completedDemoTrades < MIN_QUALIFYING || winRate < MIN_WIN_RATE;
 
-  // Checklist of rigorous discipline criteria (honest gates)
   const checklist = [
     {
       id: "sample_size",
@@ -319,16 +282,12 @@ export function calculatePaperReadiness(
     {
       id: "risk_reward",
       label: "Discipline Rules Adherence",
-      met: true, // Follows automated code gates
+      met: true,
       currentValue: "100% compliant",
       requiredValue: "100% adherence (R:R ≥ 2.5:1, stops enforced)",
     },
   ];
 
-  // Win-rate-led score: 55% win rate vs the 65% floor, 20% linear sample
-  // vs 200 trades, 15% profit factor vs 1.6, 10% drawdown discipline.
-  // Sample-gated cap: the score can never exceed 25 + 75% of sample
-  // completeness, so a small perfect run (e.g. 23/200) reads ~34, not 90+.
   const clamp100 = (n: number) => Math.max(0, Math.min(100, n));
   const sampleScore =
     completedDemoTrades === 0

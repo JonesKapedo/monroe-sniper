@@ -214,7 +214,7 @@ export function evaluateRiskAndSize(
   // ~2.6x the intended risk just to clear minNotional. The stake guard and
   // minTicket gate handle viability without distorting the risk budget.
   const bindingNotional = Math.max(0, Math.min(rawSize, maxIdeaCash, cashPerSlot, bookCapRemaining, stakeRemaining, stakePerSlot, book.cash));
-  const stakeSplit = applyStakeBudget({ equity: currentEquity, tier: stakeTier, currentExposure, riskNotional: bindingNotional, targetPct: calculatedTargetPct, openPositionCount: book.positions.length });
+  const stakeSplit = applyStakeBudget({ equity: currentEquity, tier: stakeTier, currentExposure, riskNotional: bindingNotional, targetPct: calculatedTargetPct, openPositionCount: book.positions.length, maxConcurrentPositions: maxSlots });
   const roundedNotional = stakeSplit.blocked ? 0 : Math.round(stakeSplit.notional * 100) / 100;
   const qty = roundedNotional > 0 && entryPrice > 0 ? roundedNotional / entryPrice : 0;
   const valueAtRisk95 = Math.round(roundedNotional * volatility * 1.645 * 100) / 100;
