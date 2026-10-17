@@ -4,11 +4,11 @@
  * Pure functions, no I/O, no store access. The desk wires evaluateExit()
  * into its tick loop: one call per open position per cycle.
  *
- * Lifecycle: ARMING → BREAKEVEN (+1R) → SCALED_1 (50% off at +1.5R) →
- * SCALED_2 (25% off at +2.5R) → RUNNER (Chandelier trail) → CLOSED.
+ * Lifecycle: ARMING → BREAKEVEN (+1R) → SCALED_1 → SCALED_2 → RUNNER (Chandelier trail) → CLOSED.
  * Once +1R is touched the worst remaining outcome is the breakeven stop:
  * a winner can never round-trip to a full stop.
  *
+ * Growth profile: bank ~1/3 early, let the bulk run under a wide trail.
  * Side exits: time stop, volatility-spike trail tightening, stale failsafe
  * (freeze — never drift, never invent prices).
  */
@@ -24,42 +24,29 @@ export type ExitStateName =
   | "CLOSED";
 
 export interface ExitPlan {
-  /** Initial (armed) stop price. */
   stopPrice: number;
-  /** |entry − stop| in price units — the 1R denominator. */
   riskPerUnit: number;
   breakevenTriggerR: number;
-  /** Fee buffer above entry so breakeven exits net ≥ 0 after costs. */
   breakevenBufferR: number;
   scaleOut1AtR: number;
   scaleOut1Fraction: number;
   scaleOut2AtR: number;
   scaleOut2Fraction: number;
-  /** Chandelier trail multiple of entry ATR, applied from the best mark. */
   runnerTrailAtrMult: number;
-  /** Trail multiple while volatility has spiked (ATR ≥ 2× entry ATR). */
   volSpikeTrailAtrMult: number;
-  /** Exit flat when this many minutes pass below +0.5R. null disables. */
   timeStopMinutes: number | null;
-  /** No fresh mark for this long → freeze: no drift, no invented prices. */
   staleFailsafeMinutes: number;
 }
 
 export interface ExitRuntime {
   state: ExitStateName;
   stopPrice: number;
-  /** Best mark seen in the favorable direction (Chandelier anchor). */
   bestMark: number;
-  /** ATR in price units, sampled at entry. */
   atrAtEntry: number;
   openedAt: number;
-  /** Original position qty at entry — all scale-out fractions are of this. */
   originalQty: number;
-  /** Qty already realized via scale-outs. */
   scaledOutQty: number;
-  /** Max adverse excursion in R units (positive number, adverse direction). */
   maeR: number;
-  /** Max favorable excursion in R units. */
   mfeR: number;
 }
 
@@ -75,17 +62,22 @@ export interface ExitDecision {
   runtime: ExitRuntime;
 }
 
+/**
+ * Growth-first profile: bank only a third early, let the bulk run under a
+ * wide Chandelier trail. Short-term full take-profits at +1R are intentionally
+ * avoided — compound equity needs runners more than clipped scalps.
+ */
 export const DEFAULT_EXIT_PROFILE = {
   breakevenTriggerR: 1.0,
-  breakevenBufferR: 0.15,
-  scaleOut1AtR: 1.5,
-  scaleOut1Fraction: 0.5,
-  scaleOut2AtR: 2.5,
-  scaleOut2Fraction: 0.25,
-  runnerTrailAtrMult: 2.5,
-  volSpikeTrailAtrMult: 1.2,
-  timeStopMinutes: 240,
-  staleFailsafeMinutes: 10,
+  breakevenBufferR: 0.2,
+  scaleOut1AtR: 2.0,
+  scaleOut1Fraction: 0.33,
+  scaleOut2AtR: 3.5,
+  scaleOut2Fraction: 0.33,
+  runnerTrailAtrMult: 3.0,
+  volSpikeTrailAtrMult: 1.6,
+  timeStopMinutes: 480,
+  staleFailsafeMinutes: 15,
 } as const;
 
 export type ExitProfile = Partial<typeof DEFAULT_EXIT_PROFILE>;
@@ -123,16 +115,10 @@ export function initExitRuntime(
   };
 }
 
-/** Qty still open after scale-outs. */
 export function remainingQty(runtime: ExitRuntime): number {
   return Math.max(0, runtime.originalQty - runtime.scaledOutQty);
 }
 
-/**
- * One exit evaluation per position per tick. Returns the next action to
- * apply plus the updated runtime. Never invents prices: on a stale mark the
- * decision is HOLD (freeze) until a fresh mark arrives.
- */
 export function evaluateExit(
   side: ExitSide,
   entryPrice: number,
@@ -147,7 +133,6 @@ export function evaluateExit(
     return { action: { kind: "HOLD" }, state: rt.state, runtime: rt };
   }
 
-  // Stale failsafe (I2): freeze on stale marks — no drift, no invented stops.
   if (opts.now - opts.lastFreshMarkAt > plan.staleFailsafeMinutes * 60_000) {
     return { action: { kind: "HOLD" }, state: rt.state, runtime: rt };
   }
@@ -158,7 +143,6 @@ export function evaluateExit(
   rt.mfeR = Math.max(rt.mfeR, r);
   rt.maeR = Math.max(rt.maeR, -r);
 
-  // Stop hit — stopPrice may already be at breakeven or the Chandelier trail.
   const stopHit = dir === 1 ? mark <= rt.stopPrice : mark >= rt.stopPrice;
   if (stopHit) {
     const label =
@@ -171,7 +155,6 @@ export function evaluateExit(
     };
   }
 
-  // Time stop: capital parked below +0.5R longer than the hold budget.
   if (
     plan.timeStopMinutes !== null &&
     opts.now - rt.openedAt >= plan.timeStopMinutes * 60_000 &&
@@ -186,7 +169,6 @@ export function evaluateExit(
     };
   }
 
-  // Breakeven: the invariant's heart — at +1R the stop moves above entry.
   if (rt.state === "ARMING" && r >= plan.breakevenTriggerR) {
     rt.state = "BREAKEVEN";
     const newStop = entryPrice + dir * plan.breakevenBufferR * plan.riskPerUnit;
@@ -203,7 +185,6 @@ export function evaluateExit(
     };
   }
 
-  // Scale-out 1: bank half at +1.5R; freed stake returns to the flow pool.
   if (rt.state === "BREAKEVEN" && r >= plan.scaleOut1AtR) {
     rt.state = "SCALED_1";
     rt.scaledOutQty += plan.scaleOut1Fraction * rt.originalQty;
@@ -218,7 +199,6 @@ export function evaluateExit(
     };
   }
 
-  // Scale-out 2: another quarter at +2.5R.
   if (rt.state === "SCALED_1" && r >= plan.scaleOut2AtR) {
     rt.state = "SCALED_2";
     rt.scaledOutQty += plan.scaleOut2Fraction * rt.originalQty;
@@ -233,7 +213,6 @@ export function evaluateExit(
     };
   }
 
-  // Runner: Chandelier trail from the best mark, tightening on vol spikes.
   if (rt.state === "SCALED_2" || rt.state === "RUNNER") {
     rt.state = "RUNNER";
     const volSpiked = opts.currentAtr !== undefined && opts.currentAtr >= 2 * rt.atrAtEntry;
@@ -261,11 +240,6 @@ export function evaluateExit(
   return { action: { kind: "HOLD" }, state: rt.state, runtime: rt };
 }
 
-/**
- * Blended expectancy of the ladder for sanity checks and future sweeps.
- * Example: 40% winners averaging +1.9R blended, 60% losers at −0.85R
- * (breakeven saves some stops) → positive expectancy.
- */
 export function ladderExpectancy(
   winRate: number,
   avgWinnerR: number,
