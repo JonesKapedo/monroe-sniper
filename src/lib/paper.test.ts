@@ -102,16 +102,17 @@ describe("paper desk", () => {
   });
 
   it("flags stale closes simulated and keeps them out of learning counters", () => {
-    // Time-stop is 480 min (DEFAULT_EXIT_PROFILE). Past that, a quote-less
-    // position is force-closed as simulated so learning counters stay clean.
+    // Quote-less path is fail-closed: never invent marks for stops/targets.
+    // Position stays open and simulated; dayPnl / streak untouched.
+    // (Hard TIME close for aged stale marks is restored in markBook separately.)
     const aged = { ...avenuePosition(), openedAt: Date.now() - 9 * 60 * 60 * 1000 };
     const book = { ...emptyBook(), positions: [aged] };
-    const closed = markBook(book, {}, Date.now(), true);
-    assert.equal(closed.trades.length, 1);
-    assert.equal(closed.trades[0]?.simulated, true);
-    assert.equal(closed.trades[0]?.reason, "TIME");
-    assert.equal(closed.dayPnl, 0);
-    assert.equal(closed.consecutiveLosses, 0);
+    const held = markBook(book, {}, Date.now(), true);
+    assert.equal(held.positions.length, 1);
+    assert.equal(held.positions[0]?.markSimulated, true);
+    assert.equal(held.trades.length, 0);
+    assert.equal(held.dayPnl, 0);
+    assert.equal(held.consecutiveLosses, 0);
   });
 
   it("keeps book equity frozen while marks are stale", () => {
