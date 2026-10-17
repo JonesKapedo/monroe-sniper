@@ -34,46 +34,46 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     name: "micro",
     minBalance: 0,
     maxBalance: 50,
-    maxRiskPerTrade: 0.005,      // 0.5%
-    maxPositions: 1,
-    maxPortfolioExposure: 0.20,  // 20% — $10 max on a $50 book
-    stopLossPct: 0.08,           // 8% fixed
+    maxRiskPerTrade: 0.01,
+    maxPositions: 3,
+    maxPortfolioExposure: 0.45,
+    stopLossPct: 0.08,
     stopLossType: "fixed",
     atrMultiplier: 2.5,
     leverageCap: 1,
-    minNotional: 5,
+    minNotional: 1.5,
     compoundingAllowed: true,
-    description: "Guarded growth - single position, max 20% staked ($10 on $50), wide stops, spot only",
+    description: "Micro multi-slot: up to 3 tickets, 45% staked max — never all-in one trade",
   },
   seed: {
     name: "seed",
     minBalance: 50,
     maxBalance: 100,
-    maxRiskPerTrade: 0.0075,     // 0.75%
-    maxPositions: 1,
-    maxPortfolioExposure: 0.25,  // 25%
-    stopLossPct: 0.06,           // 6% ATR-based
+    maxRiskPerTrade: 0.012,
+    maxPositions: 3,
+    maxPortfolioExposure: 0.40,
+    stopLossPct: 0.06,
     stopLossType: "atr",
     atrMultiplier: 2.0,
     leverageCap: 1,
-    minNotional: 10,
+    minNotional: 3,
     compoundingAllowed: true,
-    description: "Early compounding - ATR stops, single focused position",
+    description: "Seed multi-slot: 3 positions, 40% exposure, ATR stops",
   },
   growth: {
     name: "growth",
     minBalance: 100,
     maxBalance: 250,
-    maxRiskPerTrade: 0.01,       // 1.0%
-    maxPositions: 2,
-    maxPortfolioExposure: 0.30,  // 30%
-    stopLossPct: 0.05,           // 5% ATR
+    maxRiskPerTrade: 0.0125,
+    maxPositions: 3,
+    maxPortfolioExposure: 0.40,
+    stopLossPct: 0.05,
     stopLossType: "atr",
     atrMultiplier: 1.8,
     leverageCap: 1,
-    minNotional: 15,
+    minNotional: 8,
     compoundingAllowed: true,
-    description: "Dual-position scaling - diversification begins",
+    description: "Growth multi-slot: 3 positions, 40% exposure",
   },
   scale: {
     name: "scale",
@@ -95,13 +95,13 @@ export const TIER_CONFIGS: Record<TierName, TierConfig> = {
     minBalance: 500,
     maxBalance: 1000,
     maxRiskPerTrade: 0.015,      // 1.5%
-    maxPositions: 3,
-    maxPortfolioExposure: 0.45,  // 45%
+    maxPositions: 4,
+    maxPortfolioExposure: 0.50,  // 50%
     stopLossPct: 0.035,          // 3.5% ATR
     stopLossType: "atr",
     atrMultiplier: 1.4,
     leverageCap: 2,
-    minNotional: 50,
+    minNotional: 25,
     compoundingAllowed: true,
     description: "Leverage unlock - 2x cap, 3 positions, 45% exposure",
   },
@@ -409,15 +409,17 @@ export function applyStakeBudget(input: StakeBudgetInput): StakeBudgetResult {
   // after a REDUCE_RISK the desk halves tickets, and an unscaled floor would
   // reject every shrunk ticket forever — REDUCE_RISK must shrink entries,
   // never deadlock them. Full-guard (riskNotional >= floor) keeps the floor.
+  const absTicketFloor = equity < 30 ? 1 : equity < 100 ? 2 : 5;
   const baseFloor = Math.max(
-    5,
+    absTicketFloor,
     Math.round(Math.min(tier.minNotional, riskNotional) * 100) / 100,
   );
   // I1 flow reserve: adapt the floor so 3 consecutive tickets stay admissible.
   let floor = baseFloor;
   let flowReserve = false;
   if (remaining > 0 && remaining < baseFloor * FLOW_RESERVE_TICKETS) {
-    const flowFloor = Math.max(5, Math.round((remaining / FLOW_RESERVE_TICKETS) * 100) / 100);
+    const absFloor = equity < 30 ? 1 : equity < 100 ? 2 : 5;
+    const flowFloor = Math.max(absFloor, Math.round((remaining / FLOW_RESERVE_TICKETS) * 100) / 100);
     if (flowFloor < baseFloor) {
       floor = flowFloor;
       flowReserve = true;

@@ -1260,7 +1260,11 @@ export const useDesk = create<DeskState>()(
           }
         }
         const guardRisk = guardResult.newState.riskMultiplier ?? 1;
-        if (currentBook.positions.length >= s.riskSettings.maxPositions) return;
+        const cycleMaxSlots = Math.max(
+          s.riskSettings.maxPositions,
+          s.tierConfig?.maxPositions ?? 1,
+        );
+        if (currentBook.positions.length >= cycleMaxSlots) return;
         const isTurbo = s.selectedModel.id === "[degen]";
         const profileFloor = s.selectedModel.minScore ?? 48;
         const scoreFloor = isTurbo
@@ -1411,18 +1415,22 @@ export const useDesk = create<DeskState>()(
                 turboEntries: s.turboEntries + (isTurbo ? 1 : 0),
               });
               telegramAlert(`Monroe paper entry\n${noteLine}`);
-              // Turbo takes a tape trade too when slots remain; otherwise one entry per cycle.
-              if (!isTurbo) return;
+              // Continue into tape when slots remain.
             }
           }
           }
         }
 
-        // 2. Otherwise pick from market tape (pausable from Bot interoperability).
+        // 2. Market tape — fill up to remaining slots this cycle.
         if (s.entrySources.tape) {
+          for (let tapeAttempt = 0; tapeAttempt < 3; tapeAttempt++) {
           const live = useDesk.getState();
           const tapeBook = live[live.mode];
-          if (tapeBook.positions.length >= live.riskSettings.maxPositions) return;
+          const tapeMaxSlots = Math.max(
+            live.riskSettings.maxPositions,
+            live.tierConfig?.maxPositions ?? 1,
+          );
+          if (tapeBook.positions.length >= tapeMaxSlots) break;
           const turboNow = live.riskSettings.sizingProfile === "TURBO";
           const profileFloorNow = live.selectedModel.minScore ?? 48;
           const floorNow = turboNow
@@ -1431,7 +1439,7 @@ export const useDesk = create<DeskState>()(
           const pick = chooseEntry(tapeBook, live.tape, floorNow, Date.now(), (id) =>
             securityVerdictOf(live.security, id),
           );
-          if (!pick || fibBlocked(pick.symbol) || isHalted(pick.symbol, live.eventHalts)) return;
+          if (!pick || fibBlocked(pick.symbol) || isHalted(pick.symbol, live.eventHalts)) break;
 
           // Run through the quantitative risk engine
           const verdict = evaluateRiskAndSize(
@@ -1444,7 +1452,7 @@ export const useDesk = create<DeskState>()(
             live.selectedModel.id,
           );
 
-          if (!verdict.allowed || verdict.notional <= 0) return;
+          if (!verdict.allowed || verdict.notional <= 0) break;
 
           // Final stake guard: portfolio budget split by this position's target.
           const tapeStake = clampToStakeBudget(
@@ -1457,10 +1465,9 @@ export const useDesk = create<DeskState>()(
             useDesk.setState((prev) => ({
               log: pushLog(prev.log, `Stake guard blocked ${pick.symbol}: ${tapeStake.reason}`),
             }));
-            return;
+            break;
           }
 
-          // Execute with risk-engine volatility-adjusted sizing and brackets
           const result = enter(tapeBook, pick, Date.now(), floorNow, {
             notional: tapeStake.notional,
             stop: verdict.stopPrice,
@@ -1468,7 +1475,7 @@ export const useDesk = create<DeskState>()(
             priceSource: `tape:${pick.id}`,
           });
 
-          if (!result.ok) return;
+          if (!result.ok) break;
 
         const venueName = venueFor(pick);
         const hashStr = pick.chain === "solana" ? makeSolHash() : makeHash();
@@ -1506,6 +1513,7 @@ export const useDesk = create<DeskState>()(
           turboEntries: fresh.turboEntries + (turboNow ? 1 : 0),
         });
         telegramAlert(`Monroe paper entry\n${noteLine}`);
+          } // end tapeAttempt
         }
       },
 

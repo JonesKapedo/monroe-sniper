@@ -50,7 +50,7 @@ export const defaultRiskSettings: RiskEngineSettings = {
   minLiquidity: 10_000,
   minTicket: 15.0,
   maxSlippageBps: 40,
-  maxPerChain: 2,
+  maxPerChain: 3,
   useTrailingStop: true,
   dynamicCompounding: true,
   blockStablecoins: true,
