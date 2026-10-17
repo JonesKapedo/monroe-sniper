@@ -80,10 +80,15 @@ describe("I1 — Flow Guarantee: ≥3 consecutive entries admissible", () => {
     }
   });
 
-  it("blocks only with an explicit capital reason at $50 micro — never silently", () => {
+  it("admits 3 equal-split micro tickets at $50 (budget/maxPositions) — never silently blocks", () => {
+    // Equal-split: locked budget / maxPositions keeps 3 concurrent tickets admissible
+    // on a $50 micro book instead of one ticket absorbing the stake budget.
     const { admitted, lastBlockedReason } = simulateThreeTickets(50, 1);
-    assert.ok(admitted < 3);
-    assert.match(lastBlockedReason, /minimum ticket|budget exhausted/);
+    assert.equal(
+      admitted,
+      3,
+      `expected 3 equal-split tickets, got ${admitted} (${lastBlockedReason || "ok"})`,
+    );
   });
 
   it("halved guard never yields a bigger ticket than full guard", () => {
@@ -117,33 +122,36 @@ describe("I2 — Exit Integrity: no winner round-trips to a stop", () => {
     assert.ok(d.runtime.stopPrice >= entry, "post-+1R stop may never be below entry");
   });
 
-  it("banks 50% at +1.5R (scale-out 1) then 25% at +2.5R (scale-out 2)", () => {
+  it("banks 33% at +2R (scale-out 1) then 33% at +3.5R (scale-out 2) — growth ladder", () => {
+    // DEFAULT_EXIT_PROFILE: scaleOut1AtR=2.0 / 0.33, scaleOut2AtR=3.5 / 0.33
     let rt = initExitRuntime(entry, plan, 10, 1.5, Date.now());
     const now = Date.now();
-    // +1R first (arms breakeven)…
+    // +1R first (arms breakeven)… risk=2 → mark 102
     rt = evaluateExit("LONG", entry, 102, plan, rt, { now, lastFreshMarkAt: now }).runtime;
-    // …then +1.5R → scale-out 1
-    let d = evaluateExit("LONG", entry, 103, plan, rt, { now, lastFreshMarkAt: now });
+    // …then +2R → scale-out 1 (mark 104)
+    let d = evaluateExit("LONG", entry, 104, plan, rt, { now, lastFreshMarkAt: now });
     assert.equal(d.action.kind, "SCALE_OUT");
-    assert.equal((d.action as { fractionOfOriginal: number }).fractionOfOriginal, 0.5);
-    assert.equal(d.runtime.scaledOutQty, 5);
-    // …then +2.5R (risk 2 → mark 105) → scale-out 2
-    d = evaluateExit("LONG", entry, 105, plan, d.runtime, { now, lastFreshMarkAt: now });
+    assert.equal((d.action as { fractionOfOriginal: number }).fractionOfOriginal, 0.33);
+    assert.ok(Math.abs(d.runtime.scaledOutQty - 3.3) < 1e-9);
+    // …then +3.5R (mark 107) → scale-out 2
+    d = evaluateExit("LONG", entry, 107, plan, d.runtime, { now, lastFreshMarkAt: now });
     assert.equal(d.action.kind, "SCALE_OUT");
-    assert.equal((d.action as { fractionOfOriginal: number }).fractionOfOriginal, 0.25);
-    assert.equal(d.runtime.scaledOutQty, 7.5);
+    assert.equal((d.action as { fractionOfOriginal: number }).fractionOfOriginal, 0.33);
+    assert.ok(Math.abs(d.runtime.scaledOutQty - 6.6) < 1e-9);
   });
 
   it("trails the runner (Chandelier) and only ever tightens", () => {
+    // Growth ladder: BE @ +1R, SO1 @ +2R, SO2 @ +3.5R, then 3×ATR trail on runner
     let rt = initExitRuntime(entry, plan, 10, 1.5, Date.now());
     const now = Date.now();
-    rt = evaluateExit("LONG", entry, 102, plan, rt, { now, lastFreshMarkAt: now }).runtime; // breakeven
-    rt = evaluateExit("LONG", entry, 103, plan, rt, { now, lastFreshMarkAt: now }).runtime; // scaled 1
-    rt = evaluateExit("LONG", entry, 105, plan, rt, { now, lastFreshMarkAt: now }).runtime; // scaled 2
-    // Runner stretches to 108, then the Chandelier trail should sit below the best mark.
-    const d = evaluateExit("LONG", entry, 108, plan, rt, { now, lastFreshMarkAt: now });
-    assert.ok(d.runtime.stopPrice > rt.stopPrice, "trail must only tighten upward for a LONG");
-    assert.ok(d.runtime.stopPrice < 108, "Chandelier trail sits below the best mark");
+    rt = evaluateExit("LONG", entry, 102, plan, rt, { now, lastFreshMarkAt: now }).runtime; // +1R BE
+    rt = evaluateExit("LONG", entry, 104, plan, rt, { now, lastFreshMarkAt: now }).runtime; // +2R SO1
+    rt = evaluateExit("LONG", entry, 107, plan, rt, { now, lastFreshMarkAt: now }).runtime; // +3.5R SO2
+    // Runner stretches higher; 3×ATR trail from best mark only tightens.
+    const priorStop = rt.stopPrice;
+    const d = evaluateExit("LONG", entry, 112, plan, rt, { now, lastFreshMarkAt: now });
+    assert.ok(d.runtime.stopPrice > priorStop, "trail must only tighten upward for a LONG");
+    assert.ok(d.runtime.stopPrice < 112, "Chandelier trail sits below the best mark");
     assert.equal(d.state, "RUNNER");
   });
 
