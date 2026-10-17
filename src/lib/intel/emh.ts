@@ -75,8 +75,9 @@ export function assessEdge(input: EdgeInput): Edge {
   // unpublished, pairs are never "fresh"), so the screen is purely momentum.
   // A major printing a real move is tradeable regardless of pool metrics.
   if (depthUnknown) {
-    const moving = Math.abs(change) >= 1.2 && input.score >= 52;
-    if (moving) {
+    const moving = Math.abs(change) >= 0.55 && input.score >= 48;
+    const solid = input.score >= 58 && Math.abs(change) >= 0.25;
+    if (moving || solid) {
       return {
         act: true,
         edge: Math.min(100, edge),
@@ -92,9 +93,9 @@ export function assessEdge(input: EdgeInput): Edge {
     };
   }
 
-  const quiet = Math.abs(change) < 0.45;
+  const quiet = Math.abs(change) < 0.35;
   const mature = age == null || age > 48;
-  if (quiet && mature && input.score < 78) {
+  if (quiet && mature && input.score < 58) {
     return {
       act: false,
       edge: Math.max(0, edge),
@@ -103,8 +104,8 @@ export function assessEdge(input: EdgeInput): Edge {
     };
   }
 
-  const young = age != null && age >= 0 && age < 8;
-  if (young && input.score >= 68 && input.liquidityUsd >= 20_000 && change > -3) {
+  const young = age != null && age >= 0 && age < 12;
+  if (young && input.score >= 55 && input.liquidityUsd >= 12_000 && change > -5) {
     return {
       act: true,
       edge: Math.min(100, edge + 8),
@@ -114,8 +115,8 @@ export function assessEdge(input: EdgeInput): Edge {
   }
 
   const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidityUsd : 0;
-  const trending = change >= 1.2 && participation >= 0.08 && input.score >= 62;
-  const strongBook = input.score >= 80 && change > 0;
+  const trending = change >= 0.7 && participation >= 0.05 && input.score >= 52;
+  const strongBook = input.score >= 68 && change > -0.5;
   if (trending || strongBook) {
     return {
       act: true,
