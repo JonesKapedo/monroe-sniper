@@ -38,6 +38,7 @@ import { cn } from "@/lib/cn";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 import { useMascot } from "@/lib/mascot";
 import { EquityDashboard } from "@/components/equity-dashboard";
+import { AvenuesTable } from "@/components/avenues-table";
 
 const money = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -792,7 +793,6 @@ export function Desk() {
             );
           })}
         </div>
-      </div>
 
 
       <AvenuesTable
