@@ -76,6 +76,11 @@ import type { PerpFunding } from "./perps/hyperliquid";
 import { useDyorStore } from "./dyor/store";
 import { playHawkCry, playSoftChirp } from "./sound";
 import { assessEdge } from "./intel/emh";
+import {
+  type TradingLedger,
+  createPaperAccount,
+  syncLedgerFromBook,
+} from "./trading/ledger";
 
 export type Mode = "demo" | "live";
 export type DbSource = "neon" | "pglite" | "unknown";
@@ -146,6 +151,7 @@ type DeskState = {
   log: string[];
   executions: TapeExecution[];
   walletHistory: WalletTx[];
+  tradingLedger: TradingLedger;
   riskSettings: RiskEngineSettings;
   disciplineRules: DisciplineRules;
   tradeLearningDbCount: number;
@@ -352,6 +358,14 @@ function positionPriceSource(p: { priceSource?: string; tokenId: string }): stri
  * ALL open positions never exceeds the tier budget, splitting the remaining
  * budget proportionally to this position's target.
  */
+function touchLedgerFromBook(
+  ledger: TradingLedger,
+  book: Book,
+  engine: "desk" | "scanner" | "manual" | "system" = "desk",
+): TradingLedger {
+  return syncLedgerFromBook(book, ledger, Date.now(), engine);
+}
+
 function clampToStakeBudget(
   tier: TierConfig,
   book: Book,
@@ -467,9 +481,8 @@ function absorb(
   let mem = memory;
   const newTrades = next.trades.filter((trade) => !priorIds.has(trade.id));
   for (const trade of newTrades) {
-    // Stale-mark closes and operator MANUAL flattens carry no edge signal.
     if (trade.simulated || trade.reason === "MANUAL") continue;
-    mem = learn(mem, trade.pnl);
+    mem = learn(mem, trade.pnl, trade.lesson);
   }
   return { book: next, memory: mem, newTrades };
 }
@@ -578,12 +591,14 @@ export const useDesk = create<DeskState>()(
       power: false,
       mode: "demo",
       demo: emptyBook(DEMO_START),
+          tradingLedger: createPaperAccount(DEMO_START),
       live: emptyBook(0),
       memory: emptyMemory(),
       tape: [],
       note: `Paper trading sandbox active ($${DEMO_START}). Arm power to auto-snipe.`,
       log: [`System initialized. Demo balance: $${DEMO_START}.00`, "Risk engine active: Volatility-adjusted ATR sizing"],
       executions: [],
+      tradingLedger: createPaperAccount(DEMO_START),
       riskSettings: defaultRiskSettings,
       disciplineRules: defaultDisciplineRules,
       tradeLearningDbCount: 0,
@@ -1177,7 +1192,12 @@ export const useDesk = create<DeskState>()(
           }
           const isProfit = trade.pnl > 0;
           const verb =
-            trade.reason === "TARGET" ? "TAKE PROFIT" : trade.reason === "STOP" ? "STOP LOSS" : "CLOSED";
+            trade.reason === "TARGET" ? "SCALE / RUNNER"
+              : trade.reason === "STOP" ? "STOP LOSS"
+              : trade.reason === "BREAKEVEN" ? "BREAKEVEN EXIT" : "CLOSED";
+          if (trade.lesson?.summary) {
+            nextLog = pushLog(nextLog, `Lesson · ${trade.symbol}: ${trade.lesson.summary}`);
+          }
           const noteLine = `${verb}: ${trade.symbol} ${isProfit ? "+" : ""}$${trade.pnl.toFixed(2)} (${trade.reason})`;
           nextLog = pushLog(nextLog, noteLine);
 
@@ -1399,6 +1419,7 @@ export const useDesk = create<DeskState>()(
 
               set({
                 [targetKey]: result.book,
+          tradingLedger: touchLedgerFromBook(get().tradingLedger, result.book, "desk"),
                 note: noteLine,
                 log: pushLog(s.log, noteLine),
                 executions: [exec, ...s.executions].slice(0, 100),
@@ -1511,6 +1532,7 @@ export const useDesk = create<DeskState>()(
         const fresh = useDesk.getState();
         set({
           [targetKey]: result.book,
+          tradingLedger: touchLedgerFromBook(get().tradingLedger, result.book, "desk"),
           note: noteLine,
           log: pushLog(fresh.log, noteLine),
           executions: [exec, ...fresh.executions].slice(0, 100),
@@ -1598,6 +1620,7 @@ export const useDesk = create<DeskState>()(
         const note = `Filled ${c.symbol} $${notional.toFixed(2)} [${s.mode.toUpperCase()}]`;
         set({
           [targetKey]: result.book,
+          tradingLedger: touchLedgerFromBook(get().tradingLedger, result.book, "desk"),
           note,
           log: pushLog(s.log, note),
           executions: [exec, ...s.executions].slice(0, 100),
@@ -1729,6 +1752,7 @@ export const useDesk = create<DeskState>()(
       resetDemo: () =>
         set((s) => ({
           demo: emptyBook(DEMO_START),
+          tradingLedger: createPaperAccount(DEMO_START),
           ...reanchorBaselines(s.profitLockState, s.equityGuardState, DEMO_START),
           currentTier: detectTier(DEMO_START, "scale"),
           tierConfig: TIER_CONFIGS[detectTier(DEMO_START, "scale")],
@@ -2009,6 +2033,7 @@ export const useDesk = create<DeskState>()(
         memory: s.memory,
         log: s.log,
         walletHistory: s.walletHistory,
+        tradingLedger: s.tradingLedger,
         riskSettings: s.riskSettings,
         disciplineRules: s.disciplineRules,
         tradeLearningDbCount: s.tradeLearningDbCount,
@@ -2046,6 +2071,9 @@ export const useDesk = create<DeskState>()(
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.mode = "demo";
+          if (!state.tradingLedger) {
+            state.tradingLedger = createPaperAccount(state.demo?.cash ?? DEMO_START);
+          }
           // Never disarm on refresh: the persisted power switch is the
           // owner's intent. The loop in Frame resumes auto-stepping.
           if (typeof state.power !== "boolean") state.power = false;
