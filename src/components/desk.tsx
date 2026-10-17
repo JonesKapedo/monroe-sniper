@@ -87,6 +87,7 @@ export function Desk() {
   const profitLockState = useDesk((s) => s.profitLockState);
   const currentTier = useDesk((s) => s.currentTier);
   const getReadiness = useDesk((s) => s.getReadiness);
+  const riskSettings = useDesk((s) => s.riskSettings);
   const readiness = getReadiness ? getReadiness() : null;
 
   const [query, setQuery] = useState("");
@@ -517,363 +518,6 @@ export function Desk() {
         </div>
       )}
 
-      {/* Universal Money-Making Avenues & Capital Discipline Hub */}
-      <div className="flex flex-col gap-3 rounded-xl border border-line bg-panel p-4 md:p-5">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <Sparkles className="size-4 text-brass" />
-              <h2 className="text-lg font-bold text-cream">Live Funding Avenues</h2>
-              <span className="rounded bg-brass/10 px-2 py-0.5 text-xs font-semibold text-brass">
-                Live Hyperliquid funding only
-              </span>
-            </div>
-            <p className="mt-0.5 text-xs text-faint">
-              Perps funding setups confirmed by the live feed this cycle. Nothing is shown without live verification.
-            </p>
-          </div>
-
-          {/* Capital Discipline Guards */}
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-            <span className="flex items-center gap-1 rounded border border-loss/30 bg-loss/10 px-2 py-0.5 font-medium text-loss">
-              <ShieldAlert className="size-3" /> Max Loss: -3.0% Circuit Breaker
-            </span>
-            <span className="flex items-center gap-1 rounded border border-gain/30 bg-gain/10 px-2 py-0.5 font-medium text-gain">
-              <Scale className="size-3" /> Min R:R ≥ 2.5:1 Floor
-            </span>
-            <span className="flex items-center gap-1 rounded border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 font-medium text-purple-300">
-              <TrendingUp className="size-3" /> Dynamic Trailing Stops
-            </span>
-          </div>
-        </div>
-
-        {/* Avenue Tabs */}
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-line/60 pb-3">
-          <button
-            type="button"
-            onClick={() => setAvenueFilter("ALL")}
-            className={cn(
-              "rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors",
-              avenueFilter === "ALL" ? "bg-brass text-ink" : "bg-panel-2 text-faint hover:text-cream",
-            )}
-          >
-            All Avenues ({avenues.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setAvenueFilter("PERPS")}
-            className={cn(
-              "flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors",
-              avenueFilter === "PERPS" ? "bg-brass text-ink" : "bg-panel-2 text-faint hover:text-cream",
-            )}
-          >
-            <Zap className="size-3" /> Perps & Funding ({avenues.filter((a) => a.category === "PERPS").length})
-          </button>
-        </div>
-
-        {/* Avenue Cards Grid */}
-        {avenues.filter((a) => (avenueFilter === "ALL" ? true : a.category === avenueFilter)).length === 0 ? (
-          <p className="rounded-lg border border-dashed border-line p-4 text-center text-xs text-faint">
-            No live-verified avenues this cycle — the funding feed is quiet or unreachable. Tape sniping continues below.
-          </p>
-        ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {avenues
-            .filter((a) => (avenueFilter === "ALL" ? true : a.category === avenueFilter))
-            .map((opp) => {
-              const isHeld = book.positions.some((p) => p.tokenId === opp.id);
-              return (
-                <div
-                  key={opp.id}
-                  className={cn(
-                    "flex flex-col justify-between rounded-xl border p-3.5 transition-all",
-                    isHeld
-                      ? "border-gain/60 bg-gain/5"
-                      : "border-line bg-panel-2 hover:border-line/80",
-                  )}
-                >
-                  <div>
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-bold text-cream">{opp.symbol}</span>
-                          <span
-                            className={cn(
-                              "rounded px-1.5 py-0.5 text-[9px] font-bold uppercase",
-                              opp.category === "PERPS" && "bg-amber-500/20 text-amber-300",
-                              opp.category === "ARBITRAGE" && "bg-cyan-500/20 text-cyan-300",
-                              opp.category === "EARLY_IPO" && "bg-pink-500/20 text-pink-300",
-                              opp.category === "YIELD_BASIS" && "bg-emerald-500/20 text-emerald-300",
-                            )}
-                          >
-                            {opp.category}
-                          </span>
-                          <span className="text-[10px] text-faint">({opp.chain})</span>
-                          <span
-                            className={cn(
-                              "rounded px-1.5 py-0.5 text-[9px] font-bold uppercase",
-                              opp.liveData
-                                ? "bg-gain/20 text-gain"
-                                : "bg-panel-2 text-faint",
-                            )}
-                            title={opp.liveData ? "Live Hyperliquid funding" : "Awaiting live verification"}
-                          >
-                            {opp.liveData ? "Live" : "Unverified"}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-xs font-medium text-cream">{opp.title}</p>
-                      </div>
-                      <div className="text-right">
-                        <span className="font-mono text-sm font-bold text-cream">
-                          {px(opp.priceA)}
-                        </span>
-                        <p className="text-[10px] text-faint">
-                          {opp.venueB ? `${opp.venueA} ↔ ${opp.venueB}` : opp.venueA}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Specific Avenue Metrics */}
-                    <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-line/50 bg-panel p-2 text-[11px]">
-                      {opp.category === "PERPS" && (
-                        <>
-                          <div>
-                            <span className="text-faint">Funding Rate:</span>
-                            <p className="font-mono font-semibold text-gain">
-                              {opp.fundingRate8h ? `+${(opp.fundingRate8h * 100).toFixed(3)}%/8h` : "—"}
-                            </p>
-                          </div>
-                          <div>
-                            <span className="text-faint">Annualized Yield:</span>
-                            <p className="font-mono font-semibold text-brass">
-                              {opp.fundingApr ? `${opp.fundingApr}% APR` : "—"}
-                            </p>
-                          </div>
-                        </>
-                      )}
-
-                      {opp.category === "ARBITRAGE" && (
-                        <>
-                          <div>
-                            <span className="text-faint">Gross Spread:</span>
-                            <p className="font-mono font-semibold text-gain">
-                              +{opp.grossSpreadPct}%
-                            </p>
-                          </div>
-                          <div>
-                            <span className="text-faint">Net Profit (Post-Gas):</span>
-                            <p className="font-mono font-semibold text-emerald-400">
-                              +${opp.netProfitUsd?.toFixed(2)}
-                            </p>
-                          </div>
-                        </>
-                      )}
-
-                      {opp.category === "EARLY_IPO" && (
-                        <>
-                          <div>
-                            <span className="text-faint">Liquidity Lock:</span>
-                            <p className="font-mono font-semibold text-cream">
-                              {opp.liquidityLockDays} Days Locked
-                            </p>
-                          </div>
-                          <div>
-                            <span className="text-faint">Anti-Rug Score:</span>
-                            <p className="font-mono font-semibold text-emerald-400">
-                              {opp.rugScore}/100 Safe
-                            </p>
-                          </div>
-                        </>
-                      )}
-
-                      {opp.category === "YIELD_BASIS" && (
-                        <>
-                          <div>
-                            <span className="text-faint">Peg Stability:</span>
-                            <p className="font-mono font-semibold text-gain">99.98% Pegged</p>
-                          </div>
-                          <div>
-                            <span className="text-faint">Expected APY:</span>
-                            <p className="font-mono font-semibold text-brass">
-                              {opp.expectedApy}% APY
-                            </p>
-                          </div>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Risk & Discipline Parameters */}
-                    <div className="mt-2.5 flex items-center justify-between text-[11px] text-faint">
-                      <span>R:R Multiple: <strong className="text-brass">{opp.riskRewardRatio}R</strong></span>
-                      <span>Stop: <strong className="text-loss">{px(opp.stopLossPrice)} (-{(opp.stopLossPct * 100).toFixed(1)}%)</strong></span>
-                      <span>Target: <strong className="text-gain">{px(opp.targetPrice)}</strong></span>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2.5">
-                    <span className="text-[10px] text-faint">
-                      Confidence: <strong className="text-cream">{opp.confidenceScore}%</strong>
-                    </span>
-                    <button
-                      type="button"
-                      disabled={isHeld || book.positions.length >= 3}
-                      onClick={() => snipeAvenue(opp)}
-                      className={cn(
-                        "rounded-lg px-3 py-1 text-xs font-semibold transition-colors",
-                        isHeld
-                          ? "cursor-default text-gain"
-                          : "bg-brass text-ink hover:bg-brass/90 shadow-sm",
-                      )}
-                    >
-                      {isHeld ? "Held" : "Simulate Snipe"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-        </div>
-        )}
-      </div>
-
-      {/* Global Opportunities Scanner / Ticker Strip */}
-      <div className="flex flex-col gap-2">
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <Globe2 className="size-4 text-brass" />
-            <h2 className="min-w-0 text-sm font-semibold tracking-wider text-faint uppercase">
-              Global Market Intelligence ({tape.length} pairs live)
-            </h2>
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <div className="flex rounded-lg border border-line bg-panel p-0.5 text-xs">
-              <button
-                type="button"
-                onClick={() => setFilterVenue("all")}
-                className={cn(
-                  "rounded px-2 py-0.5 font-medium",
-                  filterVenue === "all" ? "bg-panel-2 text-cream" : "text-faint",
-                )}
-              >
-                All
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterVenue("binance")}
-                className={cn(
-                  "rounded px-2 py-0.5 font-medium",
-                  filterVenue === "binance" ? "bg-panel-2 text-cream" : "text-faint",
-                )}
-              >
-                Binance CEX
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterVenue("dex")}
-                className={cn(
-                  "rounded px-2 py-0.5 font-medium",
-                  filterVenue === "dex" ? "bg-panel-2 text-cream" : "text-faint",
-                )}
-              >
-                Raydium / DEX
-              </button>
-            </div>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void scan(query);
-              }}
-              className="flex w-full min-w-0 items-center sm:w-auto"
-            >
-              <div className="relative w-full min-w-0 sm:w-auto">
-                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint" />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Filter ticker / address…"
-                  className="h-8 w-full min-w-0 rounded-lg border border-line bg-panel pl-8 pr-3 text-xs text-cream outline-none focus:border-brass sm:w-auto"
-                />
-              </div>
-            </form>
-          </div>
-        </div>
-
-        {/* Horizontal Ticker Ribbon */}
-        <div className="flex w-full min-w-0 max-w-full gap-2.5 overflow-x-auto pb-1.5 scrollbar-thin">
-          {filteredTape.slice(0, 14).map((c) => {
-            const isHeld = book.positions.some((p) => p.tokenId === c.id);
-            const clearsScore = c.score >= memory.minScore;
-            return (
-              <div
-                key={c.id}
-                className={cn(
-                  "flex min-w-[220px] flex-col justify-between rounded-xl border p-3 transition-colors",
-                  isHeld
-                    ? "border-gain/60 bg-gain/5"
-                    : clearsScore
-                      ? "border-brass/40 bg-panel hover:border-brass"
-                      : "border-line bg-panel hover:border-line/80",
-                )}
-              >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-cream">{c.symbol}</span>
-                      <span
-                        className={cn(
-                          "rounded px-1 text-[9px] font-semibold uppercase",
-                          c.venue === "binance"
-                            ? "bg-amber-500/20 text-amber-300"
-                            : "bg-purple-500/20 text-purple-300",
-                        )}
-                      >
-                        {c.venue === "binance" ? "Binance" : c.chain}
-                      </span>
-                    </div>
-                    <p className="num text-xs text-faint">Vol ${Math.round(c.volume24h).toLocaleString()}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="num text-sm font-semibold">{px(c.priceUsd)}</p>
-                    <p
-                      className={cn(
-                        "num text-xs font-medium",
-                        c.change24h >= 0 ? "text-gain" : "text-loss",
-                      )}
-                    >
-                      {c.change24h >= 0 ? "+" : ""}
-                      {c.change24h.toFixed(2)}%
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-2.5 flex items-center justify-between border-t border-line/60 pt-2 text-xs">
-                  <span
-                    className={cn(
-                      "font-mono font-medium",
-                      clearsScore ? "text-brass" : "text-faint",
-                    )}
-                  >
-                    Score: {c.score}/100
-                  </span>
-                  <button
-                    type="button"
-                    disabled={isHeld || book.positions.length >= 3}
-                    onClick={() => manualEnter(c)}
-                    className={cn(
-                      "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
-                      isHeld
-                        ? "cursor-default text-gain"
-                        : "bg-panel-2 text-cream hover:bg-brass hover:text-ink",
-                    )}
-                  >
-                    {isHeld ? "Held" : "Snipe"}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
       {/* Main Grid: Open Positions & Execution Stream */}
       <div className="grid gap-5 lg:grid-cols-3">
         {/* Left Column: Active Positions (2 cols) */}
@@ -881,7 +525,7 @@ export function Desk() {
           <Card className="flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <div>
-                <Label>Active Bot Positions ({book.positions.length}/3)</Label>
+                <Label>Active positions ({book.positions.length})</Label>
                 <p className="text-xs text-faint">
                   Automatic brackets: Trailing Stop Loss @ -8%, Fast Take Profit @ +6%
                 </p>
@@ -1049,23 +693,10 @@ export function Desk() {
           </Card>
 
           {/* Real-time Session Log */}
-          <Card className="flex flex-1 flex-col">
-            <div className="flex items-center justify-between">
-              <Label>Sniper Operational Feed</Label>
-              <span className="text-[10px] text-faint">Live telemetry</span>
-            </div>
-            <div className="mt-3 flex max-h-80 flex-1 flex-col gap-1.5 overflow-y-auto font-mono text-xs text-faint scrollbar-thin">
-              {log.length === 0 ? (
-                <p>Standing by. Telemetry will print here.</p>
-              ) : (
-                log.slice(0, 18).map((line, idx) => (
-                  <div key={`${line}-${idx}`} className="flex items-start gap-1.5 text-[11px]">
-                    <span className="text-brass/70">›</span>
-                    <span className="text-cream/90">{line}</span>
-                  </div>
-                ))
-              )}
-            </div>
+          <Card className="flex flex-col justify-center px-3 py-4">
+            <p className="text-[11px] text-faint">
+              Live telemetry lives in the <span className="text-brass">Feed</span> strip under the top bar -- expand anytime from any page.
+            </p>
           </Card>
 
           {/* Reset Demo / Helper */}
@@ -1085,6 +716,91 @@ export function Desk() {
           )}
         </div>
       </div>
+
+        {/* Horizontal Ticker Ribbon */}
+        <div className="flex w-full min-w-0 max-w-full gap-2.5 overflow-x-auto pb-1.5 scrollbar-thin">
+          {filteredTape.slice(0, 14).map((c) => {
+            const isHeld = book.positions.some((p) => p.tokenId === c.id);
+            const clearsScore = c.score >= memory.minScore;
+            return (
+              <div
+                key={c.id}
+                className={cn(
+                  "flex min-w-[220px] flex-col justify-between rounded-xl border p-3 transition-colors",
+                  isHeld
+                    ? "border-gain/60 bg-gain/5"
+                    : clearsScore
+                      ? "border-brass/40 bg-panel hover:border-brass"
+                      : "border-line bg-panel hover:border-line/80",
+                )}
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-bold text-cream">{c.symbol}</span>
+                      <span
+                        className={cn(
+                          "rounded px-1 text-[9px] font-semibold uppercase",
+                          c.venue === "binance"
+                            ? "bg-amber-500/20 text-amber-300"
+                            : "bg-purple-500/20 text-purple-300",
+                        )}
+                      >
+                        {c.venue === "binance" ? "Binance" : c.chain}
+                      </span>
+                    </div>
+                    <p className="num text-xs text-faint">Vol ${Math.round(c.volume24h).toLocaleString()}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="num text-sm font-semibold">{px(c.priceUsd)}</p>
+                    <p
+                      className={cn(
+                        "num text-xs font-medium",
+                        c.change24h >= 0 ? "text-gain" : "text-loss",
+                      )}
+                    >
+                      {c.change24h >= 0 ? "+" : ""}
+                      {c.change24h.toFixed(2)}%
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-2.5 flex items-center justify-between border-t border-line/60 pt-2 text-xs">
+                  <span
+                    className={cn(
+                      "font-mono font-medium",
+                      clearsScore ? "text-brass" : "text-faint",
+                    )}
+                  >
+                    Score: {c.score}/100
+                  </span>
+                  <button
+                    type="button"
+                    disabled={isHeld || book.positions.length >= 3}
+                    onClick={() => manualEnter(c)}
+                    className={cn(
+                      "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
+                      isHeld
+                        ? "cursor-default text-gain"
+                        : "bg-panel-2 text-cream hover:bg-brass hover:text-ink",
+                    )}
+                  >
+                    {isHeld ? "Held" : "Snipe"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+
+      <AvenuesTable
+        avenues={avenues}
+        book={book}
+        onSnipe={snipeAvenue}
+        maxSlots={riskSettings?.maxPositions ?? 4}
+      />
 
       {/* Paper-performance audit modal */}
       {showReadinessModal && readiness && (
