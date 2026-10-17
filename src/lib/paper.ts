@@ -1,4 +1,10 @@
 import { assessEdge } from "./intel/emh";
+import {
+  buildExitPlan,
+  evaluateExit,
+  initExitRuntime,
+  type ExitRuntime,
+} from "./sniper/exits";
 
 export const DEMO_START = 500;
 export const STARTING_CASH = DEMO_START;
@@ -55,6 +61,16 @@ export type Position = {
   entryLiquidityUsd?: number;
   entryVolume24h?: number;
   pairAgeHours?: number | null;
+  exitRuntime?: ExitRuntime;
+  lastFreshMarkAt?: number;
+};
+
+export type TradeLesson = {
+  summary: string;
+  mfeR: number;
+  maeR: number;
+  holdMinutes: number;
+  exitState: string;
 };
 
 export type ClosedTrade = {
@@ -80,6 +96,10 @@ export type ClosedTrade = {
   entryLiquidityUsd?: number;
   entryVolume24h?: number;
   pairAgeHours?: number | null;
+  lesson?: TradeLesson;
+  mfeR?: number;
+  maeR?: number;
+  holdMinutes?: number;
 };
 
 export type Book = {
@@ -351,6 +371,8 @@ export function enter(
   const stopToUse = customSizing?.stop ?? v.sim.fill * 0.92;
   const targetToUse = customSizing?.target ?? v.sim.fill * 1.06;
 
+  const plan = buildExitPlan(v.sim.fill, stopToUse);
+  const atrGuess = Math.abs(v.sim.fill - stopToUse) || v.sim.fill * 0.02;
   const pos: Position = {
     id: stamp("pos"),
     tokenId: c.id,
@@ -370,6 +392,8 @@ export function enter(
     entryLiquidityUsd: c.liquidityUsd,
     entryVolume24h: c.volume24h,
     pairAgeHours: c.pairAgeHours,
+    exitRuntime: initExitRuntime(v.sim.fill, plan, qtyToUse, atrGuess, now),
+    lastFreshMarkAt: now,
   };
   const next: Book = {
     ...book,
@@ -441,51 +465,88 @@ export function markBook(
       kept.push({ ...p, mark: px, markSimulated: stale || undefined });
       continue;
     }
-    const aged = now - p.openedAt > 6 * 60 * 60 * 1000;
+    // Growth exit engine (Chandelier ladder) — no fixed +6% full take-profit.
+    const plan = buildExitPlan(p.entryPrice, p.stop);
+    let runtime =
+      p.exitRuntime ??
+      initExitRuntime(p.entryPrice, plan, p.qty, Math.abs(p.entryPrice - p.stop) || p.entryPrice * 0.02, p.openedAt);
+    const lastFresh = stale ? (p.lastFreshMarkAt ?? p.openedAt) : now;
+    if (!stale) {
+      const decision = evaluateExit("LONG", p.entryPrice, px, plan, runtime, {
+        now,
+        lastFreshMarkAt: lastFresh,
+      });
+      runtime = decision.runtime;
 
-    // Outperformance & Capital Preservation: Trailing Breakeven Ratchet
-    // Once position moves +3.0% into profit, raise stop loss above entry price to lock in a risk-free trade
-    // (live quotes only — stale marks never ratchet, stop, or target).
-    let activeStop = p.stop;
-    if (!stale && px >= p.entryPrice * 1.03 && activeStop < p.entryPrice * 1.008) {
-      activeStop = p.entryPrice * 1.008; // Locked in at +0.8% profit
-    }
+      if (decision.action.kind === "SCALE_OUT") {
+        const sellQty = Math.min(p.qty, decision.action.fractionOfOriginal * runtime.originalQty);
+        if (sellQty > 0 && sellQty < p.qty - 1e-12) {
+          const pnl = (px - p.entryPrice) * sellQty;
+          cash += sellQty * px;
+          day += pnl;
+          streak = pnl < 0 ? streak + 1 : 0;
+          const holdMinutes = Math.round((now - p.openedAt) / 60_000);
+          const lesson = lessonFromClose({
+            reason: decision.action.reason, pnl,
+            mfeR: runtime.mfeR, maeR: runtime.maeR, holdMinutes, exitState: decision.state,
+          });
+          extraTrades.push({
+            id: stamp("tr"), symbol: p.symbol, pnl, reason: "TARGET", closedAt: now,
+            chain: p.chain, venue: p.venue, priceSource: p.priceSource,
+            markSource: tickSource ?? p.priceSource, entryPrice: p.entryPrice, exitPrice: px,
+            qty: sellQty, openedAt: p.openedAt, entryScore: p.entryScore,
+            entryChange24h: p.entryChange24h, entryLiquidityUsd: p.entryLiquidityUsd,
+            entryVolume24h: p.entryVolume24h, pairAgeHours: p.pairAgeHours,
+            lesson, mfeR: runtime.mfeR, maeR: runtime.maeR, holdMinutes,
+          });
+          kept.push({
+            ...p, qty: p.qty - sellQty, mark: px, stop: runtime.stopPrice,
+            exitRuntime: runtime, lastFreshMarkAt: now, markSimulated: undefined,
+            notional: (p.qty - sellQty) * p.entryPrice,
+          });
+          continue;
+        }
+      }
 
-    const stopped = !stale && px <= activeStop;
-    const targetHit = !stale && px >= (p.target ?? p.entryPrice * 1.06);
-    if (aged || stopped || targetHit) {
-      const pnl = (px - p.entryPrice) * p.qty;
-      cash += p.qty * px;
-      // Stale closes don't move the day/result counters used for learning.
-      if (!stale) {
+      if (decision.action.kind === "MOVE_STOP") {
+        kept.push({
+          ...p, mark: px, stop: decision.action.newStop,
+          exitRuntime: runtime, lastFreshMarkAt: now, markSimulated: undefined,
+        });
+        continue;
+      }
+
+      if (decision.action.kind === "CLOSE") {
+        const pnl = (px - p.entryPrice) * p.qty;
+        cash += p.qty * px;
         day += pnl;
         streak = pnl < 0 ? streak + 1 : 0;
         if (streak >= 3) cool = now + 4 * 60 * 60 * 1000;
+        const holdMinutes = Math.round((now - p.openedAt) / 60_000);
+        const reasonLabel = decision.action.reason.includes("stop") || decision.action.reason.includes("Stop")
+          ? (px > p.entryPrice ? "BREAKEVEN" : "STOP")
+          : decision.action.reason.includes("Time") ? "TIME" : "TARGET";
+        const lesson = lessonFromClose({
+          reason: decision.action.reason, pnl,
+          mfeR: runtime.mfeR, maeR: runtime.maeR, holdMinutes, exitState: decision.state,
+        });
+        extraTrades.push({
+          id: stamp("tr"), symbol: p.symbol, pnl, reason: reasonLabel, closedAt: now,
+          chain: p.chain, venue: p.venue, priceSource: p.priceSource,
+          markSource: tickSource ?? p.priceSource, entryPrice: p.entryPrice, exitPrice: px,
+          qty: p.qty, openedAt: p.openedAt, entryScore: p.entryScore,
+          entryChange24h: p.entryChange24h, entryLiquidityUsd: p.entryLiquidityUsd,
+          entryVolume24h: p.entryVolume24h, pairAgeHours: p.pairAgeHours,
+          lesson, mfeR: runtime.mfeR, maeR: runtime.maeR, holdMinutes,
+        });
+        continue;
       }
-      extraTrades.push({
-        id: stamp("tr"),
-        symbol: p.symbol,
-        pnl,
-        reason: targetHit ? "TARGET" : stopped ? (px > p.entryPrice ? "BREAKEVEN" : "STOP") : "TIME",
-        closedAt: now,
-        chain: p.chain,
-        venue: p.venue,
-        priceSource: p.priceSource,
-        markSource: sourceMismatch ? `${tickSource ?? "unknown"}-rejected` : (tickSource ?? p.priceSource),
-        entryPrice: p.entryPrice,
-        exitPrice: px,
-        qty: p.qty,
-        openedAt: p.openedAt,
-        entryScore: p.entryScore,
-        entryChange24h: p.entryChange24h,
-        entryLiquidityUsd: p.entryLiquidityUsd,
-        entryVolume24h: p.entryVolume24h,
-        pairAgeHours: p.pairAgeHours,
-        simulated: stale || undefined,
-      });
-    } else {
-      kept.push({ ...p, mark: px, stop: activeStop, markSimulated: stale || undefined });
     }
+
+    kept.push({
+      ...p, mark: px, stop: runtime.stopPrice, exitRuntime: runtime,
+      lastFreshMarkAt: stale ? p.lastFreshMarkAt : now, markSimulated: stale || undefined,
+    });
   }
 
   next = {
@@ -701,7 +762,7 @@ export function floorFor(
 /** Nudge the score floor from closed-trade evidence. History is the only teacher.
  * Mirrors the trade_learning_state CASE in trade-memory.functions.ts exactly so
  * the local estimate and the database aggregate never disagree. */
-export function learn(memory: Memory, pnl: number): Memory {
+export function learn(memory: Memory, pnl: number, lesson?: TradeLesson): Memory {
   const wins = memory.wins + (pnl > 0 ? 1 : 0);
   const losses = memory.losses + (pnl < 0 ? 1 : 0);
   const seen = memory.seen + 1;
@@ -709,11 +770,41 @@ export function learn(memory: Memory, pnl: number): Memory {
   let minScore = memory.minScore;
   if (seen >= 4) {
     const winRate = wins / seen;
-    if (winRate < 0.4 || realized < 0) minScore = Math.min(78, 52 + 2 * (seen - 3));
-    else if (winRate > 0.55 && realized > 0) minScore = Math.max(48, 52 - (seen - 3));
-    else minScore = 52;
+    const expectancyPositive = realized > 0 && wins > 0;
+    if (winRate < 0.35 || (realized < 0 && seen >= 8)) {
+      minScore = Math.min(78, 52 + 2 * (seen - 3));
+    } else if (expectancyPositive || (winRate > 0.5 && realized > 0)) {
+      minScore = Math.max(48, 52 - Math.min(6, seen - 3));
+    } else {
+      minScore = 52;
+    }
+  }
+  if (lesson && lesson.maeR > 1.2 && lesson.mfeR < 0.5 && pnl < 0) {
+    minScore = Math.min(80, minScore + 1);
+  }
+  if (lesson && lesson.mfeR >= 2 && pnl > 0) {
+    minScore = Math.max(48, minScore - 1);
   }
   return { seen, wins, losses, realized, minScore };
+}
+
+export function lessonFromClose(input: {
+  reason: string; pnl: number; mfeR: number; maeR: number; holdMinutes: number; exitState: string;
+}): TradeLesson {
+  const { reason, pnl, mfeR, maeR, holdMinutes, exitState } = input;
+  let summary: string;
+  if (pnl > 0 && mfeR >= 2) {
+    summary = `Runner paid: +${mfeR.toFixed(2)}R peak, exited via ${reason} after ${holdMinutes}m — growth path worked.`;
+  } else if (pnl > 0) {
+    summary = `Banked win via ${reason} (MFE ${mfeR.toFixed(2)}R). Partial scale protected capital.`;
+  } else if (maeR > 1 && mfeR < 0.3) {
+    summary = `Stopped out with little upside (MAE ${maeR.toFixed(2)}R) — setup lacked follow-through.`;
+  } else if (reason.includes("Time")) {
+    summary = `Time stop: capital idle ${holdMinutes}m below +0.5R — recycle stake.`;
+  } else {
+    summary = `Closed ${reason} after ${holdMinutes}m (MFE ${mfeR.toFixed(2)}R / MAE ${maeR.toFixed(2)}R).`;
+  }
+  return { summary, mfeR, maeR, holdMinutes, exitState };
 }
 
 export type SecurityVerdict = "clean" | "reject" | "unknown";
