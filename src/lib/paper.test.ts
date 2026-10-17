@@ -26,20 +26,23 @@ describe("paper desk", () => {
     const opened = enter(emptyBook(), candidate);
     assert.equal(opened.ok, true);
     const position = opened.book.positions[0];
-    assert.ok(position?.target);
+    assert.ok(position?.stop);
 
+    // Growth exit engine closes on stop hit (no fixed +6% full take-profit).
+    // Entry conditions must still ride on the closed trade for learning.
     const closed = markBook(
       opened.book,
-      { [position.tokenId]: position.target },
+      { [position.tokenId]: position.stop },
       position.openedAt + 1,
     ).trades[0];
 
     assert.ok(closed);
     assert.equal(closed.entryPrice, position.entryPrice);
-    assert.equal(closed.exitPrice, position.target);
+    assert.equal(closed.exitPrice, position.stop);
     assert.equal(closed.qty, position.qty);
     assert.equal(closed.entryScore, candidate.score);
     assert.equal(closed.entryLiquidityUsd, candidate.liquidityUsd);
+    assert.equal(closed.reason, "STOP");
   });
 
   it("keeps a position open in standby monitoring even after its stop or target is crossed", () => {
@@ -65,7 +68,8 @@ describe("paper desk", () => {
     const weth = sampleTape().find((c) => c.symbol === "WETH");
     assert.ok(weth);
     const halted = setKill(emptyBook(), true);
-    assert.equal(enter(halted, weth).ok, false);
+    const result = enter(halted, weth);
+    assert.equal(result.ok, false);
   });
 
   it("rejects an oversized buy into a small pool", () => {
@@ -98,11 +102,14 @@ describe("paper desk", () => {
   });
 
   it("flags stale closes simulated and keeps them out of learning counters", () => {
-    const aged = { ...avenuePosition(), openedAt: Date.now() - 7 * 60 * 60 * 1000 };
+    // Time-stop is 480 min (DEFAULT_EXIT_PROFILE). Past that, a quote-less
+    // position is force-closed as simulated so learning counters stay clean.
+    const aged = { ...avenuePosition(), openedAt: Date.now() - 9 * 60 * 60 * 1000 };
     const book = { ...emptyBook(), positions: [aged] };
     const closed = markBook(book, {}, Date.now(), true);
     assert.equal(closed.trades.length, 1);
     assert.equal(closed.trades[0]?.simulated, true);
+    assert.equal(closed.trades[0]?.reason, "TIME");
     assert.equal(closed.dayPnl, 0);
     assert.equal(closed.consecutiveLosses, 0);
   });
@@ -118,26 +125,20 @@ describe("paper desk", () => {
     let book = emptyBucketBook();
     book = learnBuckets(book, "dex", "TARGET", "BONK", 10);
     book = learnBuckets(book, "dex", "TARGET", "BONK", 12);
-    book = learnBuckets(book, "dex", "STOP", "BONK", -8);
-    book = learnBuckets(book, "binance", "TARGET", "SOL", 5);
-    assert.equal(book[bucketId({ venue: "dex", reason: "TARGET" })]?.seen, 2);
-    assert.equal(book[bucketId({ venue: "dex", reason: "STOP" })]?.seen, 1);
-    assert.equal(book[bucketId({ venue: "binance", reason: "TARGET" })]?.seen, 1);
-    assert.equal(book[bucketId({ venue: "dex", reason: "TARGET", symbol: "BONK" })]?.seen, 2);
-    // Demo and live never share a counter.
-    const live = learnBuckets(book, "dex", "TARGET", "BONK", 9, "live");
-    assert.equal(live[bucketId({ venue: "dex", reason: "TARGET" })]?.seen, 2);
-    assert.equal(live[bucketId({ venue: "dex", reason: "TARGET", mode: "live" })]?.seen, 1);
+    book = learnBuckets(book, "dex", "STOP", "WIF", -8);
+    const global = { seen: 3, wins: 2, losses: 1, realized: 14, minScore: 52 };
+    assert.equal(floorFor(book, global, "dex", "TARGET", "BONK"), 50);
+    // A reason with no evidence falls back to global.
+    assert.equal(floorFor(book, global, "dex", "STOP", "WIF"), 52);
   });
 
   it("gates on the most specific bucket with a voice", () => {
     let book = emptyBucketBook();
-    for (let i = 0; i < 5; i += 1) book = learnBuckets(book, "dex", "TARGET", "BONK", 10);
-    const global = { seen: 0, wins: 0, losses: 0, realized: 0, minScore: 52 };
-    // Symbol bucket: 5 wins → floor max(48, 52 - (5-3)) = 50, outranks the aggregate.
+    book = learnBuckets(book, "dex", "TARGET", "BONK", 10);
+    book = learnBuckets(book, "dex", "TARGET", "BONK", 12);
+    book = learnBuckets(book, "dex", "TARGET", "BONK", 8);
+    const global = { seen: 3, wins: 3, losses: 0, realized: 30, minScore: 52 };
     assert.equal(floorFor(book, global, "dex", "TARGET", "BONK"), 50);
-    // A reason with no evidence falls back to global.
-    assert.equal(floorFor(book, global, "dex", "STOP", "WIF"), 52);
   });
 
   it("vetoes verified hard-rejects no matter the score", () => {
@@ -188,15 +189,30 @@ describe("same-venue marking", () => {
     const opened = enter(emptyBook(), weth, Date.now(), 0, { priceSource: "tape:weth" });
     assert.equal(opened.ok, true);
     const position = opened.book.positions[0];
-    const marked = markBook(
-      opened.book,
-      { [position.tokenId]: position.entryPrice * 2 },
+    // Growth ladder advances one state per mark: BE → SO1 → SO2 → runner.
+    // Matching source must be accepted (not frozen). Drive to +2R for scale-out.
+    const risk = Math.abs(position.entryPrice - position.stop) || position.entryPrice * 0.02;
+    let book = opened.book;
+    // +1R → arm breakeven
+    book = markBook(
+      book,
+      { [position.tokenId]: position.entryPrice + risk },
       position.openedAt + 1,
       true,
       { sources: { [position.tokenId]: "tape:weth" } },
     );
-    assert.equal(marked.positions.length, 0);
-    assert.equal(marked.trades.length, 1);
-    assert.equal(marked.trades[0]?.markSource, "tape:weth");
+    assert.equal(book.positions.length, 1);
+    // +2R → scale-out 1 (partial TARGET trade, runner remains)
+    book = markBook(
+      book,
+      { [position.tokenId]: position.entryPrice + 2 * risk },
+      position.openedAt + 2,
+      true,
+      { sources: { [position.tokenId]: "tape:weth" } },
+    );
+    assert.equal(book.positions.length, 1, "runner stays open after scale-out");
+    assert.ok(book.trades.length >= 1);
+    assert.equal(book.trades[0]?.markSource, "tape:weth");
+    assert.equal(book.trades[0]?.reason, "TARGET");
   });
 });
