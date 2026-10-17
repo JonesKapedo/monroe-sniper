@@ -5,10 +5,12 @@ import {
   initExitRuntime,
   type ExitRuntime,
 } from "./sniper/exits";
+import { resolveConcurrentSlots, DEFAULT_CONCURRENT } from "./sniper/slots";
 
 export const DEMO_START = 500;
 export const STARTING_CASH = DEMO_START;
-export const MAX_POSITIONS = 3;
+/** Fallback only — Settings via resolveConcurrentSlots is authority. */
+export const MAX_POSITIONS = DEFAULT_CONCURRENT;
 export const MAX_IDEA = 0.2;
 export const MAX_BOOK = 0.6;
 export const MIN_SCORE = 52;
@@ -280,12 +282,19 @@ export function portfolioLines(book: Book, now = Date.now()): GateLine[] {
   ];
 }
 
-export function entryVerdict(book: Book, c: Candidate, now = Date.now(), minScore = MIN_SCORE): {
+export function entryVerdict(
+  book: Book,
+  c: Candidate,
+  now = Date.now(),
+  minScore = MIN_SCORE,
+  maxPositions: number = MAX_POSITIONS,
+): {
   allowed: boolean;
   lines: GateLine[];
   notional: number;
   sim: ReturnType<typeof simulateBuy> | null;
 } {
+  const slots = resolveConcurrentSlots(maxPositions);
   const eq = equity(book);
   const exp = exposure(book);
   const room = Math.max(0, eq * MAX_BOOK - exp);
@@ -307,9 +316,9 @@ export function entryVerdict(book: Book, c: Candidate, now = Date.now(), minScor
     },
     {
       id: "slots",
-      label: "Open slot",
-      pass: book.positions.length < MAX_POSITIONS,
-      detail: `${book.positions.length}/${MAX_POSITIONS}`,
+      label: `Open slot (${slots} max)`,
+      pass: book.positions.length < slots,
+      detail: `${book.positions.length}/${slots}`,
     },
     {
       id: "dup",
@@ -357,9 +366,21 @@ export function enter(
   c: Candidate,
   now = Date.now(),
   minScore = MIN_SCORE,
-  customSizing?: { notional?: number; stop?: number; target?: number; priceSource?: string },
+  customSizing?: {
+    notional?: number;
+    stop?: number;
+    target?: number;
+    priceSource?: string;
+    maxPositions?: number;
+  },
 ): { book: Book; ok: boolean; note: string } {
-  const v = entryVerdict(book, c, now, minScore);
+  const v = entryVerdict(
+    book,
+    c,
+    now,
+    minScore,
+    customSizing?.maxPositions ?? MAX_POSITIONS,
+  );
   if (!v.allowed || !v.sim) {
     const fail = v.lines.filter((l) => !l.pass).map((l) => l.label);
     return { book, ok: false, note: fail.join(", ") || "Blocked" };

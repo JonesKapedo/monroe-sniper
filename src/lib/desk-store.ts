@@ -34,6 +34,7 @@ import {
   type TierConfig,
   type TierName,
 } from "./sniper/tier-config";
+import { resolveConcurrentSlots } from "./sniper/slots";
 import {
   DEFAULT_PROFIT_LOCK_CONFIG,
   applyProfitLock,
@@ -1286,10 +1287,7 @@ export const useDesk = create<DeskState>()(
           }
         }
         const guardRisk = guardResult.newState.riskMultiplier ?? 1;
-        const cycleMaxSlots = Math.max(
-          s.riskSettings.maxPositions,
-          s.tierConfig?.maxPositions ?? 1,
-        );
+        const cycleMaxSlots = resolveConcurrentSlots(s.riskSettings.maxPositions);
         if (currentBook.positions.length >= cycleMaxSlots) return;
         const isTurbo = s.selectedModel.id === "[degen]";
         const profileFloor = s.selectedModel.minScore ?? 48;
@@ -1405,7 +1403,7 @@ export const useDesk = create<DeskState>()(
               bookNow,
               Math.min(verdict.notional * guardRisk, avenue.maxCapitalAllocationUsd),
               verdict.takeProfitPct,
-              Math.max(st.riskSettings.maxPositions, st.tierConfig?.maxPositions ?? 1),
+              resolveConcurrentSlots(st.riskSettings.maxPositions),
             );
             if (!verdict.allowed || stake.blocked || stake.notional < (st.tierConfig?.minNotional ?? 1)) {
               continue;
@@ -1416,6 +1414,7 @@ export const useDesk = create<DeskState>()(
               stop: avenue.stopLossPrice,
               target: avenue.targetPrice,
               priceSource: `hyperliquid:${(avenue.anchorSymbol ?? avenue.symbol).toUpperCase()}`,
+              maxPositions: maxSlots,
             });
             if (!result.ok) continue;
 
@@ -1457,10 +1456,7 @@ export const useDesk = create<DeskState>()(
           for (let tapeAttempt = 0; tapeAttempt < 3; tapeAttempt++) {
           const live = useDesk.getState();
           const tapeBook = live[live.mode];
-          const tapeMaxSlots = Math.max(
-            live.riskSettings.maxPositions,
-            live.tierConfig?.maxPositions ?? 1,
-          );
+          const tapeMaxSlots = resolveConcurrentSlots(live.riskSettings.maxPositions);
           if (tapeBook.positions.length >= tapeMaxSlots) break;
           const turboNow = live.riskSettings.sizingProfile === "TURBO";
           const profileFloorNow = live.selectedModel.minScore ?? 48;
@@ -1505,7 +1501,7 @@ export const useDesk = create<DeskState>()(
             tapeBook,
             verdict.notional * guardRisk,
             verdict.takeProfitPct,
-            Math.max(live.riskSettings.maxPositions, live.tierConfig?.maxPositions ?? 1),
+            resolveConcurrentSlots(live.riskSettings.maxPositions),
           );
           if (tapeStake.blocked) {
             useDesk.setState((prev) => ({
@@ -1519,6 +1515,7 @@ export const useDesk = create<DeskState>()(
             stop: verdict.stopPrice,
             target: verdict.targetPrice,
             priceSource: `tape:${pick.id}`,
+            maxPositions: tapeMaxSlots,
           });
 
           if (!result.ok) break;

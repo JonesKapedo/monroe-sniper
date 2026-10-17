@@ -5,6 +5,7 @@ import { fibExtensions, snapToFib } from "../math/fib";
 import { isCorrelatedDuplicate, setupVector, winnerResemblance, type SetupVector } from "../math/vectors";
 import { MODELS, selectModel, type RiskModelProfile } from "./risk-models";
 import { TIER_CONFIGS, applyStakeBudget, detectTier } from "./tier-config";
+import { resolveConcurrentSlots } from "./slots";
 
 export type SizingModel = "VOLATILITY_PARITY" | "FRACTIONAL_KELLY" | "FIXED_FRACTION";
 export type SizingProfile = "CONSERVATIVE" | "OPTIMUM_SWEET_SPOT" | "AGGRESSIVE" | "TURBO" | "[paranoid]" | "[elvis]" | "gradient" | "[degen]";
@@ -130,8 +131,8 @@ export function evaluateRiskAndSize(
   const drawdown = peak > 0 ? (peak - currentEquity) / peak : 0;
   const dailyLossLimit =
     profile.id === "[degen]" ? 0.15 : profile.id === "[elvis]" ? 0.1 : 0.08;
-  const profileMaxPositions =
-    profile.id === "[degen]" ? 8 : profile.id === "[elvis]" ? 6 : 4;
+  // Settings are the sole concurrent-slot authority.
+  const maxSlots = resolveConcurrentSlots(settings.maxPositions);
   const isDuplicate = book.positions.some((p) => p.tokenId === candidate.id);
   const cooling = book.cooldownUntil !== null && now < book.cooldownUntil;
   const { volatility, atr, regime } = estimateVolatility(candidate);
@@ -151,8 +152,8 @@ export function evaluateRiskAndSize(
   if (dailyPnL > dailyLossLimit) {
     return failVerdict("circuit-breaker", "Daily loss circuit breaker", `Daily loss ${(dailyPnL * 100).toFixed(1)}% > ${(dailyLossLimit * 100).toFixed(0)}% (${profile.id})`, `daily-loss-exceeds-${profile.id}`);
   }
-  if (book.positions.length >= profileMaxPositions) {
-    return failVerdict("max-positions", `Max positions (${profileMaxPositions})`, `${book.positions.length}/${profileMaxPositions} held`, `max-positions-reached-${profileMaxPositions}`);
+  if (book.positions.length >= maxSlots) {
+    return failVerdict("max-positions", `Max positions (${maxSlots})`, `${book.positions.length}/${maxSlots} held`, `max-positions-reached-${maxSlots}`);
   }
   const effectiveEdge = Math.max(-1, Math.min(1, (candidate.score - 50) / 50));
   if (effectiveEdge < profile.minEdge) {
@@ -180,7 +181,7 @@ export function evaluateRiskAndSize(
   const modelConviction = convictionForModel(effectiveEdge * 12, 20);
   const conviction = Math.min(1.35, Math.max(0.65, rawConviction * modelConviction));
   const stakeTierForSlots = TIER_CONFIGS[detectTier(currentEquity)];
-  const maxSlots = Math.min(settings.maxPositions, stakeTierForSlots.maxPositions, profileMaxPositions);
+  // maxSlots already from Settings
   const openSlots = Math.max(1, maxSlots - book.positions.length);
   const cashPerSlot = book.cash / openSlots;
   const stakeBudgetTotalPreview = Math.round(currentEquity * stakeTierForSlots.maxPortfolioExposure * 100) / 100;
