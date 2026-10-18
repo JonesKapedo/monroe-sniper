@@ -78,6 +78,10 @@ export function scanAllAvenues(
     const regime = interpretPerpRegime(row.funding1h, row.openInterest);
     if (!regime) continue;
     if (Math.abs(regime.funding8h) < 0.00005) continue;
+    // The paper book is long-only, so only negative funding (shorts pay
+    // longs) is expressible as a LONG harvest. Positive funding would need
+    // a short and is skipped rather than mis-modeled.
+    if (regime.side === "SHORT") continue;
 
     const coin = row.coin.toUpperCase();
     const symbol = `${coin}-PERP`;

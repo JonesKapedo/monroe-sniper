@@ -116,7 +116,9 @@ export function assessEdge(input: EdgeInput): Edge {
 
   const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidityUsd : 0;
   const trending = change >= 0.7 && participation >= 0.05 && input.score >= 52;
-  const strongBook = input.score >= 68 && change > -0.5;
+  // A high score on a dead book is not an information edge: prove it with
+  // turnover before calling it a trend.
+  const strongBook = input.score >= 68 && change > -0.5 && participation >= 0.05;
   if (trending || strongBook) {
     return {
       act: true,

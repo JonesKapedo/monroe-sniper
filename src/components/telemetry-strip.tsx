@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Radio } from "lucide-react";
 import { useDesk } from "@/lib/desk-store";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/cn";
 
 /**
  * Fixed thin telemetry rail under the operator strip.

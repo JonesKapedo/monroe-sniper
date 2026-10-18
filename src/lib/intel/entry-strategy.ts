@@ -27,7 +27,7 @@ export type RankedOpportunity = {
 };
 
 export type PerpRegime = {
-  /** Positive = shorts pay longs; negative = longs pay shorts. */
+  /** Positive = longs pay shorts; negative = shorts pay longs. */
   funding8h: number;
   openInterest: number | null;
   side: "LONG" | "SHORT";
@@ -40,8 +40,8 @@ export type PerpRegime = {
 
 /**
  * Interpret Hyperliquid-style funding for a professional carry / fade decision.
- * - Mild positive funding → bias LONG (collect from shorts)
- * - Mild negative funding → bias SHORT (collect from longs)
+ * - Mild negative funding → bias LONG (shorts pay longs; the long collects)
+ * - Mild positive funding → bias SHORT (longs pay shorts; the short collects)
  * - Extreme |funding| → de-rate: crowded trade, squeeze risk
  * - Missing OI → still tradable but lower confidence
  */
@@ -52,7 +52,7 @@ export function interpretPerpRegime(
   if (funding1h === null || !Number.isFinite(funding1h)) return null;
   const funding8h = funding1h * 8;
   const aprAbs = Math.abs(funding1h * 24 * 365 * 100);
-  const side: "LONG" | "SHORT" = funding8h >= 0 ? "LONG" : "SHORT";
+  const side: "LONG" | "SHORT" = funding8h <= 0 ? "LONG" : "SHORT";
   const extremeFunding = Math.abs(funding8h) >= 0.0015;
   const oi = openInterest !== null && openInterest > 0 ? openInterest : null;
   let carryQuality = Math.min(1, aprAbs / 40);
@@ -64,8 +64,8 @@ export function interpretPerpRegime(
   const notes: string[] = [];
   notes.push(
     side === "LONG"
-      ? `Funding +${(funding8h * 100).toFixed(3)}%/8h — shorts pay longs (carry long)`
-      : `Funding ${(funding8h * 100).toFixed(3)}%/8h — longs pay shorts (carry short)`,
+      ? `Funding ${(funding8h * 100).toFixed(3)}%/8h — shorts pay longs (carry long)`
+      : `Funding +${(funding8h * 100).toFixed(3)}%/8h — longs pay shorts (carry short)`,
   );
   if (extremeFunding) {
     notes.push("Extreme funding — size down; crowded side can squeeze");
@@ -83,7 +83,7 @@ export function scorePerpEntry(
 ): number {
   if (!regime) return Math.max(0, Math.min(100, baseConfidence * 0.5));
   const carryBoost = Math.round(regime.carryQuality * 18);
-  let score = baseConfidence * 0.75 + carryBoost;
+  let score = baseConfidence + carryBoost;
   if (regime.extremeFunding) score -= 8;
   return Math.max(0, Math.min(100, Math.round(score)));
 }

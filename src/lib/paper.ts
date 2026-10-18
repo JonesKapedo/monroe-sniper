@@ -723,10 +723,10 @@ function bucketLearn(memory: Memory, pnl: number): Memory {
   const seen = memory.seen + 1;
   const realized = memory.realized + pnl;
   let minScore = memory.minScore;
-  if (seen >= 4) {
+  if (seen >= 2) {
     const winRate = wins / seen;
-    if (winRate < 0.4 || realized < 0) minScore = Math.min(78, 52 + 2 * (seen - 3));
-    else if (winRate > 0.55 && realized > 0) minScore = Math.max(48, 52 - (seen - 3));
+    if (winRate < 0.4 || realized < 0) minScore = Math.min(78, 52 + 2 * (seen - 1));
+    else if (winRate > 0.5 && realized > 0) minScore = Math.max(48, 51 - Math.floor(seen / 2));
     else minScore = 52;
   }
   return { seen, wins, losses, realized, minScore };
@@ -763,7 +763,7 @@ export function learnBuckets(
 
 /**
  * Score floor for a candidate: the symbol bucket when it has a voice
- * (seen ≥ 3), else the venue × reason bucket (seen ≥ 4), else the global.
+ * (seen ≥ 2), else the venue × reason bucket (seen ≥ 4), else the global.
  */
 export function floorFor(
   buckets: BucketBook,
@@ -774,7 +774,7 @@ export function floorFor(
   mode = "demo",
 ): number {
   const sym = buckets[bucketId({ venue, reason, symbol, mode })];
-  if (sym && sym.seen >= 3) return sym.minScore;
+  if (sym && sym.seen >= 2) return sym.minScore;
   const agg = buckets[bucketId({ venue, reason, mode })];
   if (agg && agg.seen >= 4) return agg.minScore;
   return global.minScore;

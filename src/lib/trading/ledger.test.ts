@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
 import {
   createPaperAccount,
   cashBalance,
@@ -12,7 +13,7 @@ import {
 describe("unified trading ledger", () => {
   it("seeds cash and opens/closes without going negative", () => {
     let ledger = createPaperAccount(500);
-    expect(cashBalance(ledger)).toBe(500);
+    assert.equal(cashBalance(ledger), 500);
     const open = ledgerOpen({
       ledger,
       instrumentId: "sol:abc",
@@ -21,21 +22,21 @@ describe("unified trading ledger", () => {
       priceUsd: 5,
       engine: "scanner",
     });
-    expect(open.ok).toBe(true);
-    ledger = open.ledger!;
-    expect(cashBalance(ledger)).toBe(450);
-    expect(exposureUsd(ledger)).toBe(50);
-    expect(equityUsd(ledger)).toBe(500);
+    assert.equal(open.ok, true);
+    ledger = open.ledger;
+    assert.equal(cashBalance(ledger), 450);
+    assert.equal(exposureUsd(ledger), 50);
+    assert.equal(equityUsd(ledger), 500);
     const close = ledgerClose({
       ledger,
       instrumentId: "sol:abc",
       priceUsd: 6,
       engine: "desk",
     });
-    expect(close.ok).toBe(true);
-    ledger = close.ledger!;
-    expect(cashBalance(ledger)).toBe(510);
-    expect(ledger.positions.length).toBe(0);
+    assert.equal(close.ok, true);
+    ledger = close.ledger;
+    assert.equal(cashBalance(ledger), 510);
+    assert.equal(ledger.positions.length, 0);
   });
 
   it("syncs from desk book", () => {
@@ -48,8 +49,8 @@ describe("unified trading ledger", () => {
       },
       createPaperAccount(500),
     );
-    expect(cashBalance(ledger)).toBe(400);
-    expect(ledger.positions[0]?.symbol).toBe("AAA");
-    expect(exposureUsd(ledger)).toBe(110);
+    assert.equal(cashBalance(ledger), 400);
+    assert.equal(ledger.positions[0]?.symbol, "AAA");
+    assert.equal(exposureUsd(ledger), 110);
   });
 });

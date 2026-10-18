@@ -135,7 +135,7 @@ export function Mascot({
           
           {/* Jaw clipping path for open mouth */}
           <clipPath id="jawClip">
-            <path d="M16 35.4 Q24 {jawY} 32 35.4 L32 48 L16 48 Z" />
+            <path d={`M16 35.4 Q24 ${jawY} 32 35.4 L32 48 L16 48 Z`} />
           </clipPath>
         </defs>
 

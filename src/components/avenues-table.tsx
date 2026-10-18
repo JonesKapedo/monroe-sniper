@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, Zap } from "lucide-react";
 import type { AvenueCategory, AvenueOpportunity } from "@/lib/avenues/types";
 import type { Book } from "@/lib/paper";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui";
 
 const PREVIEW = 10;

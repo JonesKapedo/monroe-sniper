@@ -258,40 +258,37 @@ export function ledgerOpen(input: {
     ];
   }
 
+  const openOrder: LedgerOrder = {
+    id: orderId,
+    side: "buy",
+    instrumentId: input.instrumentId,
+    symbol: input.symbol,
+    qty,
+    limitPriceUsd: price,
+    status: "filled",
+    createdAt: at,
+    updatedAt: at,
+    engine: input.engine,
+  };
+  const openFill: LedgerFill = {
+    id: eid("fill", at),
+    orderId,
+    instrumentId: input.instrumentId,
+    symbol: input.symbol,
+    side: "buy",
+    qty,
+    priceUsd: price,
+    feeUsd: fee,
+    filledAt: at,
+    engine: input.engine,
+    notionalUsd: notional,
+  };
+
   let ledger: TradingLedger = {
     ...input.ledger,
     positions,
-    orders: [
-      {
-        id: orderId,
-        side: "buy",
-        instrumentId: input.instrumentId,
-        symbol: input.symbol,
-        qty,
-        limitPriceUsd: price,
-        status: "filled",
-        createdAt: at,
-        updatedAt: at,
-        engine: input.engine,
-      },
-      ...input.ledger.orders,
-    ].slice(0, 200),
-    fills: [
-      {
-        id: eid("fill", at),
-        orderId,
-        instrumentId: input.instrumentId,
-        symbol: input.symbol,
-        side: "buy",
-        qty,
-        priceUsd: price,
-        feeUsd: fee,
-        filledAt: at,
-        engine: input.engine,
-        notionalUsd: notional,
-      },
-      ...input.ledger.fills,
-    ].slice(0, 300),
+    orders: [openOrder, ...input.ledger.orders].slice(0, 200),
+    fills: [openFill, ...input.ledger.fills].slice(0, 300),
   };
   ledger = withCash(ledger, cash - notional - fee);
   ledger = appendEvent(
@@ -355,40 +352,36 @@ export function ledgerClose(input: {
       : input.ledger.positions.filter((p) => p.instrumentId !== input.instrumentId);
 
   const orderId = eid("ord", at);
+  const closeOrder: LedgerOrder = {
+    id: orderId,
+    side: "sell",
+    instrumentId: input.instrumentId,
+    symbol: pos.symbol,
+    qty,
+    limitPriceUsd: price,
+    status: "filled",
+    createdAt: at,
+    updatedAt: at,
+    engine: input.engine,
+  };
+  const closeFill: LedgerFill = {
+    id: eid("fill", at),
+    orderId,
+    instrumentId: input.instrumentId,
+    symbol: pos.symbol,
+    side: "sell",
+    qty,
+    priceUsd: price,
+    feeUsd: fee,
+    filledAt: at,
+    engine: input.engine,
+    notionalUsd: proceeds,
+  };
   let ledger: TradingLedger = {
     ...input.ledger,
     positions,
-    orders: [
-      {
-        id: orderId,
-        side: "sell",
-        instrumentId: input.instrumentId,
-        symbol: pos.symbol,
-        qty,
-        limitPriceUsd: price,
-        status: "filled",
-        createdAt: at,
-        updatedAt: at,
-        engine: input.engine,
-      },
-      ...input.ledger.orders,
-    ].slice(0, 200),
-    fills: [
-      {
-        id: eid("fill", at),
-        orderId,
-        instrumentId: input.instrumentId,
-        symbol: pos.symbol,
-        side: "sell",
-        qty,
-        priceUsd: price,
-        feeUsd: fee,
-        filledAt: at,
-        engine: input.engine,
-        notionalUsd: proceeds,
-      },
-      ...input.ledger.fills,
-    ].slice(0, 300),
+    orders: [closeOrder, ...input.ledger.orders].slice(0, 200),
+    fills: [closeFill, ...input.ledger.fills].slice(0, 300),
   };
   ledger = withCash(ledger, cashBalance(ledger) + proceeds - fee);
   ledger = appendEvent(
