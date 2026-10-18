@@ -16,6 +16,7 @@ import {
   emptyBucketBook,
   symbolBucketFloor,
   markBook,
+  explainTapeIdle,
   setKill,
   withdraw,
   equity,
@@ -81,6 +82,14 @@ import type { PerpFunding } from "./perps/hyperliquid";
 import { useDyorStore } from "./dyor/store";
 import { playHawkCry, playSoftChirp } from "./sound";
 import { assessEdge } from "./intel/emh";
+import {
+  initFlowGovernor,
+  tickGovernor,
+  recordEntryFilled,
+  recordRejection,
+  currentRelax,
+  type FlowGovernorState,
+} from "./flow/governor";
 import {
   selectDiversifiedEntries,
   type RankedOpportunity,
@@ -237,6 +246,8 @@ type DeskState = {
   // Equity guard
   equityGuardState: EquityGuardState;
   equityGuardConfig: EquityGuardConfig;
+  // Flow governor: starvation counter + relaxation ladder (blueprint I1)
+  flowGovernor: FlowGovernorState;
   // Risk-model selection — persists across page visits via localStorage.
   selectedModel: RiskModelProfile;
   setSelectedModel: (id: RiskModelProfile["id"]) => void;
@@ -671,6 +682,7 @@ export const useDesk = create<DeskState>()(
         lastUpdated: Date.now(),
       },
       equityGuardConfig: DEFAULT_EQUITY_GUARD_CONFIG,
+      flowGovernor: initFlowGovernor(),
       // Bot interoperability — which engines may open entries.
       entrySources: { avenues: true, tape: true, whale: true },
       // Background engine cycle (market + whale refresh, guard, profit lock).
@@ -1348,6 +1360,13 @@ export const useDesk = create<DeskState>()(
           return; // Intraday loss limit circuit breaker triggers
         }
 
+        // Flow governor (blueprint I1): every starved cycle walks the
+        // relaxation ladder upward; every filled entry resets starvation.
+        const govStart = get().flowGovernor ?? initFlowGovernor();
+        let cycleFills = 0;
+        let govAfter = govStart;
+        const feedsAlive = useDesk.getState().tape.length > 0 ? 2 : 0;
+
         // 1. Professional avenue entries — diversified multi-slot (not one stuck perp).
         const avenues = scanAllAvenues(currentBook, s.disciplineRules, Date.now(), {
           funding: s.perpFunding,
@@ -1450,6 +1469,7 @@ export const useDesk = create<DeskState>()(
               exitProfile: exitProfileForModel(st.selectedModel),
             });
             if (!result.ok) continue;
+            cycleFills += 1;
 
             const hashStr = `ave-${avenue.id}-${Date.now().toString(36)}`;
             const exec: TapeExecution = {
@@ -1493,22 +1513,31 @@ export const useDesk = create<DeskState>()(
           if (tapeBook.positions.length >= tapeMaxSlots) break;
           const turboNow = live.riskSettings.sizingProfile === "TURBO";
           const profileFloorNow = live.selectedModel.minScore ?? 48;
-          const floorNow = turboNow
-            ? Math.max(40, Math.min(live.memory.minScore, profileFloorNow) - 12)
-            : Math.min(live.memory.minScore, profileFloorNow);
-          const pick = chooseEntry(tapeBook, live.tape, floorNow, Date.now(), (id) =>
-            securityVerdictOf(live.security, id),
+          const relaxStep = Math.min(3, govAfter.relaxStep);
+          const floorNow = Math.max(
+            34,
+            (turboNow
+              ? Math.max(40, Math.min(live.memory.minScore, profileFloorNow) - 12)
+              : Math.min(live.memory.minScore, profileFloorNow)) - currentRelax(govAfter),
+          );
+          const pick = chooseEntry(
+            tapeBook,
+            live.tape,
+            floorNow,
+            Date.now(),
+            (id) => securityVerdictOf(live.security, id),
+            relaxStep,
           );
           if (!pick || fibBlocked(pick.symbol) || isHalted(pick.symbol, live.eventHalts)) {
             if (tapeAttempt === 0 && live.tape.length > 0) {
               const lastIdle = (globalThis as unknown as { __monroeTapeIdle?: number }).__monroeTapeIdle ?? 0;
-              if (Date.now() - lastIdle > 10 * 60_000) {
+              if (Date.now() - lastIdle > 90_000) {
                 (globalThis as unknown as { __monroeTapeIdle?: number }).__monroeTapeIdle = Date.now();
+                const diag = explainTapeIdle(tapeBook, live.tape, floorNow, relaxStep, (id) =>
+                  securityVerdictOf(live.security, id),
+                );
                 useDesk.setState((prev) => ({
-                  log: pushLog(
-                    prev.log,
-                    `Tape scanned (${live.tape.length} names) — no setup cleared edge/score gates this cycle`,
-                  ),
+                  log: pushLog(prev.log, `${diag.summary} · starved ${govAfter.starvedCycles}/30`),
                 }));
               }
             }
@@ -1521,6 +1550,13 @@ export const useDesk = create<DeskState>()(
             pick.score <
             symbolBucketFloor(live.bucketBook, live.memory, pick.venue, pick.symbol, live.mode)
           ) {
+            govAfter = recordRejection(govAfter, {
+              symbol: pick.symbol,
+              source: "tape",
+              gate: "edge",
+              observed: `learned floor ${Math.round(symbolBucketFloor(live.bucketBook, live.memory, pick.venue, pick.symbol, live.mode))} > score ${pick.score}`,
+              wouldBeSizeUsd: 0,
+            });
             break;
           }
 
@@ -1535,7 +1571,16 @@ export const useDesk = create<DeskState>()(
             live.selectedModel.id,
           );
 
-          if (!verdict.allowed || verdict.notional <= 0) break;
+          if (!verdict.allowed || verdict.notional <= 0) {
+            govAfter = recordRejection(govAfter, {
+              symbol: pick.symbol,
+              source: "tape",
+              gate: "guard",
+              observed: (verdict.reasons[0] ?? "risk engine verdict not allowed").slice(0, 180),
+              wouldBeSizeUsd: verdict.notional,
+            });
+            break;
+          }
 
           // Final stake guard: portfolio budget split by this position's target.
           const tapeStake = clampToStakeBudget(
@@ -1549,6 +1594,13 @@ export const useDesk = create<DeskState>()(
             useDesk.setState((prev) => ({
               log: pushLog(prev.log, `Stake guard blocked ${pick.symbol}: ${tapeStake.reason}`),
             }));
+            govAfter = recordRejection(govAfter, {
+              symbol: pick.symbol,
+              source: "tape",
+              gate: "budget",
+              observed: (tapeStake.reason ?? "stake budget blocked").slice(0, 180),
+              wouldBeSizeUsd: verdict.notional,
+            });
             break;
           }
 
@@ -1562,6 +1614,7 @@ export const useDesk = create<DeskState>()(
           });
 
           if (!result.ok) break;
+          cycleFills += 1;
 
         const venueName = venueFor(pick);
         const hashStr = pick.chain === "solana" ? makeSolHash() : makeHash();
@@ -1602,6 +1655,16 @@ export const useDesk = create<DeskState>()(
         telegramAlert(`Monroe paper entry\n${noteLine}`);
           } // end tapeAttempt
         }
+
+        // Close the cycle: feed the governor (fills reset starvation; starved
+        // cycles with an alive tape walk the relaxation ladder and alert when
+        // a new step applies).
+        if (cycleFills > 0) govAfter = recordEntryFilled(govAfter);
+        const ticked = tickGovernor(govAfter, { entriesFilled: cycleFills, guardHalted: false, feedsAlive });
+        useDesk.setState((prev) => ({
+          flowGovernor: ticked.state,
+          log: ticked.alert ? pushLog(prev.log, ticked.alert) : prev.log,
+        }));
       },
 
       manualEnter: (c: Candidate) => {
@@ -2128,6 +2191,8 @@ export const useDesk = create<DeskState>()(
         // Equity guard
         equityGuardState: s.equityGuardState,
         equityGuardConfig: s.equityGuardConfig,
+        // Flow governor starvation state
+        flowGovernor: s.flowGovernor,
         // Bot interoperability + discipline targets
         entrySources: s.entrySources,
         engineCycle: s.engineCycle,

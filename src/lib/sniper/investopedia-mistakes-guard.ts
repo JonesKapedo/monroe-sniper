@@ -90,7 +90,12 @@ export function auditAcademicSafeguards(
   });
 
   // 3. AML WATCHER: Rug Pull vs Organic Liquidity Gate
-  // Evaluates contract flags for honeypot traits, mint authority, and pool depth
+  // Evaluates contract flags for honeypot traits, mint authority, and pool depth.
+  // CEX majors publish flow, not pool depth — an unpublished book (depthUnknown)
+  // is neutral here, exactly like the pre-trade screen and entry verdict treat
+  // it. Un-vetoed depth never fakes depth: the $10k floor still applies to
+  // every venue that publishes a real number.
+  const depthUnknown = candidate.liquidityUnknown === true;
   const hasRugFlag = candidate.flags.some(
     (f) =>
       f.includes("THIN") ||
@@ -98,7 +103,7 @@ export function auditAcademicSafeguards(
       f.includes("MINTABLE") ||
       f.includes("BLACKLIST"),
   );
-  const isRugRisk = hasRugFlag || liq < 12_000;
+  const isRugRisk = hasRugFlag || (!depthUnknown && liq < 12_000);
   if (isRugRisk) {
     flags.push("RUG_OR_LIQUIDITY_DEFICIT");
   }

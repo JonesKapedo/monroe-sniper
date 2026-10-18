@@ -869,9 +869,10 @@ export function chooseEntry(
   minScore: number,
   now = Date.now(),
   securityOf: (id: string) => SecurityVerdict = () => "unknown",
+  relaxStep = 0,
 ): Candidate | null {
   const ranked = tape
-    .map((c) => ({ c, edge: assessEdge(c) }))
+    .map((c) => ({ c, edge: assessEdge(c, relaxStep) }))
     .filter((row) => row.edge.act)
     .sort((a, b) => b.edge.edge - a.edge.edge || b.c.score - a.c.score);
   for (const row of ranked) {
@@ -881,6 +882,40 @@ export function chooseEntry(
     if (entryVerdict(book, row.c, now, minScore).allowed) return row.c;
   }
   return null;
+}
+
+/**
+ * Explain a starved cycle: how many names acted as tradable, where the top
+ * near-miss died (pre-trade screen), and — if it survived the screen — which
+ * verdict line blocked it. Powers desk telemetry; pure and cheap.
+ */
+export function explainTapeIdle(
+  book: Book,
+  tape: Candidate[],
+  minScore: number,
+  relaxStep = 0,
+  securityOf: (id: string) => SecurityVerdict = () => "unknown",
+): { summary: string } {
+  const ranked = tape
+    .map((c) => ({ c, edge: assessEdge(c, relaxStep) }))
+    .sort((a, b) => b.edge.edge - a.edge.edge || b.c.score - a.c.score);
+  const acted = ranked.filter((row) => row.edge.act).length;
+  for (const row of ranked) {
+    if (securityOf(row.c.id) === "reject") continue;
+    if (!row.edge.act) continue;
+    const v = entryVerdict(book, row.c, Date.now(), minScore);
+    if (!v.allowed) {
+      const line = v.lines.find((l) => !l.pass);
+      return {
+        summary: `Tape ${tape.length}: ${acted} tradeable · ${row.c.symbol}(${row.c.score}) blocked — ${line?.label ?? "verdict"}: ${line?.detail ?? ""}`,
+      };
+    }
+    return { summary: `Tape ${tape.length}: ${acted} tradeable · ${row.c.symbol}(${row.c.score}) passed gates` };
+  }
+  const top = ranked[0];
+  return {
+    summary: `Tape ${tape.length}: ${acted} tradeable · ${top ? `${top.c.symbol}(${top.c.score}) "${top.edge.why}"` : "empty tape"}`,
+  };
 }
 
 export function deposit(book: Book, amount: number): Book {
