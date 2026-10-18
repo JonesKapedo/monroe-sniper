@@ -112,7 +112,7 @@ export function Desk() {
   const wins = book.trades.filter((t) => t.pnl > 0).length;
   const hitRate = book.trades.length > 0 ? (wins / book.trades.length) * 100 : 0;
   const perpFunding = useDesk((s) => s.perpFunding);
-  const avenues = scanAllAvenues(book, disciplineRules, nowTs, { funding: perpFunding });
+  const avenues = scanAllAvenues(book, disciplineRules, nowTs, { funding: perpFunding, tape });
 
   const scan = useCallback(async (q: string) => {
     setBusy(true);

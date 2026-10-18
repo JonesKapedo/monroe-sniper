@@ -3,6 +3,7 @@ import {
   buildExitPlan,
   evaluateExit,
   initExitRuntime,
+  type ExitProfile,
   type ExitRuntime,
 } from "./sniper/exits";
 import { resolveConcurrentSlots, DEFAULT_CONCURRENT } from "./sniper/slots";
@@ -64,6 +65,9 @@ export type Position = {
   entryVolume24h?: number;
   pairAgeHours?: number | null;
   exitRuntime?: ExitRuntime;
+  /** Per-model exit ladder (breakeven/scale-out/trail). Persisted so the
+   *  tick rebuilds each model's ladder instead of a fixed default. */
+  exitProfile?: ExitProfile;
   lastFreshMarkAt?: number;
 };
 
@@ -372,6 +376,7 @@ export function enter(
     target?: number;
     priceSource?: string;
     maxPositions?: number;
+    exitProfile?: ExitProfile;
   },
 ): { book: Book; ok: boolean; note: string } {
   const v = entryVerdict(
@@ -392,7 +397,7 @@ export function enter(
   const stopToUse = customSizing?.stop ?? v.sim.fill * 0.92;
   const targetToUse = customSizing?.target ?? v.sim.fill * 1.06;
 
-  const plan = buildExitPlan(v.sim.fill, stopToUse);
+  const plan = buildExitPlan(v.sim.fill, stopToUse, customSizing?.exitProfile);
   const atrGuess = Math.abs(v.sim.fill - stopToUse) || v.sim.fill * 0.02;
   const pos: Position = {
     id: stamp("pos"),
@@ -414,6 +419,7 @@ export function enter(
     entryVolume24h: c.volume24h,
     pairAgeHours: c.pairAgeHours,
     exitRuntime: initExitRuntime(v.sim.fill, plan, qtyToUse, atrGuess, now),
+    exitProfile: customSizing?.exitProfile,
     lastFreshMarkAt: now,
   };
   const next: Book = {
@@ -487,7 +493,7 @@ export function markBook(
       continue;
     }
     // Growth exit engine (Chandelier ladder) — no fixed +6% full take-profit.
-    const plan = buildExitPlan(p.entryPrice, p.stop);
+    const plan = buildExitPlan(p.entryPrice, p.stop, p.exitProfile);
     let runtime =
       p.exitRuntime ??
       initExitRuntime(p.entryPrice, plan, p.qty, Math.abs(p.entryPrice - p.stop) || p.entryPrice * 0.02, p.openedAt);
@@ -778,6 +784,33 @@ export function floorFor(
   const agg = buckets[bucketId({ venue, reason, mode })];
   if (agg && agg.seen >= 4) return agg.minScore;
   return global.minScore;
+}
+
+/**
+ * Strictest learned floor for a symbol across every reason bucket
+ * (`venue/* /SYMBOL`). Entry time has no close reason yet, so this is the only
+ * way to let a symbol's own win/loss history raise its bar without pinning a
+ * single reason. Returns the global floor when no symbol bucket has a voice
+ * (seen ≥ 2), so untouched symbols are never penalised.
+ */
+export function symbolBucketFloor(
+  buckets: BucketBook,
+  global: Memory,
+  venue: string,
+  symbol: string,
+  mode = "demo",
+): number {
+  const want = symbol.toUpperCase();
+  let floor = global.minScore;
+  for (const [id, mem] of Object.entries(buckets)) {
+    if (mem.seen < 2) continue;
+    const parts = id.split("/");
+    if (parts.length < 3) continue;
+    if (parts[parts.length - 1] !== want) continue;
+    if (parts[0] !== (venue || "unknown")) continue;
+    floor = Math.max(floor, mem.minScore);
+  }
+  return floor;
 }
 
 /** Nudge the score floor from closed-trade evidence. History is the only teacher.

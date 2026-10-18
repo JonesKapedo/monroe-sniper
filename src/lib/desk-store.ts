@@ -12,12 +12,16 @@ import {
   emptyMemory,
   enter,
   learn,
+  learnBuckets,
+  emptyBucketBook,
+  symbolBucketFloor,
   markBook,
   setKill,
   withdraw,
   equity,
   exposure,
   DEMO_START,
+  type BucketBook,
 } from "./paper";
 import {
   evaluateRiskAndSize,
@@ -26,7 +30,7 @@ import {
   type SizingProfile,
   type SizingVerdict,
 } from "./sniper/risk-engine";
-import { MODELS, type RiskModelProfile } from "./sniper/risk-models";
+import { MODELS, exitProfileForModel, type RiskModelProfile } from "./sniper/risk-models";
 import {
   TIER_CONFIGS,
   applyStakeBudget,
@@ -151,6 +155,8 @@ type DeskState = {
   demo: Book;
   live: Book;
   memory: Memory;
+  /** Per-(venue × reason × symbol) learning evidence — richer than the global Memory. */
+  bucketBook: BucketBook;
   tape: Candidate[];
   note: string;
   log: string[];
@@ -601,6 +607,7 @@ export const useDesk = create<DeskState>()(
       tradingLedger: createPaperAccount(DEMO_START),
       live: emptyBook(0),
       memory: emptyMemory(),
+      bucketBook: emptyBucketBook(),
       tape: [],
       note: `Paper trading sandbox active ($${DEMO_START}). Arm power to auto-snipe.`,
       log: [`System initialized. Demo balance: $${DEMO_START}.00`, "Risk engine active: Volatility-adjusted ATR sizing"],
@@ -1140,6 +1147,7 @@ export const useDesk = create<DeskState>()(
         if (openPositions.some((p) => !(enriched[p.tokenId] > 0))) {
           const anchors = avenueAnchors(s.demo, s.disciplineRules, Date.now(), {
             funding: s.perpFunding,
+            tape: s.tape,
           });
           for (const p of openPositions) {
             if (enriched[p.tokenId] > 0) continue;
@@ -1184,6 +1192,22 @@ export const useDesk = create<DeskState>()(
         const stopStreak = { ...s.stopStreak };
         const lastStopAt = { ...s.lastStopAt };
         const lastCloseAt = { ...s.lastCloseAt };
+
+        // Bucket learning: fold every teachable close into its venue × reason
+        // and per-symbol buckets so a winning symbol and a bleeding one stop
+        // cancelling out in a single global average.
+        let bucketBook = s.bucketBook;
+        for (const { trade, mode } of closedTrades) {
+          if (trade.simulated || trade.reason === "MANUAL") continue;
+          bucketBook = learnBuckets(
+            bucketBook,
+            trade.venue ?? "unknown",
+            trade.reason,
+            trade.symbol,
+            trade.pnl,
+            mode,
+          );
+        }
 
         for (const { trade, mode } of closedTrades) {
           // Any close sits the symbol out: TARGET loops re-firing every cycle
@@ -1232,6 +1256,7 @@ export const useDesk = create<DeskState>()(
           demo: demoAbs.book,
           live: liveAbs.book,
           memory: liveAbs.memory,
+          bucketBook,
           executions: nextExecs,
           log: nextLog,
           stopStreak,
@@ -1326,6 +1351,7 @@ export const useDesk = create<DeskState>()(
         // 1. Professional avenue entries — diversified multi-slot (not one stuck perp).
         const avenues = scanAllAvenues(currentBook, s.disciplineRules, Date.now(), {
           funding: s.perpFunding,
+          tape: s.tape,
         });
         if (s.entrySources.avenues && avenues.length > 0) {
           const maxSlots = cycleMaxSlots;
@@ -1352,7 +1378,7 @@ export const useDesk = create<DeskState>()(
           const picks = selectDiversifiedEntries(
             ranked,
             currentBook.positions.map((pos) => ({ tokenId: pos.tokenId, symbol: pos.symbol })),
-            Math.min(slotsLeft, 3),
+            Math.min(slotsLeft, 6),
             55,
           );
           for (const pick of picks) {
@@ -1365,9 +1391,13 @@ export const useDesk = create<DeskState>()(
 
             const turboNow = st.selectedModel.id === "[degen]";
             const profileFloorNow = st.selectedModel.minScore ?? 48;
-            const floor = turboNow
+            const baseFloor = turboNow
               ? Math.max(40, Math.min(st.memory.minScore, profileFloorNow) - 12)
               : Math.min(st.memory.minScore, profileFloorNow);
+            const floor = Math.max(
+              baseFloor,
+              symbolBucketFloor(st.bucketBook, st.memory, "hyperliquid", avenue.symbol, st.mode),
+            );
 
             const aveCand: Candidate = {
               id: avenue.id,
@@ -1408,12 +1438,16 @@ export const useDesk = create<DeskState>()(
               continue;
             }
             const notional = stake.notional;
+            const anchor = (avenue.anchorSymbol ?? avenue.symbol).toUpperCase();
+            const priceSource =
+              avenue.category === "PERPS" ? `hyperliquid:${anchor}` : `anchor:${anchor}`;
             const result = enter(bookNow, aveCand, Date.now(), floor, {
               notional,
               stop: avenue.stopLossPrice,
               target: avenue.targetPrice,
-              priceSource: `hyperliquid:${(avenue.anchorSymbol ?? avenue.symbol).toUpperCase()}`,
+              priceSource,
               maxPositions: maxSlots,
+              exitProfile: exitProfileForModel(st.selectedModel),
             });
             if (!result.ok) continue;
 
@@ -1481,6 +1515,15 @@ export const useDesk = create<DeskState>()(
             break;
           }
 
+          // Learned per-symbol floor: a symbol with its own losing history must
+          // clear a higher bar than the global average, even mid-cycle.
+          if (
+            pick.score <
+            symbolBucketFloor(live.bucketBook, live.memory, pick.venue, pick.symbol, live.mode)
+          ) {
+            break;
+          }
+
           // Run through the quantitative risk engine
           const verdict = evaluateRiskAndSize(
             tapeBook,
@@ -1515,6 +1558,7 @@ export const useDesk = create<DeskState>()(
             target: verdict.targetPrice,
             priceSource: `tape:${pick.id}`,
             maxPositions: tapeMaxSlots,
+            exitProfile: exitProfileForModel(live.selectedModel),
           });
 
           if (!result.ok) break;
@@ -1609,6 +1653,7 @@ export const useDesk = create<DeskState>()(
           stop: verdict.stopPrice,
           target: verdict.targetPrice,
           priceSource: `tape:${c.id}`,
+          exitProfile: exitProfileForModel(s.selectedModel),
         });
 
         if (!result.ok) {
@@ -1654,9 +1699,13 @@ export const useDesk = create<DeskState>()(
         const didClose = book.positions.length < s[mode].positions.length;
         const closed = didClose ? book.trades[0] : undefined;
         const memory = didClose && closed ? learn(s.memory, closed.pnl) : s.memory;
+        const bucketBook = didClose && closed
+          ? learnBuckets(s.bucketBook, closed.venue ?? "unknown", closed.reason, closed.symbol, closed.pnl, mode)
+          : s.bucketBook;
         set({
           [mode]: book,
           memory,
+          bucketBook,
           note: didClose && closed ? `Flattened ${closed.symbol}: PnL $${closed.pnl.toFixed(2)}` : "Position closed",
           log: pushLog(
             s.log,
@@ -1673,6 +1722,7 @@ export const useDesk = create<DeskState>()(
         const mode = s.mode;
         let book = s[mode];
         let memory = s.memory;
+        let bucketBook = s.bucketBook;
         const closedTrades: ClosedTrade[] = [];
         for (const position of [...book.positions]) {
           book = closeOne(book, position.id);
@@ -1680,11 +1730,13 @@ export const useDesk = create<DeskState>()(
           if (closed) {
             closedTrades.push(closed);
             memory = learn(memory, closed.pnl);
+            bucketBook = learnBuckets(bucketBook, closed.venue ?? "unknown", closed.reason, closed.symbol, closed.pnl, mode);
           }
         }
         set({
           [mode]: book,
           memory,
+          bucketBook,
           note: "All open paper positions flattened.",
           log: pushLog(s.log, `Flattened all [${mode.toUpperCase()}]`),
         });

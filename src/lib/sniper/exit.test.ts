@@ -2,6 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { exitHit, oppositeExit } from "./exit.ts";
 import type { Position } from "./types.ts";
+import { MODELS, exitProfileForModel } from "./risk-models.ts";
+import { buildExitPlan, evaluateExit, initExitRuntime } from "./exits.ts";
 
 const TIME_STOP = 28;
 
@@ -51,6 +53,36 @@ describe("exitHit", () => {
   it("prefers the stop over the target when a bar spans both", () => {
     const wide = long({ stop: 100.5, target: 100.5 });
     assert.equal(exitHit(wide, 100.5, 1, TIME_STOP)?.reason, "STOP");
+  });
+});
+
+describe("per-model exit ladders", () => {
+  it("banks earlier the more aggressive the model", () => {
+    const degen = exitProfileForModel(MODELS["[degen]"]);
+    const elvis = exitProfileForModel(MODELS["[elvis]"]);
+    const gradient = exitProfileForModel(MODELS["gradient"]);
+    const paranoid = exitProfileForModel(MODELS["[paranoid]"]);
+    assert.ok(degen.scaleOut2AtR! < elvis.scaleOut2AtR!);
+    assert.ok(elvis.scaleOut2AtR! < gradient.scaleOut2AtR!);
+    assert.ok(gradient.scaleOut2AtR! < paranoid.scaleOut2AtR!);
+    assert.ok(degen.scaleOut1AtR! < paranoid.scaleOut1AtR!);
+  });
+
+  it("Turbo caps the time stop at the run length; others hold longer", () => {
+    assert.equal(exitProfileForModel(MODELS["[degen]"]).timeStopMinutes, MODELS["[degen]"].runMinutes);
+    assert.ok((exitProfileForModel(MODELS.gradient).timeStopMinutes ?? 0) > MODELS["[degen]"].runMinutes!);
+  });
+
+  it("a Turbo ladder scales out sooner than the default ladder at the same R", () => {
+    const entry = 100;
+    const stop = 98; // risk 2
+    const turboPlan = buildExitPlan(entry, stop, exitProfileForModel(MODELS["[degen]"]));
+    const now = Date.now();
+    // +0.75R (mark 101.5) is past Turbo's breakeven trigger, then +1R (102) scales.
+    let rt = initExitRuntime(entry, turboPlan, 10, 1.5, now);
+    rt = evaluateExit("LONG", entry, 101.5, turboPlan, rt, { now, lastFreshMarkAt: now }).runtime;
+    const d = evaluateExit("LONG", entry, 102, turboPlan, rt, { now, lastFreshMarkAt: now });
+    assert.equal(d.action.kind, "SCALE_OUT");
   });
 });
 

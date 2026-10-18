@@ -111,6 +111,7 @@ export function Frame({ children }: { children: ReactNode }) {
               try {
                 const avenues = scanAllAvenues(current[current.mode], current.disciplineRules, Date.now(), {
                   funding: current.perpFunding,
+                  tape: combined,
                 });
                 const onTape = new Set(
                   combined.map((c) => c.symbol.toUpperCase().split(/[/:_\- ]/)[0]),

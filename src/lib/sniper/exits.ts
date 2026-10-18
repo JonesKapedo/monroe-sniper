@@ -80,7 +80,18 @@ export const DEFAULT_EXIT_PROFILE = {
   staleFailsafeMinutes: 15,
 } as const;
 
-export type ExitProfile = Partial<typeof DEFAULT_EXIT_PROFILE>;
+export interface ExitProfile {
+  breakevenTriggerR?: number;
+  breakevenBufferR?: number;
+  scaleOut1AtR?: number;
+  scaleOut1Fraction?: number;
+  scaleOut2AtR?: number;
+  scaleOut2Fraction?: number;
+  runnerTrailAtrMult?: number;
+  volSpikeTrailAtrMult?: number;
+  timeStopMinutes?: number | null;
+  staleFailsafeMinutes?: number;
+}
 
 export function buildExitPlan(
   entryPrice: number,
