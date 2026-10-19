@@ -123,7 +123,9 @@ export function Frame({ children }: { children: ReactNode }) {
         useSniper.getState().runTicks(0);
       }
 
-      if ((desk.power || desk.demo.positions.length > 0) && tickCount % 3 === 0) {
+      const hasWorking = useDesk.getState().workingOrders.some((o) => o.status === "WORKING");
+      const hasAlerts = useDesk.getState().alerts.some((a) => !a.fired);
+      if ((desk.power || desk.demo.positions.length > 0 || hasWorking || hasAlerts) && tickCount % 3 === 0) {
         try {
           const feeds = await loadFeeds({ data: {} });
           const combined = [...feeds.binance, ...feeds.dex];
@@ -201,6 +203,7 @@ export function Frame({ children }: { children: ReactNode }) {
             }
             if (current.power) current.tick(prices, false, fxStale);
             else if (current.demo.positions.length > 0) current.tick(prices, true, fxStale);
+            useDesk.getState().workOrders(prices);
             lastPrices = prices;
             lastHadPrices = true;
           }

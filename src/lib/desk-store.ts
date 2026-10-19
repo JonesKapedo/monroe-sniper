@@ -66,9 +66,12 @@ import {
 import { setupVector, type SetupVector } from "./math/vectors";
 import { fibReentryDelayMin } from "./math/fib";
 import { useMascot } from "./mascot";
+import { notify } from "./notifications";
 import { getDbHealth, saveTradeLearning, type TradeLearningEvent } from "./trade-memory.functions";
 import { getLiveStatus, placeLiveOrder } from "./trading/live/live.functions";
 import type { LiveOrderRequest, LiveStatus } from "./trading/live/types";
+import { shouldTrigger, type WorkingOrderType } from "./trading/working-orders";
+export type { WorkingOrderType };
 
 /** A real-order outcome for the live activity feed. */
 export type LiveOrderLogEntry = { at: number; ok: boolean; symbol: string; side: "buy" | "sell"; note: string };
@@ -120,6 +123,33 @@ export type ManualEnterOptions = {
   stop?: number;
   /** Absolute take-profit (USD); defaults to the risk-engine target. */
   target?: number;
+};
+
+export type WorkingOrder = {
+  id: string;
+  symbol: string;
+  tokenId: string;
+  side: "buy" | "sell";
+  type: WorkingOrderType;
+  notionalUsd: number;
+  /** Trigger price: buy limit fills at/below, buy stop at/above (inverted for sells). */
+  trigger: number;
+  stop?: number;
+  target?: number;
+  tif: "GTC" | "IOC" | "FOK";
+  createdAt: number;
+  status: "WORKING" | "FILLED" | "CANCELLED";
+  note: string;
+};
+
+export type AlertRule = {
+  id: string;
+  symbol: string;
+  tokenId: string;
+  above?: number;
+  below?: number;
+  createdAt: number;
+  fired: boolean;
 };
 export type DbSource = "neon" | "pglite" | "unknown";
 export type TurboPhase = "off" | "running" | "cooling";
@@ -249,6 +279,25 @@ type DeskState = {
   setTape: (rows: Candidate[], note: string) => void;
   /** Read-only market pull for the workspace (loads the tape without arming). Returns row count. */
   refreshTape: () => Promise<number>;
+  /** Resting limit/stop orders, evaluated against marks each engine cycle. */
+  workingOrders: WorkingOrder[];
+  alerts: AlertRule[];
+  placeWorkingOrder: (input: {
+    tokenId: string;
+    symbol: string;
+    side: "buy" | "sell";
+    type: WorkingOrderType;
+    notionalUsd: number;
+    trigger: number;
+    stop?: number;
+    target?: number;
+    tif: WorkingOrder["tif"];
+  }) => { ok: boolean; note: string };
+  cancelWorkingOrder: (id: string) => void;
+  /** Evaluate resting orders + price alerts against the latest marks. */
+  workOrders: (prices: Record<string, number>) => void;
+  addAlert: (input: { tokenId: string; symbol: string; above?: number; below?: number }) => { ok: boolean; note: string };
+  removeAlert: (id: string) => void;
   tick: (
     prices: Record<string, number>,
     monitorOnly?: boolean,
@@ -668,6 +717,8 @@ export const useDesk = create<DeskState>()(
       memory: emptyMemory(),
       bucketBook: emptyBucketBook(),
       tape: [],
+      workingOrders: [],
+      alerts: [],
       note: `Demo sandbox active ($${DEMO_START}). Arm the desk to auto-trade.`,
       log: [`System initialized. Demo balance: $${DEMO_START}.00`, "Risk engine active: Volatility-adjusted ATR sizing"],
       executions: [],
@@ -1127,6 +1178,133 @@ export const useDesk = create<DeskState>()(
           return combined.length;
         }
         return 0;
+      },
+
+      placeWorkingOrder: (input) => {
+        if (!Number.isFinite(input.trigger) || input.trigger <= 0) {
+          return { ok: false, note: "Enter a valid trigger price." };
+        }
+        const price = get().tape.find((c) => c.id === input.tokenId)?.priceUsd ?? Number.NaN;
+        const marketable = shouldTrigger(input.type, input.side, input.trigger, price);
+        if (input.tif !== "GTC" && Number.isFinite(price) && !marketable) {
+          return { ok: false, note: `${input.tif} not marketable at $${price.toFixed(4)} — cancelled.` };
+        }
+        const order: WorkingOrder = {
+          id: `wo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          symbol: input.symbol,
+          tokenId: input.tokenId,
+          side: input.side,
+          type: input.type,
+          notionalUsd: Math.max(1, input.notionalUsd),
+          trigger: input.trigger,
+          stop: input.stop,
+          target: input.target,
+          tif: input.tif,
+          createdAt: Date.now(),
+          status: "WORKING",
+          note: "Resting",
+        };
+        set((s) => ({
+          workingOrders: [order, ...s.workingOrders].slice(0, 60),
+          log: pushLog(s.log, `Working ${input.type} ${input.side} ${input.symbol} @ $${input.trigger} (${input.tif})`),
+        }));
+        return { ok: true, note: `${input.type.toUpperCase()} ${input.side} ${input.symbol} @ $${input.trigger} working.` };
+      },
+
+      cancelWorkingOrder: (id) =>
+        set((s) => ({
+          workingOrders: s.workingOrders.map((o) =>
+            o.id === id && o.status === "WORKING" ? { ...o, status: "CANCELLED" as const, note: "Cancelled" } : o,
+          ),
+        })),
+
+      addAlert: (input) => {
+        if (input.above === undefined && input.below === undefined) {
+          return { ok: false, note: "Set an above or below price." };
+        }
+        const alert: AlertRule = {
+          id: `al-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+          symbol: input.symbol,
+          tokenId: input.tokenId,
+          above: input.above,
+          below: input.below,
+          createdAt: Date.now(),
+          fired: false,
+        };
+        set((s) => ({ alerts: [alert, ...s.alerts].slice(0, 40), log: pushLog(s.log, `Price alert set on ${input.symbol}`) }));
+        return { ok: true, note: `Alert armed on ${input.symbol}.` };
+      },
+
+      removeAlert: (id) => set((s) => ({ alerts: s.alerts.filter((a) => a.id !== id) })),
+
+      workOrders: (prices) => {
+        // Price alerts first — independent of resting orders.
+        const pending = get().alerts.filter((a) => !a.fired);
+        if (pending.length) {
+          const hit = pending.filter((a) => {
+            const p = prices[a.tokenId];
+            if (!Number.isFinite(p)) return false;
+            return (a.above !== undefined && p >= a.above) || (a.below !== undefined && p <= a.below);
+          });
+          if (hit.length) {
+            set((s) => ({ alerts: s.alerts.map((a) => (hit.some((h) => h.id === a.id) ? { ...a, fired: true } : a)) }));
+            for (const a of hit) {
+              const mark = prices[a.tokenId] ?? 0;
+              const msg = `${a.symbol} ${a.above !== undefined && mark >= a.above ? "≥" : "≤"} $${a.above ?? a.below}`;
+              notify({ severity: "info", title: `Alert: ${msg}`, body: `Mark $${mark.toFixed(4)}` });
+              telegramAlert(`Monroe alert\n${msg}\nMark $${mark.toFixed(4)}`);
+            }
+          }
+        }
+
+        const working = get().workingOrders.filter((o) => o.status === "WORKING");
+        for (const order of working) {
+          const price = prices[order.tokenId];
+          if (!Number.isFinite(price)) continue;
+          const triggered = shouldTrigger(order.type, order.side, order.trigger, price);
+          if (!triggered) continue;
+
+          const cur = get();
+          let ok = false;
+          let note = "";
+          if (order.side === "buy") {
+            const cand = cur.tape.find((c) => c.id === order.tokenId);
+            if (cand) {
+              const res = cur.manualEnter(
+                { ...cand, priceUsd: order.trigger },
+                { notionalUsd: order.notionalUsd, stop: order.stop, target: order.target },
+              );
+              ok = res.ok;
+              note = res.ok ? `Filled ${order.symbol} @ $${order.trigger}` : res.note;
+            } else {
+              note = "Symbol left the tape";
+            }
+          } else {
+            const pos = cur[cur.mode].positions.find(
+              (p) => p.tokenId === order.tokenId || p.symbol === order.symbol,
+            );
+            if (pos) {
+              cur.flatten(pos.id);
+              ok = true;
+              note = `Flattened ${order.symbol} @ $${order.trigger}`;
+            } else {
+              note = "No position to close";
+            }
+          }
+          set((s) => ({
+            workingOrders: s.workingOrders.map((o) =>
+              o.id === order.id
+                ? { ...o, status: (ok ? "FILLED" : "CANCELLED") as WorkingOrder["status"], note }
+                : o,
+            ),
+            log: pushLog(
+              s.log,
+              ok
+                ? `Working ${order.type} ${order.side} filled: ${order.symbol}`
+                : `Working order dropped: ${order.symbol} — ${note}`,
+            ),
+          }));
+        }
       },
 
       setTape: (rows, note) => {
@@ -2428,6 +2606,8 @@ export const useDesk = create<DeskState>()(
         tradingLedger: s.tradingLedger,
         riskSettings: s.riskSettings,
         disciplineRules: s.disciplineRules,
+        workingOrders: s.workingOrders,
+        alerts: s.alerts,
         tradeLearningDbCount: s.tradeLearningDbCount,
         dbSource: s.dbSource,
         dbLastWriteAt: s.dbLastWriteAt,
