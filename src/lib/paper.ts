@@ -708,9 +708,11 @@ export type BucketKey = {
 };
 
 export function bucketId(key: BucketKey): string {
+  // Discipline is global: demo and live share one accumulator per
+  // venue/reason/symbol, so a lesson learned in either mode applies to both.
+  // (`mode` on BucketKey is retained for call-site compatibility but ignored.)
   const parts = [key.venue || "unknown", key.reason || "ANY"];
   if (key.symbol) parts.push(key.symbol.toUpperCase());
-  if (key.mode && key.mode !== "demo") parts.push(key.mode.toUpperCase());
   return parts.join("/");
 }
 
@@ -995,17 +997,17 @@ async function readAllBucketKeys(mode: string): Promise<string[]> {
 
 /** Delete a single bucket key from the DB. */
 async function deleteBucketKey(key: string, mode: string): Promise<void> {
-  // @ts-ignore: dynamic import pattern established elsewhere in this file
-  const { getDb } = await import("@/lib/supabase");
-  const db = getDb();
+  const { getSupabase } = await import("@/lib/supabase");
+  const db = getSupabase();
+  if (!db) return;
   await db.from("learning_buckets").delete().eq("key", key).eq("mode", mode);
 }
 
 /** Upsert a single bucket key into the DB. */
 async function upsertBucketKey(key: string, mem: Memory, mode: string): Promise<void> {
-  // @ts-ignore: dynamic import pattern established elsewhere in this file
-  const { getDb } = await import("@/lib/supabase");
-  const db = getDb();
+  const { getSupabase } = await import("@/lib/supabase");
+  const db = getSupabase();
+  if (!db) return;
   const { error } = await db
     .from("learning_buckets")
     .upsert({ key, minScore: mem.minScore, seen: mem.seen, wins: mem.wins, losses: mem.losses, realized: mem.realized, mode });

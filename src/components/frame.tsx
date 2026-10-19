@@ -80,7 +80,12 @@ const NAV: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 export function Frame({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const gate = useSupabaseGate();
-  const signedIn = gate.status === "signed-in";
+  // The platform ships auth OFF (`VITE_AUTH_ENABLED=false`, .grok/app-env.json).
+  // In that mode the Supabase sign-in gate is bypassed so the desk actually runs
+  // — and therefore learns — without a configured Supabase project. When auth is
+  // enabled the sign-in gate is enforced exactly as before.
+  const authDisabled = import.meta.env.VITE_AUTH_ENABLED === "false";
+  const signedIn = authDisabled || gate.status === "signed-in";
   useDeskNotifications();
 
   useEffect(() => {
@@ -331,7 +336,9 @@ export function Frame({ children }: { children: ReactNode }) {
         })
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
-          console.error("[trade-learning] Failed to restore database learning state:", error);
+          // No DB configured (auth-off deploys keep learning in localStorage) is
+          // the normal state, not a failure — log at info, surface via dbStatus.
+          console.info("[trade-learning] Database learning unavailable; keeping learning local.", message.slice(0, 160));
           useDesk.getState().setDbStatus({ source: "unknown", ok: false, error: message.slice(0, 300) });
           useDesk.setState((desk) => ({
             note: "Database learning state is unavailable; local demo learning remains active.",
@@ -346,11 +353,11 @@ export function Frame({ children }: { children: ReactNode }) {
     };
   }, [signedIn]);
 
-  if (gate.status === "misconfigured") {
+  if (!authDisabled && gate.status === "misconfigured") {
     return <LoginView client={null} misconfigured />;
   }
 
-  if (gate.status === "signed-out") {
+  if (!authDisabled && gate.status === "signed-out") {
     return <LoginView client={gate.client} misconfigured={false} />;
   }
 
@@ -523,7 +530,7 @@ function Shell({ children }: { children: ReactNode }) {
             </div>
 
             <div className="hidden text-right font-mono sm:block" suppressHydrationWarning>
-              <span className="text-[10px] tracking-wider text-faint uppercase">Demo balance:</span>{" "}
+              <span className="text-[10px] tracking-wider text-faint uppercase">{mode === "live" ? "Wallet balance:" : "Demo balance:"}</span>{" "}
               <Money value={activeEq} kind="balance" className={`text-sm font-semibold ${capitalMoodClass(activeBook.dayPnl)}`} />
               <span className="ml-2 text-[10px] text-faint">
                 cash ${activeBook.cash.toFixed(2)} · locked ${activeLocked.toFixed(2)}

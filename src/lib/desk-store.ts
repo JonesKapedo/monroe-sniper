@@ -728,12 +728,19 @@ export const useDesk = create<DeskState>()(
       ],
 
       restoreLearningState: (memory, storedTradeCount, source = "unknown") =>
-        set({
-          memory,
-          tradeLearningDbCount: storedTradeCount,
-          dbSource: source,
-          dbOk: true,
-          dbError: null,
+        set((s) => {
+          // Never regress: a stale DB snapshot (fewer closes seen) must not
+          // overwrite richer learning the desk has already accumulated locally.
+          const localSeen = s.memory?.seen ?? 0;
+          const incomingSeen = memory?.seen ?? 0;
+          const keepLocal = localSeen > incomingSeen;
+          return {
+            memory: keepLocal ? s.memory : memory,
+            tradeLearningDbCount: Math.max(storedTradeCount, localSeen, incomingSeen),
+            dbSource: source,
+            dbOk: true,
+            dbError: null,
+          };
         }),
 
       setDbStatus: (patch) =>
@@ -2159,6 +2166,7 @@ export const useDesk = create<DeskState>()(
           demo: stripTrades(s.demo),
           live: stripTrades(s.live),
           memory: emptyMemory(),
+          bucketBook: emptyBucketBook(),
           dbEvents: [],
           dbGrossWin: 0,
           dbGrossLoss: 0,

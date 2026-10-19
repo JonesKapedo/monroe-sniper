@@ -471,9 +471,9 @@ export function Desk() {
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard
-          label={`${mode.toUpperCase()} EQUITY`}
+          label={mode === "live" ? "WALLET EQUITY" : "DEMO EQUITY"}
           value={<Money value={eq} kind="balance" className={`text-lg font-bold sm:text-xl ${capitalMoodClass(book.dayPnl)}`} />}
-          sub="Demo balance"
+          sub={mode === "live" ? "Wallet balance" : "Demo balance"}
         />
         <StatCard
           label="DAY P&L"

@@ -67,7 +67,7 @@ function NetworkSwitch() {
 
 /** Header wallet button: connect prompt, or address + network when linked. */
 export function WalletButton({ compact = false }: { compact?: boolean }) {
-  const { publicKey, disconnect } = useWallet();
+  const { publicKey, disconnect, wallet } = useWallet();
   const network = useSolNetwork((s) => s.network);
   const setOpen = useWalletModal((s) => s.setOpen);
   const { health, mismatch } = useWalletBalances();
@@ -92,7 +92,7 @@ export function WalletButton({ compact = false }: { compact?: boolean }) {
     <button
       type="button"
       onClick={() => setOpen(true)}
-      title="Wallet settings (click to disconnect)"
+      title={`${wallet?.adapter.name ?? "Wallet"} connected (click for settings)`}
       onDoubleClick={() => void disconnect().catch(() => undefined)}
       className={cn(
         "inline-flex min-h-11 items-center gap-1.5 rounded-full border px-2 font-mono text-xs transition-colors sm:px-3",
@@ -107,6 +107,9 @@ export function WalletButton({ compact = false }: { compact?: boolean }) {
           health === "live" ? "bg-gain" : health === "idle" ? "bg-faint" : "bg-warn",
         )}
       />
+      <span className="hidden text-[10px] tracking-wide text-faint uppercase sm:inline">
+        {wallet?.adapter.name ?? "Wallet"}
+      </span>
       {formatAddress(publicKey.toBase58())}
       <span className={cn("rounded px-1 text-[10px] uppercase", network === "mainnet-beta" ? "bg-loss/20 text-loss" : "bg-panel-2 text-faint")}>
         {network === "mainnet-beta" ? "main" : "dev"}
