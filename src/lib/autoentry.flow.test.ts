@@ -35,6 +35,30 @@ function major(symbol: string, over: Partial<Candidate> = {}): Candidate {
 const settings = () => defaultRiskSettings;
 const slots = () => resolveConcurrentSlots(defaultRiskSettings.maxPositions);
 
+/** A CoinGecko/CMC reference major: depth unpublished, market cap posed as
+ * liquidity. Before the fix these were screened as AMM pools and starved. */
+function refMajor(symbol: string, over: Partial<Candidate> = {}): Candidate {
+  return {
+    id: `coingecko:${symbol.toLowerCase()}`,
+    symbol,
+    name: `${symbol} · CoinGecko`,
+    chain: "coingecko",
+    address: symbol,
+    priceUsd: 12.5,
+    liquidityUsd: 2_000_000_000,
+    volume24h: 40_000_000,
+    change24h: 0.3,
+    pairAgeHours: null,
+    url: null,
+    score: 80,
+    flags: [],
+    rationale: [],
+    venue: "dex",
+    liquidityUnknown: true,
+    ...over,
+  };
+}
+
 /** Exact replica of the desk autoStep tape branch (gates in the same order). */
 function tapeAttempt(book: Book, tape: Candidate[], floor: number, relaxStep: number): {
   pick: Candidate | null;
@@ -80,6 +104,13 @@ function tapeAttempt(book: Book, tape: Candidate[], floor: number, relaxStep: nu
 describe("auto-entry flow proof (desk tape branch replica)", () => {
   it("opens a position on a plain CEX major with baseline gates", () => {
     const tape = [major("WAL"), major("ATOM", { change24h: 0.6 })];
+    const res = tapeAttempt(emptyBook(500), tape, 42, 0);
+    assert.ok(res.ok, `expected fill, got: ${res.note}`);
+    assert.equal(res.book.positions.length, 1, "position opened");
+  });
+
+  it("opens a position on a reference (index) major that previously starved", () => {
+    const tape = [refMajor("ATOM")];
     const res = tapeAttempt(emptyBook(500), tape, 42, 0);
     assert.ok(res.ok, `expected fill, got: ${res.note}`);
     assert.equal(res.book.positions.length, 1, "position opened");
@@ -152,8 +183,7 @@ describe("auto-entry flow proof (desk tape branch replica)", () => {
     assert.equal(new Set(ids).size, ids.length, "no duplicate positions");
   });
 
-  it("stamps entry conditions on each position so learning has features", () => {
-    const tape = [major("WAL", { change24h: 1.1 }), major("ATOM", { change24h: 0.7 })];
+  it("stamps entry conditions on each position so learning has features", () => {    const tape = [major("WAL", { change24h: 1.1 }), major("ATOM", { change24h: 0.7 })];
     let book = emptyBook(500);
     for (const c of tape) {
       const res = tapeAttempt(book, [c], 42, 0);

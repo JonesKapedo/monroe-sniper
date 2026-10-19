@@ -86,3 +86,35 @@ test("CEX majors with unpublished depth are unaffected by the turnover guard", (
   assert.equal(edge.stance, "TREND");
 });
 
+// --- Reference (index/coin) majors must not be screened as AMM pools. ---
+
+test("a reference major with market-cap-as-liquidity is screened on flow, not turnover", () => {
+  // Regression: referenceRows posed market cap as liquidity, so turnover
+  // (volume / market cap) was structurally tiny and every listed major fell
+  // through to "Edge does not clear the prior." A score-80 name must trade.
+  const edge = assessEdge({
+    score: 80,
+    change24h: 0.3,
+    liquidityUsd: 2_000_000_000,
+    volume24h: 40_000_000,
+    pairAgeHours: null,
+    liquidityUnknown: true,
+    flags: [],
+  });
+  assert.equal(edge.act, true, `expected act, got: ${edge.why}`);
+  assert.equal(edge.stance, "TREND");
+});
+
+test("a quiet, high-score unknown-depth major still leans in rather than starving", () => {
+  const edge = assessEdge({
+    score: 78,
+    change24h: 0.05,
+    liquidityUsd: 5_000_000_000,
+    volume24h: 50_000_000,
+    pairAgeHours: null,
+    liquidityUnknown: true,
+    flags: [],
+  });
+  assert.equal(edge.act, true, `expected act, got: ${edge.why}`);
+});
+

@@ -106,21 +106,24 @@ export function assessEdge(input: EdgeInput, relaxStep = 0): Edge {
   }
 
   if (depthUnknown) {
-    notes.push("CEX depth unpublished");
+    notes.push("Depth unpublished");
   }
 
-  // CEX majors: liquidity-weighted novelty filters are meaningless (depth
-  // unpublished, pairs are never "fresh"), so the screen is purely momentum.
-  // A major printing a real move is tradeable regardless of pool metrics.
+  // Unknown-depth majors (CEX spot, index references): liquidity-weighted
+  // novelty filters are meaningless here — depth is unpublished and pairs are
+  // never "fresh" — so the screen is purely momentum + conviction. A major
+  // printing a real move, or a flow-backed name with a high score, is
+  // tradeable regardless of pool metrics. Market cap is NOT pool turnover.
   if (depthUnknown) {
     const moving = Math.abs(change) >= Math.max(0.3, 0.55 - changeFloor) && input.score >= 48 - scoreCutoff;
     const solid = input.score >= Math.max(44, 58 - scoreCutoff) && Math.abs(change) >= Math.max(0.12, 0.25 - changeFloor);
-    if (moving || solid) {
+    const strong = input.score >= Math.max(56, 66 - scoreCutoff) && change > -0.5;
+    if (moving || solid || strong) {
       return {
         act: true,
         edge: Math.min(100, edge),
         stance: "TREND",
-        why: `Major printing ${change.toFixed(1)}% on live CEX flow. ${notes.join(". ")}`.trim(),
+        why: `Major printing ${change.toFixed(1)}% on live flow. ${notes.join(". ")}`.trim(),
       };
     }
     return {

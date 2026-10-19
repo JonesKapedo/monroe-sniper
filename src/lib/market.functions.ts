@@ -188,6 +188,11 @@ function referenceRows(rows: GeckoCoin[], source: "coingecko" | "coinmarketcap")
       pairCreatedAt: null,
       url: null,
       venue: "dex",
+      // Index/coin reference rows are majors, not AMM pools: market cap is
+      // posed as liquidity for sizing, but pool DEPTH is unpublished. Without
+      // this flag the pre-trade screen treated turnover (volume / market cap,
+      // always tiny for majors) as a pool ratio and starved every one of them.
+      liquidityUnknown: true,
     });
     if (c) out.push(c);
   }
