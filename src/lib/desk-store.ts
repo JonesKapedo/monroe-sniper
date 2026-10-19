@@ -111,6 +111,16 @@ import {
 } from "./trading/ledger";
 
 export type Mode = "demo" | "live";
+
+/** Manual order-ticket overrides. All optional; the risk engine still caps them. */
+export type ManualEnterOptions = {
+  /** Requested notional (USD). Clamped down to the risk-approved stake — never up. */
+  notionalUsd?: number;
+  /** Absolute stop (USD); defaults to the risk-engine stop. */
+  stop?: number;
+  /** Absolute take-profit (USD); defaults to the risk-engine target. */
+  target?: number;
+};
 export type DbSource = "neon" | "pglite" | "unknown";
 export type TurboPhase = "off" | "running" | "cooling";
 
@@ -243,7 +253,7 @@ type DeskState = {
     staleIds?: ReadonlySet<string>,
   ) => void;
   autoStep: () => void;
-  manualEnter: (c: Candidate) => { ok: boolean; note: string; verdict?: SizingVerdict };
+  manualEnter: (c: Candidate, opts?: ManualEnterOptions) => { ok: boolean; note: string; verdict?: SizingVerdict };
   flatten: (id: string) => void;
   startTurbo: () => { ok: boolean; note: string };
   bypassTurboCooldown: () => void;
@@ -1881,17 +1891,27 @@ export const useDesk = create<DeskState>()(
         }
       },
 
-      manualEnter: (c: Candidate) => {
+      manualEnter: (c: Candidate, opts?: ManualEnterOptions) => {
         const s = get();
         if (s.mode === "live") {
           if (!(s.liveStatus?.configured ?? false)) {
             return { ok: false, note: "Live execution is not armed — set SNIPER_LIVE_ENABLED and CEX credentials on the server, then retry." };
           }
-          const notional = 25;
+          const notional = Math.max(1, opts?.notionalUsd ?? 25);
           const qty = c.priceUsd > 0 ? notional / c.priceUsd : 0;
           if (qty <= 0) return { ok: false, note: "No price available for this symbol." };
-          get().enqueueLiveOrder({ symbol: c.symbol, side: "buy", notionalUsd: notional, priceUsd: c.priceUsd, qty, clientId: `manual-${c.id}-${Date.now()}` });
-          return { ok: true, note: `Live BUY queued: ${c.symbol} $${notional} \u2192 ${s.liveStatus?.venueLabel ?? "venue"}. Guardrails apply on submit.` };
+          get().enqueueLiveOrder({
+            symbol: c.symbol,
+            side: "buy",
+            notionalUsd: notional,
+            priceUsd: c.priceUsd,
+            qty,
+            clientId: `manual-${c.id}-${Date.now()}`,
+            candidateId: c.id,
+            stopPrice: opts?.stop,
+            targetPrice: opts?.target,
+          });
+          return { ok: true, note: `Live BUY queued: ${c.symbol} $${notional.toFixed(2)} \u2192 ${s.liveStatus?.venueLabel ?? "venue"}. Guardrails apply on submit.` };
         }
         if (s.turboPhase === "cooling") {
           return { ok: false, note: "Turbo cooling — new entries resume when the cooldown lapses (or bypass it)." };
@@ -1931,11 +1951,13 @@ export const useDesk = create<DeskState>()(
             verdict,
           };
         }
-        const notional = manualStake.notional;
+        const notional = opts?.notionalUsd && opts.notionalUsd > 0
+          ? Math.min(opts.notionalUsd, manualStake.notional)
+          : manualStake.notional;
         const result = enter(currentBook, c, Date.now(), floor, {
           notional,
-          stop: verdict.stopPrice,
-          target: verdict.targetPrice,
+          stop: opts?.stop ?? verdict.stopPrice,
+          target: opts?.target ?? verdict.targetPrice,
           priceSource: `tape:${c.id}`,
           exitProfile: exitProfileForModel(s.selectedModel),
         });

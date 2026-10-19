@@ -3,6 +3,7 @@ import {
   Activity,
   Clock,
   LayoutDashboard,
+  LayoutGrid,
   LogOut,
   Radar,
   ScanSearch,
@@ -50,6 +51,10 @@ const EMPTY_FX_STALE: ReadonlySet<string> = new Set<string>();
 type NavItem = { to: string; label: string; short: string; icon: typeof LayoutDashboard };
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: "Trade",
+    items: [{ to: "/terminal", label: "Terminal", short: "Term", icon: LayoutGrid }],
+  },
   {
     label: "Live · now",
     items: [
