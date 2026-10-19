@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { bucketId, chooseEntry, closeOne, emptyBook, emptyBucketBook, enter, entryVerdict, equity, floorFor, learnBuckets, markBook, MIN_SCORE, sampleTape, scoreCandidate, setKill, simulateBuy, type Position } from "./paper.ts";
+import { bucketId, chooseEntry, closeOne, emptyBook, emptyBucketBook, enter, entryFloorFor, entryVerdict, equity, floorFor, learnBuckets, markBook, MIN_SCORE, sampleTape, scoreCandidate, setKill, simulateBuy, type Candidate, type Position } from "./paper.ts";
 
 describe("paper desk", () => {
   it("scores an unknown-depth major high enough to clear the entry floor", () => {
@@ -42,6 +42,43 @@ describe("paper desk", () => {
     });
     assert.ok(c);
     assert.ok((c?.score ?? 0) < MIN_SCORE, `expected < ${MIN_SCORE}, got ${c?.score}`);
+  });
+
+  it("caps the learned floor for unknown-depth majors so they stay reachable", () => {
+    // A losing streak can push the learned floor to 78, above anything a CEX
+    // major can score. Unknown-depth rows are capped so the desk keeps trading.
+    const cex: Candidate = {
+      id: "binance:BTCUSDT",
+      symbol: "BTC",
+      name: "BTC / USDT",
+      chain: "binance",
+      address: "BTCUSDT",
+      priceUsd: 85_000,
+      liquidityUsd: 0,
+      volume24h: 1_000_000_000,
+      change24h: 1.1,
+      pairAgeHours: null,
+      url: null,
+      score: 64,
+      flags: [],
+      rationale: [],
+      venue: "binance",
+      liquidityUnknown: true,
+    };
+    assert.equal(entryFloorFor(cex, 78), 64);
+    const v = entryVerdict(emptyBook(), cex, Date.now(), 78);
+    assert.equal(v.lines.find((l) => l.id === "score")?.label, "Score at least 64");
+    assert.equal(v.allowed, true);
+  });
+
+  it("leaves the learned floor untouched for known-depth names", () => {
+    const deep = sampleTape().find((c) => c.symbol === "WETH");
+    assert.ok(deep);
+    const risky: Candidate = { ...deep, score: 64 };
+    assert.equal(entryFloorFor(risky, 78), 78);
+    const v = entryVerdict(emptyBook(), risky, Date.now(), 78);
+    assert.equal(v.lines.find((l) => l.id === "score")?.label, "Score at least 78");
+    assert.equal(v.allowed, false);
   });
 
   it("blocks a thin fresh name", () => {

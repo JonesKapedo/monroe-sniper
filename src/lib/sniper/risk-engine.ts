@@ -1,5 +1,5 @@
 import type { Book, Candidate } from "../paper";
-import { equity, exposure } from "../paper";
+import { equity, entryFloorFor, exposure } from "../paper";
 import { auditAcademicSafeguards } from "./investopedia-mistakes-guard";
 import { fibExtensions, snapToFib } from "../math/fib";
 import { isCorrelatedDuplicate, setupVector, winnerResemblance, type SetupVector } from "../math/vectors";
@@ -253,9 +253,10 @@ export function evaluateRiskAndSize(
   const chainPass = chainCount < settings.maxPerChain;
   checks.push({ id: "chain", label: `Chain concentration (<${settings.maxPerChain})`, pass: chainPass, detail: `${chainCount}/${settings.maxPerChain} in ${candidate.chain}` });
   if (!chainPass) reasons.push(`Too many open positions in ${candidate.chain}`);
-  const scorePass = candidate.score >= minScore;
-  checks.push({ id: "score", label: `Adaptive score floor (≥${minScore})`, pass: scorePass, detail: `${candidate.score}/100` });
-  if (!scorePass) reasons.push(`Score ${candidate.score} below adaptive floor ${minScore}`);
+  const scoreFloor = entryFloorFor(candidate, minScore);
+  const scorePass = candidate.score >= scoreFloor;
+  checks.push({ id: "score", label: `Adaptive score floor (≥${scoreFloor})`, pass: scorePass, detail: `${candidate.score}/100` });
+  if (!scorePass) reasons.push(`Score ${candidate.score} below adaptive floor ${scoreFloor}`);
   checks.push({ id: "fib-geometry", label: "Fib bracket geometry", pass: true, detail: fibNote ?? (settings.sizingProfile === "TURBO" ? "Raw ATR brackets (no level within snap)" : "Classic ATR brackets") });
   checks.push({ id: "winner-resemblance", label: "Resembles past winners", pass: true, detail: `${Math.round(resemblance * 100)}% vector similarity over ${math?.winnerVectors?.length ?? 0} wins` });
   if (math?.openVectors && math.openVectors.length > 0) {

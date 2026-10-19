@@ -15,6 +15,7 @@ import {
   learnBuckets,
   emptyBucketBook,
   symbolBucketFloor,
+  entryFloorFor,
   markBook,
   explainTapeIdle,
   setKill,
@@ -1817,16 +1818,18 @@ export const useDesk = create<DeskState>()(
           attempted.add(pick.id);
 
           // Learned per-symbol floor: a symbol with its own losing history must
-          // clear a higher bar than the global average, even mid-cycle.
-          if (
-            pick.score <
-            symbolBucketFloor(live.bucketBook, live.memory, pick.venue, pick.symbol, live.mode)
-          ) {
+          // clear a higher bar than the global average, even mid-cycle. Capped
+          // for unknown-depth rows so it stays reachable (see entryFloorFor).
+          const pickSymbolFloor = entryFloorFor(
+            pick,
+            symbolBucketFloor(live.bucketBook, live.memory, pick.venue, pick.symbol, live.mode),
+          );
+          if (pick.score < pickSymbolFloor) {
             govAfter = recordRejection(govAfter, {
               symbol: pick.symbol,
               source: "tape",
               gate: "edge",
-              observed: `learned floor ${Math.round(symbolBucketFloor(live.bucketBook, live.memory, pick.venue, pick.symbol, live.mode))} > score ${pick.score}`,
+              observed: `learned floor ${Math.round(pickSymbolFloor)} > score ${pick.score}`,
               wouldBeSizeUsd: 0,
             });
             continue;
