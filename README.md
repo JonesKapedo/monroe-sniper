@@ -61,4 +61,4 @@ Live order submission is disabled by design. There is no broker key, signing pat
 
 ---
 
-[monroe-sniper.vercel.app](https://monroe-sniper.vercel.app)
+[monroe-sniper.vercel.app]( https://monroe-v2.vercel.app.)
