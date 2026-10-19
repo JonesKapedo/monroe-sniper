@@ -8,7 +8,7 @@
  * nothing here can move funds by default.
  */
 
-export type LiveVenue = "disabled" | "kraken";
+export type LiveVenue = "disabled" | "kraken" | "binance" | "coinbase";
 
 export type LiveSide = "buy" | "sell";
 
@@ -24,6 +24,12 @@ export type LiveOrderRequest = {
   qty: number;
   /** Idempotency key so a retried call cannot double-fill. */
   clientId: string;
+  /**
+   * Originating desk candidate id (client-side only). Lets the filled live
+   * position carry the same identity as the tape feed, so `markBook` can mark
+   * it and its stop/target can fire. Ignored by the venue.
+   */
+  candidateId?: string;
 };
 
 export type LiveOrderResult =

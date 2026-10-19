@@ -67,6 +67,16 @@ import { setupVector, type SetupVector } from "./math/vectors";
 import { fibReentryDelayMin } from "./math/fib";
 import { useMascot } from "./mascot";
 import { getDbHealth, saveTradeLearning, type TradeLearningEvent } from "./trade-memory.functions";
+import { getLiveStatus, placeLiveOrder } from "./trading/live/live.functions";
+import type { LiveOrderRequest, LiveStatus } from "./trading/live/types";
+
+/** A real-order outcome for the live activity feed. */
+export type LiveOrderLogEntry = { at: number; ok: boolean; symbol: string; side: "buy" | "sell"; note: string };
+
+/** Client ids already queued this session — kills duplicate enqueues. */
+const liveQueuedIds = new Set<string>();
+/** Re-entrancy guard so overlapping ticks cannot place the same cycle twice. */
+let liveStepBusy = false;
 import { markWhaleActed } from "./whales.functions";
 import { evaluateWhaleMoveForCopy, type WhaleProfile } from "./whales/intelligence";
 import type { AvenueCategory, DisciplineRules, PaperReadiness } from "./avenues/types";
@@ -184,6 +194,15 @@ type DeskState = {
   /** Gross sums across persisted closes — profit-factor inputs for readiness. */
   dbGrossWin: number;
   dbGrossLoss: number;
+  /** Secret-free live-execution status from the server (null until loaded). */
+  liveStatus: LiveStatus | null;
+  /** Queued real orders awaiting the async live runner. */
+  liveQueue: LiveOrderRequest[];
+  /** Recent real-order outcomes, newest first. */
+  liveOrders: LiveOrderLogEntry[];
+  refreshLiveStatus: () => Promise<LiveStatus | null>;
+  enqueueLiveOrder: (req: LiveOrderRequest) => void;
+  liveStep: () => Promise<void>;
   botStartedAt: number;
   restoreLearningState: (memory: Memory, storedTradeCount: number, source?: DbSource) => void;
   setDbStatus: (patch: { source?: DbSource; ok?: boolean; error?: string | null }) => void;
@@ -650,6 +669,9 @@ export const useDesk = create<DeskState>()(
       dbEvents: [],
       dbGrossWin: 0,
       dbGrossLoss: 0,
+      liveStatus: null,
+      liveQueue: [],
+      liveOrders: [],
       fxPrices: {},
       perpFunding: [],
       security: {},
@@ -1208,7 +1230,10 @@ export const useDesk = create<DeskState>()(
           }
         }
         const demoAbs = absorb(s.demo, enriched, s.memory, monitorOnly, staleIds, sources);
-        const liveAbs = absorb(s.live, enriched, demoAbs.memory, monitorOnly, staleIds, sources);
+        // When live is armed, never let the sync engine simulate a live close —
+        // it still marks positions, but exits become REAL orders in liveStep.
+        const liveArmedNow = s.mode === "live" && (s.liveStatus?.configured ?? false);
+        const liveAbs = absorb(s.live, enriched, demoAbs.memory, monitorOnly || liveArmedNow, staleIds, sources);
         const closedTrades = [
           ...demoAbs.newTrades.map((trade) => ({ trade, mode: "demo" as const })),
           ...liveAbs.newTrades.map((trade) => ({ trade, mode: "live" as const })),
@@ -1315,7 +1340,17 @@ export const useDesk = create<DeskState>()(
       autoStep: () => {
         get().tickTurbo();
         const s = get();
-        if (!s.power || s.mode !== "demo") return;
+        if (!s.power) return;
+        // Demo AND live run the same signal pipeline. Demo fills are simulated;
+        // in live mode the candidate pipeline only ENQUEUES a real order — the
+        // async `liveStep` places it and applies the venue's real fill. Never a
+        // simulated fill in the live book.
+        const liveArmed = s.mode === "live" && (s.liveStatus?.configured ?? false);
+        // Live with unknown status must never fall through to simulated fills.
+        if (s.mode === "live" && s.liveStatus === null) {
+          void get().refreshLiveStatus();
+          return;
+        }
         // Cooling halts entries only — open positions still ride to exits via tick().
         if (s.turboPhase === "cooling") return;
         
@@ -1386,7 +1421,7 @@ export const useDesk = create<DeskState>()(
           funding: s.perpFunding,
           tape: s.tape,
         });
-        if (s.entrySources.avenues && avenues.length > 0) {
+        if (s.entrySources.avenues && avenues.length > 0 && s.mode === "demo") {
           const maxSlots = cycleMaxSlots;
           const slotsLeft = Math.max(0, maxSlots - currentBook.positions.length);
           // Per-symbol cooldown only — a loss on BTC does not freeze SOL/ETH.
@@ -1633,6 +1668,27 @@ export const useDesk = create<DeskState>()(
             break;
           }
 
+          if (liveArmed) {
+            const qty = pick.priceUsd > 0 ? tapeStake.notional / pick.priceUsd : 0;
+            if (qty <= 0) break;
+            get().enqueueLiveOrder({
+              symbol: pick.symbol,
+              side: "buy",
+              notionalUsd: tapeStake.notional,
+              priceUsd: pick.priceUsd,
+              qty,
+              clientId: `entry-${pick.id}-${Date.now()}`,
+              candidateId: pick.id,
+            });
+            cycleFills += 1;
+            useDesk.setState((prev) => ({
+              log: pushLog(prev.log, `Live BUY queued: ${pick.symbol} $${tapeStake.notional.toFixed(2)} @ $${pick.priceUsd.toFixed(4)} \u2192 ${live.liveStatus?.venueLabel ?? "venue"}`),
+            }));
+            continue;
+          }
+          // Live but not armed → never simulate a fill into the live book.
+          if (live.mode === "live") break;
+
           const result = enter(tapeBook, pick, Date.now(), floorNow, {
             notional: tapeStake.notional,
             stop: verdict.stopPrice,
@@ -1696,10 +1752,129 @@ export const useDesk = create<DeskState>()(
         }));
       },
 
+      refreshLiveStatus: async () => {
+        try {
+          const status = await getLiveStatus();
+          set({ liveStatus: status });
+          return status;
+        } catch (error) {
+          const note = error instanceof Error ? error.message.slice(0, 200) : "Live status unavailable";
+          set((prev) => ({ liveStatus: null, log: pushLog(prev.log, `Live status unavailable: ${note}`) }));
+          return null;
+        }
+      },
+
+      enqueueLiveOrder: (req) => {
+        if (liveQueuedIds.has(req.clientId)) return;
+        liveQueuedIds.add(req.clientId);
+        set((prev) => ({ liveQueue: [...prev.liveQueue, req] }));
+      },
+
+      liveStep: async () => {
+        const s = get();
+        if (s.mode !== "live" || !s.power) return;
+        let status = s.liveStatus;
+        if (!status) status = await get().refreshLiveStatus();
+        if (!status?.configured || liveStepBusy) return;
+        liveStepBusy = true;
+        try {
+          // 1. Real exits: any live position at/past its stop or target is sold.
+          for (const p of get().live.positions) {
+            const atStop = p.stop > 0 && p.mark > 0 && p.mark <= p.stop;
+            const atTarget = typeof p.target === "number" && p.target > 0 && p.mark >= p.target;
+            if (!atStop && !atTarget) continue;
+            get().enqueueLiveOrder({
+              symbol: p.symbol,
+              side: "sell",
+              notionalUsd: p.qty * p.mark,
+              priceUsd: p.mark,
+              qty: p.qty,
+              clientId: `exit-${p.id}`,
+            });
+          }
+
+          // 2. Drain the queue against the venue.
+          const queue = get().liveQueue;
+          if (queue.length === 0) return;
+          set({ liveQueue: [] });
+          for (const req of queue) {
+            const res = await placeLiveOrder({
+              data: {
+                ...req,
+                realizedTodayUsd: get().live.dayPnl,
+                openPositions: get().live.positions.length,
+              },
+            });
+            if (!res.ok) {
+              liveQueuedIds.delete(req.clientId);
+              set((prev) => ({
+                liveOrders: [{ at: Date.now(), ok: false, symbol: req.symbol, side: req.side, note: res.reason }, ...prev.liveOrders].slice(0, 30),
+                log: pushLog(prev.log, `Live ${req.side} ${req.symbol} rejected: ${res.reason}`),
+              }));
+              continue;
+            }
+            if (req.side === "buy") {
+              const cand: Candidate = {
+                id: req.candidateId ?? `live-${req.clientId}`,
+                symbol: req.symbol,
+                name: req.symbol,
+                chain: "cex",
+                address: "",
+                priceUsd: res.avgPriceUsd,
+                liquidityUsd: 0,
+                volume24h: 0,
+                change24h: 0,
+                pairAgeHours: null,
+                url: null,
+                score: 0,
+                flags: ["LIVE"],
+                rationale: [`${res.venue} market fill`],
+                venue: "binance",
+              };
+              const entered = enter(get().live, cand, Date.now(), 0, {
+                notional: res.filledQty * res.avgPriceUsd,
+                priceSource: `tape:${cand.id}`,
+              });
+              set((prev) => ({
+                live: entered.book,
+                tradingLedger: touchLedgerFromBook(prev.tradingLedger, entered.book, "desk"),
+              }));
+            } else {
+              const posId = req.clientId.startsWith("exit-") ? req.clientId.slice(5) : "";
+              const liveBook = get().live;
+              if (posId && liveBook.positions.some((p) => p.id === posId)) {
+                const marked = { ...liveBook, positions: liveBook.positions.map((p) => (p.id === posId ? { ...p, mark: res.avgPriceUsd } : p)) };
+                const closed = closeOne(marked, posId, Date.now());
+                set((prev) => ({
+                  live: closed,
+                  tradingLedger: touchLedgerFromBook(prev.tradingLedger, closed, "desk"),
+                }));
+              }
+            }
+            set((prev) => ({
+              liveOrders: [{ at: Date.now(), ok: true, symbol: req.symbol, side: req.side, note: `${res.venue} ${res.venueOrderId}` }, ...prev.liveOrders].slice(0, 30),
+              log: pushLog(prev.log, `Live ${req.side} ${req.symbol} filled @ $${res.avgPriceUsd.toFixed(4)} (${res.venue})`),
+            }));
+          }
+        } catch (error) {
+          const note = error instanceof Error ? error.message : "live step failed";
+          set((prev) => ({ log: pushLog(prev.log, `Live step error: ${note}`) }));
+        } finally {
+          liveStepBusy = false;
+        }
+      },
+
       manualEnter: (c: Candidate) => {
         const s = get();
-        if (s.mode !== "demo") {
-          return { ok: false, note: "Live execution is gated; this desk runs simulated fills only." };
+        if (s.mode === "live") {
+          if (!(s.liveStatus?.configured ?? false)) {
+            return { ok: false, note: "Live execution is not armed — set SNIPER_LIVE_ENABLED and CEX credentials on the server, then retry." };
+          }
+          const notional = 25;
+          const qty = c.priceUsd > 0 ? notional / c.priceUsd : 0;
+          if (qty <= 0) return { ok: false, note: "No price available for this symbol." };
+          get().enqueueLiveOrder({ symbol: c.symbol, side: "buy", notionalUsd: notional, priceUsd: c.priceUsd, qty, clientId: `manual-${c.id}-${Date.now()}` });
+          return { ok: true, note: `Live BUY queued: ${c.symbol} $${notional} \u2192 ${s.liveStatus?.venueLabel ?? "venue"}. Guardrails apply on submit.` };
         }
         if (s.turboPhase === "cooling") {
           return { ok: false, note: "Turbo cooling — new entries resume when the cooldown lapses (or bypass it)." };

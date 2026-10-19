@@ -68,8 +68,9 @@ in the repo, never as `VITE_` vars):
 | Var | Meaning |
 | --- | --- |
 | `SNIPER_LIVE_ENABLED` | `true` to allow live orders (default off). |
-| `SNIPER_CEX_VENUE` | `kraken` (first supported venue). |
-| `SNIPER_CEX_API_KEY` / `SNIPER_CEX_API_SECRET` | Venue API credentials. |
+| `SNIPER_CEX_VENUE` | `kraken`, `binance`, or `coinbase`. |
+| `SNIPER_CEX_API_KEY` / `SNIPER_CEX_API_SECRET` | Venue API credentials (Kraken key/secret, Binance key/secret, or Coinbase key name / EC private key PEM). |
+| `SNIPER_BINANCE_BASE` | Optional Binance REST host override (e.g. `https://api.binance.us`). |
 | `SNIPER_LIVE_MAX_NOTIONAL_USD` | Per-order cap (default 100). |
 | `SNIPER_LIVE_DAILY_LOSS_USD` | Halt entries after this daily loss (default 50). |
 | `SNIPER_LIVE_MAX_POSITIONS` | Max concurrent live positions (default 4). |

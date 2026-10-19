@@ -1,12 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createVerify, generateKeyPairSync } from "node:crypto";
 import {
   DEFAULT_LIVE_GUARDRAILS,
   checkLiveGuardrails,
   liveGuardrailsFromEnv,
   type LiveGuardrailsConfig,
 } from "./guardrails.ts";
-import { buildLiveStatus, krakenPair, krakenSign, resolveLiveProvider } from "./cex.ts";
+import {
+  binanceSign,
+  binanceSymbol,
+  buildLiveStatus,
+  coinbaseJwt,
+  coinbaseProduct,
+  krakenPair,
+  krakenSign,
+  resolveLiveProvider,
+  venueLabel,
+} from "./cex.ts";
 
 const cfg: LiveGuardrailsConfig = { maxNotionalUsd: 100, dailyLossLimitUsd: 50, maxOpenPositions: 2, allowlist: ["BONK", "WIF"] };
 const base = { symbol: "BONK", side: "buy" as const, notionalUsd: 40, priceUsd: 1, realizedTodayUsd: 0, openPositions: 0 };
@@ -66,6 +77,37 @@ test("kraken sign is deterministic and nonce-sensitive", () => {
   assert.equal(a, b);
   assert.notEqual(a, c);
   assert.match(a, /^[A-Za-z0-9+/=]+$/);
+});
+
+test("binance symbol mapping and signature", () => {
+  assert.equal(binanceSymbol("BONK"), "BONKUSDT");
+  assert.equal(binanceSymbol("sol"), "SOLUSDT");
+  const sig = binanceSign("symbol=BONKUSDT&side=BUY", "topsecret");
+  assert.equal(sig, binanceSign("symbol=BONKUSDT&side=BUY", "topsecret"));
+  assert.match(sig, /^[0-9a-f]{64}$/);
+  assert.notEqual(sig, binanceSign("symbol=BONKUSDT&side=SELL", "topsecret"));
+});
+
+test("coinbase product mapping and ES256 JWT verifies", () => {
+  assert.equal(coinbaseProduct("BONK"), "BONK-USD");
+  assert.equal(coinbaseProduct("sol"), "SOL-USD");
+  assert.equal(coinbaseProduct("BTC-USD"), "BTC-USD");
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const jwt = coinbaseJwt("organizations/x/apiKeys/y", pem, "POST", "/api/v3/brokerage/orders");
+  const [header, payload, signature] = jwt.split(".");
+  assert.equal(header && payload && signature ? 3 : 0, 3);
+  const ok = createVerify("SHA256")
+    .update(`${header}.${payload}`)
+    .verify(publicKey, Buffer.from(signature!, "base64url"));
+  assert.equal(ok, true);
+});
+
+test("venue labels cover all adapters", () => {
+  assert.equal(venueLabel("kraken"), "Kraken");
+  assert.equal(venueLabel("binance"), "Binance");
+  assert.equal(venueLabel("coinbase"), "Coinbase");
+  assert.equal(venueLabel("disabled"), "None");
 });
 
 test("live is disabled by default and the provider refuses orders", async () => {

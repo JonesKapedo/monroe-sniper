@@ -205,6 +205,10 @@ export function Frame({ children }: { children: ReactNode }) {
       }
 
       if (useDesk.getState().power) useDesk.getState().autoStep();
+      // Live mode: drain queued real orders and apply venue fills (no-op when
+      // live execution is not armed). Runs after autoStep so this cycle's
+      // candidates are already enqueued.
+      if (useDesk.getState().mode === "live") void useDesk.getState().liveStep();
 
       {
         const cfg = useDesk.getState().engineCycle;
@@ -309,6 +313,7 @@ export function Frame({ children }: { children: ReactNode }) {
       ]);
       if (cancel) return;
       setReady(true);
+      void useDesk.getState().refreshLiveStatus();
       void getDbHealth()
         .then((health) => {
           if (!health.ok || !health.state) {
