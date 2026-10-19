@@ -16,6 +16,7 @@ export function Terminal() {
   useEffect(() => setMounted(true), []);
 
   const tape = useDesk((s) => s.tape);
+  const refreshTape = useDesk((s) => s.refreshTape);
   const record = usePriceHistory((s) => s.record);
   const symbolId = useWorkspace((s) => s.symbolId);
   const setSymbol = useWorkspace((s) => s.setSymbol);
@@ -23,6 +24,27 @@ export function Terminal() {
   useEffect(() => {
     record(tape);
   }, [tape, record]);
+
+  useEffect(() => {
+    if (tape.length) return;
+    let cancel = false;
+    const load = () => {
+      if (cancel) return;
+      void refreshTape().catch(() => 0);
+    };
+    load();
+    const timer = window.setInterval(() => {
+      if (useDesk.getState().tape.length) {
+        window.clearInterval(timer);
+        return;
+      }
+      load();
+    }, 15_000);
+    return () => {
+      cancel = true;
+      window.clearInterval(timer);
+    };
+  }, [refreshTape, tape.length]);
 
   useEffect(() => {
     if (symbolId && tape.some((c) => c.id === symbolId)) return;

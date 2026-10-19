@@ -247,6 +247,8 @@ type DeskState = {
   setPower: (on: boolean) => void;
   setMode: (mode: Mode) => void;
   setTape: (rows: Candidate[], note: string) => void;
+  /** Read-only market pull for the workspace (loads the tape without arming). Returns row count. */
+  refreshTape: () => Promise<number>;
   tick: (
     prices: Record<string, number>,
     monitorOnly?: boolean,
@@ -1114,6 +1116,17 @@ export const useDesk = create<DeskState>()(
         }));
         if (mode === "live") void playHawkCry();
         else void playSoftChirp();
+      },
+
+      refreshTape: async () => {
+        const { loadFeeds } = await import("./market.functions");
+        const feeds = await loadFeeds({ data: {} });
+        const combined = [...feeds.binance, ...feeds.dex];
+        if (combined.length) {
+          get().setTape(combined, feeds.note);
+          return combined.length;
+        }
+        return 0;
       },
 
       setTape: (rows, note) => {
