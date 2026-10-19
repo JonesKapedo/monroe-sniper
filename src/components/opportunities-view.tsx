@@ -3,7 +3,7 @@ import {
   ArrowDownRight, CheckCircle2, Clock3, ExternalLink,
   RefreshCw, Search, ShieldCheck, ShieldX, TrendingUp, Wallet, XCircle, Zap,
 } from "lucide-react";
-import { Button, Card, Label } from "@/components/ui";
+import { Button, Card, Label, PageHeader } from "@/components/ui";
 import {
   dexToken, scanOpportunities, type OpportunitySignal, type ProviderStatus, type ScanResult,
 } from "@/lib/data/market-sources";
@@ -155,19 +155,16 @@ export function OpportunitiesView() {
   };
 
   return <div className="mx-auto flex max-w-7xl flex-col gap-5">
-    <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
-      <div>
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-xs tracking-[0.24em] text-brass uppercase">Market intelligence / public feeds</p>
-          <span className="inline-flex items-center gap-1 rounded-md border border-gain/40 px-2 py-1 text-[10px] tracking-wide text-gain"><span className="size-1.5 rounded-full bg-gain" />PAPER ONLY</span>
-        </div>
-        <h1 className="mt-2 text-3xl font-medium md:text-4xl">Opportunity scanner</h1>
-        <p className="mt-2 max-w-2xl text-sm text-faint">Scan real public token-pair data, inspect every risk gate, and simulate entries and exits in an isolated paper book.</p>
-      </div>
+    <PageHeader
+      stage="discover"
+      title="Opportunity scanner"
+      badge={<span className="inline-flex items-center gap-1 rounded-md border border-gain/40 px-2 py-1 text-[10px] tracking-wide text-gain"><span className="size-1.5 rounded-full bg-gain" />PAPER ONLY</span>}
+      subtitle="Scan real public token-pair data, inspect every risk gate, and simulate entries and exits in an isolated paper book."
+    >
       <Button onClick={() => void scan(query)} disabled={loading}>
         <RefreshCw className={cn("size-4", loading && "animate-spin")} />{loading ? "Scanning feeds…" : "Refresh scan"}
       </Button>
-    </div>
+    </PageHeader>
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
       <PortfolioMetric label="Paper equity" value={money(equity)} detail={`${totalPnl >= 0 ? "+" : ""}${money(totalPnl)} total P&L`} positive={totalPnl >= 0} icon="equity" />

@@ -41,7 +41,10 @@ export type RiskEngineSettings = {
 export const defaultRiskSettings: RiskEngineSettings = {
   sizingModel: "VOLATILITY_PARITY",
   sizingProfile: "OPTIMUM_SWEET_SPOT",
-  riskPerTrade: 0.025,
+  // Risk a small, fixed slice of equity per trade. At 1.2% a normal stop-out
+  // costs ~1% of the book — small enough that two or three in a night are
+  // noise, not a drawdown. (Was 2.5%, which made every stop a >$10 hit.)
+  riskPerTrade: 0.012,
   atrMultiplier: 2.0,
   rewardMultiple: 3.0,
   maxPositions: 6,
@@ -164,7 +167,10 @@ export function evaluateRiskAndSize(
   if (effectiveEdge < profile.minEdge) {
     return { allowed: false, notional: 0, qty: 0, entryPrice: candidate.priceUsd, stopPrice: candidate.priceUsd, targetPrice: candidate.priceUsd, stopLossPct: 0, takeProfitPct: 0, riskRewardRatio: 0, atr, volatility, volatilityRegime: regime, riskAmount: 0, valueAtRisk95: 0, checks: [], reasons: [`edge-below-${profile.id}`] };
   }
-  const calculatedStopPct = Math.max(0.02, Math.min(0.12, (atr * settings.atrMultiplier) / candidate.priceUsd));
+  // Bracket width is bounded on BOTH ends: a floor keeps a normal stop out of
+  // noise, and a hard ceiling keeps a single stop-out small. A 12% stop on a
+  // volatile name was producing >$10 losses per trade; 6% caps the damage.
+  const calculatedStopPct = Math.max(0.015, Math.min(0.06, (atr * settings.atrMultiplier) / candidate.priceUsd));
   const calculatedTargetPct = Math.max(0.04, calculatedStopPct * settings.rewardMultiple);
   const rrRatio = calculatedTargetPct / calculatedStopPct;
   const entryPrice = candidate.priceUsd;

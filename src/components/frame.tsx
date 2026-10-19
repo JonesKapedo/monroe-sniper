@@ -33,6 +33,10 @@ import { defaultSettings } from "@/lib/sniper/types";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 import { OperatorStrip } from "@/components/operator-strip";
 import { TelemetryStrip } from "@/components/telemetry-strip";
+import { SystemBar } from "@/components/system-bar";
+import { NotificationBell, NotificationToasts } from "@/components/notification-center";
+import { CommandPalette, OPEN_PALETTE_EVENT } from "@/components/command-palette";
+import { useDeskNotifications } from "@/lib/use-desk-notifications";
 import { getDbHealth, getTradeLearningEvents } from "@/lib/trade-memory.functions";
 
 import { loadFeeds, loadFxSpot, loadPerpFunding, verifyInstrument } from "@/lib/market.functions";
@@ -43,20 +47,41 @@ import { FX_PAIRS } from "@/lib/fx/twelvedata";
 
 const EMPTY_FX_STALE: ReadonlySet<string> = new Set<string>();
 
-const NAV = [
-  { to: "/", label: "Desk", short: "Desk", icon: LayoutDashboard },
-  { to: "/tape", label: "Tape", short: "Tape", icon: Activity },
-  { to: "/signals", label: "Signals", short: "Feed", icon: Radar },
-  { to: "/opportunities", label: "Scanner", short: "Scan", icon: ScanSearch },
-  { to: "/learn", label: "DYOR", short: "DYOR", icon: Search },
-  { to: "/wallet", label: "Wallet", short: "Funds", icon: Wallet },
-  { to: "/settings", label: "Settings", short: "Setup", icon: SlidersHorizontal },
-] as const;
+type NavItem = { to: string; label: string; short: string; icon: typeof LayoutDashboard };
+
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: "Live · now",
+    items: [
+      { to: "/", label: "Desk", short: "Desk", icon: LayoutDashboard },
+      { to: "/tape", label: "Tape", short: "Tape", icon: Activity },
+      { to: "/signals", label: "Signals", short: "Feed", icon: Radar },
+    ],
+  },
+  {
+    label: "Discover",
+    items: [{ to: "/opportunities", label: "Scanner", short: "Scan", icon: ScanSearch }],
+  },
+  {
+    label: "Research",
+    items: [{ to: "/learn", label: "DYOR", short: "DYOR", icon: Search }],
+  },
+  {
+    label: "Account",
+    items: [
+      { to: "/wallet", label: "Wallet", short: "Funds", icon: Wallet },
+      { to: "/settings", label: "Settings", short: "Setup", icon: SlidersHorizontal },
+    ],
+  },
+];
+
+const NAV: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 export function Frame({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const gate = useSupabaseGate();
   const signedIn = gate.status === "signed-in";
+  useDeskNotifications();
 
   useEffect(() => {
     if (!signedIn) return;
@@ -428,8 +453,15 @@ function Shell({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
-          {NAV.map((item) => (
-            <NavLink key={item.to} {...item} />
+          {NAV_GROUPS.map((group, i) => (
+            <div key={group.label} className={cn("flex flex-col gap-1", i > 0 && "mt-3")}>
+              <p className="px-3 text-[10px] font-semibold tracking-wider text-faint/70 uppercase">
+                {group.label}
+              </p>
+              {group.items.map((item) => (
+                <NavLink key={item.to} {...item} />
+              ))}
+            </div>
           ))}
         </nav>
 
@@ -513,6 +545,17 @@ function Shell({ children }: { children: ReactNode }) {
                 cash ${activeBook.cash.toFixed(2)} · locked ${activeLocked.toFixed(2)}
               </span>
             </div>
+            <button
+              type="button"
+              aria-label="Open command palette"
+              title="Command palette (Ctrl/⌘ + K)"
+              onClick={() => window.dispatchEvent(new Event(OPEN_PALETTE_EVENT))}
+              className="hidden min-h-11 items-center gap-1.5 rounded-full border border-line bg-panel px-3 text-faint transition-colors hover:text-cream lg:inline-flex"
+            >
+              <Search className="size-4" />
+              <span className="font-mono text-[10px] tracking-wider">⌘K</span>
+            </button>
+            <NotificationBell />
             <DbBadge />
 
             <button
@@ -556,6 +599,7 @@ function Shell({ children }: { children: ReactNode }) {
         </header>
 
         <OperatorStrip />
+        <SystemBar />
         <TelemetryStrip />
 
         {mode === "live" && (
@@ -578,6 +622,8 @@ function Shell({ children }: { children: ReactNode }) {
       {locked && <PinGate />}
       {showStandbyModal && <StandbyPositionsModal isOpen={showStandbyModal} onClose={() => setShowStandbyModal(false)} />}
       <WalletModal />
+      <NotificationToasts />
+      <CommandPalette />
     </div>
   );
 }

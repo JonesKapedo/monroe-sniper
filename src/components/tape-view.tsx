@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, CandlestickChart, CircleAlert, Radio } from "lucide-react";
-import { Card, Label } from "@/components/ui";
+import { Badge, Card, Label, PageHeader } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { loadDexCandles, loadFxCandles, loadKlines, loadTokenTicks, resolveChartPool, type ChartPool } from "@/lib/market.functions";
 import { FX_PAIRS } from "@/lib/fx/twelvedata";
@@ -433,21 +433,12 @@ export function TapeView() {
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5">
-      <section className="flex flex-col gap-3 rounded-xl border border-line bg-panel p-4 md:flex-row md:items-center md:justify-between md:p-5">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">
-              Market &amp; Paper Activity
-            </h1>
-            <span className="rounded-full border border-brass/40 bg-brass/10 px-2.5 py-0.5 text-xs font-semibold uppercase text-brass">
-              Paper simulation
-            </span>
-          </div>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-faint md:text-sm">
-            Public market candles and simulated paper fills. No brokerage connection or real-money
-            orders are available.
-          </p>
-        </div>
+      <PageHeader
+        stage="now"
+        title="Market & Paper Activity"
+        badge={<Badge tone="live">Paper simulation</Badge>}
+        subtitle="Public market candles and simulated paper fills. No brokerage connection or real-money orders are available."
+      >
         <div className="flex items-center gap-2 self-start rounded-lg border border-line bg-panel-2 px-3 py-2 text-xs sm:self-auto">
           <span
             className={cn("size-2 rounded-full", power ? "bg-gain" : "bg-faint")}
@@ -456,7 +447,7 @@ export function TapeView() {
           <span className="font-medium">{power ? "Paper bot armed" : "Standby"}</span>
           <span className="text-faint">· {positions.length} held</span>
         </div>
-      </section>
+      </PageHeader>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card>

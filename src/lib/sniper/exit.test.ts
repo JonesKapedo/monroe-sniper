@@ -86,6 +86,35 @@ describe("per-model exit ladders", () => {
   });
 });
 
+describe("default exit ladder", () => {
+  function ladder() {
+    const entry = 100;
+    const stop = 94; // risk 6 → 1R = 6 points
+    const plan = buildExitPlan(entry, stop);
+    return { entry, plan, now: Date.now() };
+  }
+
+  it("arms a breakeven stop at +0.75R so a winner cannot round-trip", () => {
+    const { entry, plan, now } = ladder();
+    let rt = initExitRuntime(entry, plan, 10, 6, now);
+    const arms = evaluateExit("LONG", entry, 100 + 0.75 * 6, plan, rt, { now, lastFreshMarkAt: now });
+    assert.equal(arms.action.kind, "MOVE_STOP");
+    assert.ok(arms.runtime.stopPrice >= entry, "stop must be at or above entry once breakeven arms");
+    rt = arms.runtime;
+    const held = evaluateExit("LONG", entry, 100 + 0.5 * 6, plan, rt, { now, lastFreshMarkAt: now });
+    assert.equal(held.action.kind, "HOLD", "pulling back to +0.5R must not exit after breakeven armed");
+  });
+
+  it("banks the first third at +1.25R", () => {
+    const { entry, plan, now } = ladder();
+    let rt = initExitRuntime(entry, plan, 10, 6, now);
+    rt = evaluateExit("LONG", entry, 100 + 0.8 * 6, plan, rt, { now, lastFreshMarkAt: now }).runtime;
+    const scale = evaluateExit("LONG", entry, 100 + 1.3 * 6, plan, rt, { now, lastFreshMarkAt: now });
+    assert.equal(scale.action.kind, "SCALE_OUT");
+    if (scale.action.kind === "SCALE_OUT") assert.ok(scale.action.fractionOfOriginal > 0.3);
+  });
+});
+
 describe("oppositeExit", () => {
   it("unwinds a long only on a sell", () => {
     assert.equal(oppositeExit("LONG", "SELL"), true);

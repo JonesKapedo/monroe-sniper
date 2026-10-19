@@ -39,7 +39,7 @@ import {
   type TierConfig,
   type TierName,
 } from "./sniper/tier-config";
-import { resolveConcurrentSlots } from "./sniper/slots";
+import { MAX_CONCURRENT, resolveConcurrentSlots } from "./sniper/slots";
 import {
   DEFAULT_PROFIT_LOCK_CONFIG,
   applyProfitLock,
@@ -1521,9 +1521,14 @@ export const useDesk = create<DeskState>()(
           }
         }
 
-        // 2. Market tape — fill up to remaining slots this cycle.
+        // 2. Market tape — fill EVERY remaining slot this cycle.
+        // The old loop tried three times and broke on the first rejection, so
+        // the desk only ever carried one tape name at a time. Now held /
+        // cooling / halted names are screened out up front and we keep taking
+        // the next-best admissible setup until the slots are full.
         if (s.entrySources.tape) {
-          for (let tapeAttempt = 0; tapeAttempt < 3; tapeAttempt++) {
+          const attempted = new Set<string>();
+          for (let tapeAttempt = 0; tapeAttempt < MAX_CONCURRENT; tapeAttempt++) {
           const live = useDesk.getState();
           const tapeBook = live[live.mode];
           const tapeMaxSlots = resolveConcurrentSlots(live.riskSettings.maxPositions);
@@ -1537,16 +1542,24 @@ export const useDesk = create<DeskState>()(
               ? Math.max(40, Math.min(live.memory.minScore, profileFloorNow) - 12)
               : Math.min(live.memory.minScore, profileFloorNow)) - currentRelax(govAfter),
           );
+          const held = new Set(tapeBook.positions.map((pos) => pos.id));
+          const eligible = live.tape.filter(
+            (c) =>
+              !held.has(c.id) &&
+              !attempted.has(c.id) &&
+              !fibBlocked(c.symbol) &&
+              !isHalted(c.symbol, live.eventHalts),
+          );
           const pick = chooseEntry(
             tapeBook,
-            live.tape,
+            eligible,
             floorNow,
             Date.now(),
             (id) => securityVerdictOf(live.security, id),
             relaxStep,
           );
-          if (!pick || fibBlocked(pick.symbol) || isHalted(pick.symbol, live.eventHalts)) {
-            if (tapeAttempt === 0 && live.tape.length > 0) {
+          if (!pick) {
+            if (attempted.size === 0 && live.tape.length > 0) {
               const lastIdle = (globalThis as unknown as { __monroeTapeIdle?: number }).__monroeTapeIdle ?? 0;
               if (Date.now() - lastIdle > 90_000) {
                 (globalThis as unknown as { __monroeTapeIdle?: number }).__monroeTapeIdle = Date.now();
@@ -1561,6 +1574,8 @@ export const useDesk = create<DeskState>()(
             break;
           }
 
+          attempted.add(pick.id);
+
           // Learned per-symbol floor: a symbol with its own losing history must
           // clear a higher bar than the global average, even mid-cycle.
           if (
@@ -1574,7 +1589,7 @@ export const useDesk = create<DeskState>()(
               observed: `learned floor ${Math.round(symbolBucketFloor(live.bucketBook, live.memory, pick.venue, pick.symbol, live.mode))} > score ${pick.score}`,
               wouldBeSizeUsd: 0,
             });
-            break;
+            continue;
           }
 
           // Run through the quantitative risk engine
@@ -1596,7 +1611,7 @@ export const useDesk = create<DeskState>()(
               observed: (verdict.reasons[0] ?? "risk engine verdict not allowed").slice(0, 180),
               wouldBeSizeUsd: verdict.notional,
             });
-            break;
+            continue;
           }
 
           // Final stake guard: portfolio budget split by this position's target.

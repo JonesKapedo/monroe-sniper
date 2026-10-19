@@ -3,7 +3,7 @@ import { ArrowDownLeft, ArrowUpRight, History, Wallet } from "lucide-react";
 import { useMascot } from "@/lib/mascot";
 import { useDesk } from "@/lib/desk-store";
 import { equity, exposure } from "@/lib/paper";
-import { Button, Card, Label } from "@/components/ui";
+import { Badge, Button, Card, Label, PageHeader } from "@/components/ui";
 import { Money, capitalMoodClass } from "@/components/money";
 import { cn } from "@/lib/cn";
 import { WalletButton } from "@/components/wallet-modal";
@@ -123,23 +123,16 @@ export function WalletView() {
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-5">
-      <header className="flex flex-col gap-4 rounded-xl border border-line bg-panel p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Paper Wallet & Ledger</h1>
-            <span className="rounded-full border border-line bg-panel-2 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-faint">
-              SIMULATION
-            </span>
-          </div>
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-faint">
-            Paper-trading balance only — no real deposits, withdrawals, or on-chain transfers occur
-            here. Connect your wallet below to link real on-chain balances (read-only).
-          </p>
-        </div>
+      <PageHeader
+        stage="account"
+        title="Paper Wallet & Ledger"
+        badge={<Badge tone="muted">Simulation</Badge>}
+        subtitle="Paper-trading balance only — no real deposits, withdrawals, or on-chain transfers occur here. Connect your wallet below to link real on-chain balances (read-only)."
+      >
         <div className="shrink-0">
           <WalletButton />
         </div>
-      </header>
+      </PageHeader>
 
       <OnchainBalancesCard />
 

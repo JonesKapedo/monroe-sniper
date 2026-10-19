@@ -63,20 +63,22 @@ export interface ExitDecision {
 }
 
 /**
- * Growth-first profile: bank only a third early, let the bulk run under a
- * wide Chandelier trail. Short-term full take-profits at +1R are intentionally
- * avoided — compound equity needs runners more than clipped scalps.
+ * Growth-first profile with an earlier hand on the wheel. The desk books a
+ * third at +1.25R (so most deals pay *something*), arms a breakeven-plus-buffer
+ * stop at +0.75R (so a winner cannot round-trip into a loser), and lets the
+ * remainder run under a 2.5×ATR Chandelier trail. Trades that never go anywhere
+ * are reaped by a 4-hour time stop instead of sitting dead in a slot.
  */
 export const DEFAULT_EXIT_PROFILE = {
-  breakevenTriggerR: 1.0,
+  breakevenTriggerR: 0.75,
   breakevenBufferR: 0.2,
-  scaleOut1AtR: 2.0,
+  scaleOut1AtR: 1.25,
   scaleOut1Fraction: 0.33,
-  scaleOut2AtR: 3.5,
+  scaleOut2AtR: 2.5,
   scaleOut2Fraction: 0.33,
-  runnerTrailAtrMult: 3.0,
-  volSpikeTrailAtrMult: 1.6,
-  timeStopMinutes: 480,
+  runnerTrailAtrMult: 2.5,
+  volSpikeTrailAtrMult: 1.4,
+  timeStopMinutes: 240,
   staleFailsafeMinutes: 15,
 } as const;
 

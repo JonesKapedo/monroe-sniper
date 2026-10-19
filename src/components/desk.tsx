@@ -31,7 +31,7 @@ import {
 } from "@/lib/paper";
 import { useDesk } from "@/lib/desk-store";
 import { loadFeeds } from "@/lib/market.functions";
-import { Button, Card, Label } from "@/components/ui";
+import { Badge, Button, Card, Label, PageHeader } from "@/components/ui";
 import { WalletButton } from "@/components/wallet-modal";
 import { Money, capitalMoodClass } from "@/components/money";
 import { cn } from "@/lib/cn";
@@ -193,28 +193,20 @@ export function Desk() {
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5">
       {/* Top Desk Header with Mode Switcher & Bot Controls */}
-      <div className="flex flex-col gap-4 rounded-xl border border-line bg-panel p-4 md:flex-row md:items-center md:justify-between md:p-5">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Global Sniper Desk</h1>
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-0.5 text-xs font-semibold tracking-wider uppercase",
-                mode === "live"
-                  ? "border border-amber-500/40 bg-amber-500/15 text-amber-300"
-                  : "border border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
-              )}
-            >
-              {mode === "live" ? "Legacy state locked" : `Paper simulation ($${DEMO_START})`}
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-faint md:text-sm">
-            {mode === "live"
-              ? "Live execution is unavailable. This app has no broker connection and cannot move real funds."
-              : `Paper environment. Starts at $${DEMO_START}. Simulated closes train the paper risk threshold.`}
-          </p>
-        </div>
-
+      <PageHeader
+        stage="now"
+        title="Global Sniper Desk"
+        badge={
+          <Badge tone={mode === "live" ? "warn" : "good"}>
+            {mode === "live" ? "Legacy state locked" : `Paper simulation ($${DEMO_START})`}
+          </Badge>
+        }
+        subtitle={
+          mode === "live"
+            ? "Live execution is unavailable. This app has no broker connection and cannot move real funds."
+            : `Paper environment. Starts at $${DEMO_START}. Simulated closes train the paper risk threshold.`
+        }
+      >
         {/* Mode Switch Button & Power Button */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {/* Trading mode (paper) — separated from wallet connection */}
@@ -404,7 +396,7 @@ export function Desk() {
             </Button>
           )}
         </div>
-      </div>
+      </PageHeader>
 
       {/* Equity protection: profit lock + tier + guard */}
       <EquityDashboard />

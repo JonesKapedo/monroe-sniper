@@ -107,13 +107,14 @@ export const DEFAULT_MODEL_ID = "gradient";
 export function exitProfileForModel(profile: RiskModelProfile): ExitProfile {
   const tp = Math.max(0.5, profile.takeProfitR);
   const trailMult =
-    profile.trailPct == null ? 4.0 : profile.trailPct >= 1.5 ? 1.5 : profile.trailPct >= 1 ? 2.0 : 2.6;
+    profile.trailPct == null ? 3.0 : profile.trailPct >= 1.5 ? 1.5 : profile.trailPct >= 1 ? 2.0 : 2.6;
   return {
-    breakevenTriggerR: Math.min(1, Math.max(0.5, tp * 0.5)),
+    breakevenTriggerR: Math.min(0.75, Math.max(0.5, tp * 0.5)),
     scaleOut1AtR: Math.max(0.75, tp * 0.5),
     scaleOut2AtR: tp,
     runnerTrailAtrMult: trailMult,
     volSpikeTrailAtrMult: Math.max(1, Math.round((trailMult - 0.6) * 10) / 10),
-    timeStopMinutes: profile.exitAtRunBoundary ? (profile.runMinutes ?? 34) : 480,
+    // Reap dead trades in 4h rather than letting a stalled name hold a slot all day.
+    timeStopMinutes: profile.exitAtRunBoundary ? (profile.runMinutes ?? 34) : 240,
   };
 }

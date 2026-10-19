@@ -131,4 +131,38 @@ describe("auto-entry flow proof (desk tape branch replica)", () => {
     assert.ok(msg.includes("0 tradeable"), `requires acted count in: ${msg}`);
     assert.ok(msg.includes("WAL"), `requires top symbol in: ${msg}`);
   });
+
+  it("fills multiple distinct slots on one tape pass (concurrency)", () => {
+    const tape = [
+      major("WAL"),
+      major("ATOM", { change24h: 0.6 }),
+      major("DOT", { change24h: 0.9 }),
+      major("LNK", { change24h: 0.4 }),
+    ];
+    let book = emptyBook(500);
+    const attempted = new Set<string>();
+    for (const c of tape) {
+      if (attempted.has(c.id) || book.positions.some((p) => p.tokenId === c.id)) continue;
+      attempted.add(c.id);
+      const res = tapeAttempt(book, [c], 42, 0);
+      if (res.ok) book = res.book;
+    }
+    assert.ok(book.positions.length >= 2, `expected concurrent slots, got ${book.positions.length}`);
+    const ids = book.positions.map((p) => p.id);
+    assert.equal(new Set(ids).size, ids.length, "no duplicate positions");
+  });
+
+  it("stamps entry conditions on each position so learning has features", () => {
+    const tape = [major("WAL", { change24h: 1.1 }), major("ATOM", { change24h: 0.7 })];
+    let book = emptyBook(500);
+    for (const c of tape) {
+      const res = tapeAttempt(book, [c], 42, 0);
+      if (res.ok) book = res.book;
+    }
+    assert.ok(book.positions.length >= 1, "at least one entry");
+    for (const p of book.positions) {
+      assert.equal(typeof p.entryScore, "number", `${p.symbol} entryScore captured`);
+      assert.equal(typeof p.entryChange24h, "number", `${p.symbol} entryChange24h captured`);
+    }
+  });
 });

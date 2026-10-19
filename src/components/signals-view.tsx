@@ -3,7 +3,7 @@ import { Search } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useDesk } from "@/lib/desk-store";
 import { equity } from "@/lib/paper";
-import { Card } from "@/components/ui";
+import { Badge, Card, PageHeader } from "@/components/ui";
 
 const EXIT_PAGE_SIZE = 50;
 const ENTRY_PAGE_SIZE = 50;
@@ -82,18 +82,23 @@ export function SignalsView() {
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight md:text-3xl text-cream">Signals</h1>
-        <p className="mt-1 text-sm text-faint">
-          Live tape ranked by score · paper equity ${activeEq.toFixed(2)}{" "}
-          <span className="text-faint ml-1.5 font-mono">(${activeBook.cash.toFixed(2)} cash)</span>
-        </p>
+      <PageHeader
+        stage="now"
+        title="Signals"
+        badge={<Badge tone="live">Live tape</Badge>}
+        subtitle={
+          <>
+            Ranked by score · paper equity ${activeEq.toFixed(2)}{" "}
+            <span className="ml-1.5 font-mono text-faint">(${activeBook.cash.toFixed(2)} cash)</span>
+          </>
+        }
+      >
         {readiness && (
-          <p className="mt-2 text-[11px] text-brass font-mono">
+          <p className="text-[11px] font-mono text-brass">
             Paper discipline {readiness.readinessScore}% · {readiness.completedDemoTrades ?? 0} qualifying
           </p>
         )}
-      </div>
+      </PageHeader>
 
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-2">

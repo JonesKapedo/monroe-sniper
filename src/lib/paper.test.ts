@@ -20,6 +20,23 @@ describe("paper desk", () => {
     assert.equal(second.ok, false);
   });
 
+  it("holds several distinct names at once (multi-slot)", () => {
+    let book = emptyBook();
+    const taken: string[] = [];
+    for (const c of sampleTape()) {
+      const r = enter(book, c);
+      if (r.ok) {
+        book = r.book;
+        taken.push(c.symbol);
+      }
+      if (book.positions.length >= 3) break;
+    }
+    assert.ok(
+      book.positions.length >= 2,
+      `expected multiple concurrent slots, got ${book.positions.length} (${taken.join(",")})`,
+    );
+  });
+
   it("keeps entry conditions on a closed trade for durable learning", () => {
     const candidate = sampleTape().find((item) => item.symbol === "WETH");
     assert.ok(candidate);

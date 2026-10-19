@@ -394,7 +394,7 @@ export function enter(
   // verdict nor the free cash — no caller can over-stake through this path.
   const notionalToUse = Math.min(book.cash, v.notional, customSizing?.notional ?? v.notional);
   const qtyToUse = notionalToUse > 0 ? notionalToUse / v.sim.fill : v.sim.qty;
-  const stopToUse = customSizing?.stop ?? v.sim.fill * 0.92;
+  const stopToUse = customSizing?.stop ?? v.sim.fill * 0.96;
   const targetToUse = customSizing?.target ?? v.sim.fill * 1.06;
 
   const plan = buildExitPlan(v.sim.fill, stopToUse, customSizing?.exitProfile);

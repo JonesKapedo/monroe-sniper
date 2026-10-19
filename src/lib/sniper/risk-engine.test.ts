@@ -67,7 +67,23 @@ describe("risk-engine honesty gates", () => {
     };
     const verdict = evaluateRiskAndSize(full, candidate("SOL", 100));
     assert.equal(verdict.allowed, false);
-    assert.ok(verdict.reasons.join(" ").includes("Stake budget"));
+    // A $50 book carries one viable slot, so the second entry is stopped by the
+    // slot cap; a larger book stops on the budget. Either way: no room.
+    assert.ok(/Stake budget|max-positions/.test(verdict.reasons.join(" ")), verdict.reasons.join("; "));
+  });
+});
+
+describe("risk-engine bracket sizing", () => {
+  it("caps the stop distance at 6% even for a violent mover", () => {
+    const hot = { ...candidate("WIF", 2), change24h: 40 };
+    const v = evaluateRiskAndSize(emptyBook(500), hot);
+    assert.ok(v.stopLossPct <= 0.06 + 1e-9, `stop ${v.stopLossPct} exceeds the 6% ceiling`);
+  });
+
+  it("keeps a normal stop-out well under 2% of a $500 book", () => {
+    const v = evaluateRiskAndSize(emptyBook(500), candidate("ATOM", 8));
+    assert.ok(v.allowed, v.reasons.join("; "));
+    assert.ok(v.riskAmount <= 500 * 0.02, `risk $${v.riskAmount} exceeds 2% of $500`);
   });
 });
 
