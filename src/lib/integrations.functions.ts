@@ -77,6 +77,61 @@ export const sendTelegramAlert = createServerFn({ method: "POST" })
     }
   });
 
+/* ---------------- Discord (incoming webhook, no bot hosting) ---------------- */
+
+function validDiscordWebhook(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      (u.hostname === "discord.com" || u.hostname === "discordapp.com" || u.hostname === "canary.discord.com") &&
+      u.pathname.startsWith("/api/webhooks/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+export const verifyDiscordWebhook = createServerFn({ method: "POST" })
+  .validator((input: { url?: string }) => ({ url: String(input?.url ?? "").trim().slice(0, 512) }))
+  .handler(async ({ data }): Promise<{ ok: boolean; username: string | null; note: string }> => {
+    if (!data.url) return { ok: false, username: null, note: "Webhook URL is required" };
+    if (!validDiscordWebhook(data.url)) {
+      return { ok: false, username: null, note: "Not a Discord webhook URL (https://discord.com/api/webhooks/…)" };
+    }
+    try {
+      const res = await getJson(data.url, {}, 8000);
+      const body = record(res.body);
+      if (res.ok && typeof body.name === "string") {
+        return { ok: true, username: body.name, note: `Verified webhook "${body.name}"` };
+      }
+      return { ok: false, username: null, note: `Discord rejected the webhook (HTTP ${res.status})` };
+    } catch (error) {
+      return { ok: false, username: null, note: error instanceof Error ? error.message : "Discord unreachable" };
+    }
+  });
+
+export const sendDiscordAlert = createServerFn({ method: "POST" })
+  .validator((input: { url?: string; text?: string }) => ({
+    url: String(input?.url ?? "").trim().slice(0, 512),
+    text: String(input?.text ?? "").slice(0, 1900),
+  }))
+  .handler(async ({ data }): Promise<{ ok: boolean; note: string }> => {
+    if (!data.url || !data.text) return { ok: false, note: "Webhook URL and text are required" };
+    if (!validDiscordWebhook(data.url)) return { ok: false, note: "Not a Discord webhook URL" };
+    try {
+      const res = await fetch(data.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: data.text, username: "Monroe" }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) return { ok: false, note: `Discord HTTP ${res.status}` };
+      return { ok: true, note: "Alert delivered" };
+    } catch (error) {
+      return { ok: false, note: error instanceof Error ? error.message : "Discord unreachable" };
+    }
+  });
+
 /* ---------------- X / Twitter (bring-your-own bearer token) ---------------- */
 
 export type XMentionSample = {

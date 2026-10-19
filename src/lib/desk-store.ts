@@ -544,13 +544,20 @@ function mathOverlays(book: Book): { winnerVectors: SetupVector[]; openVectors: 
 }
 
 /** Fire-and-forget Telegram trade alert — alerts never break trading. */
-function telegramAlert(text: string): void {
+function routeAlert(text: string): void {
   try {
     const creds = useDyorStore.getState().telegramCreds();
-    if (!creds) return;
-    void import("./integrations.functions")
-      .then((m) => m.sendTelegramAlert({ data: { ...creds, text } }))
-      .catch(() => undefined);
+    if (creds) {
+      void import("./integrations.functions")
+        .then((m) => m.sendTelegramAlert({ data: { ...creds, text } }))
+        .catch(() => undefined);
+    }
+    const discord = useDyorStore.getState().discordWebhook();
+    if (discord) {
+      void import("./integrations.functions")
+        .then((m) => m.sendDiscordAlert({ data: { url: discord, text } }))
+        .catch(() => undefined);
+    }
   } catch {
     // Alerts never break trading.
   }
@@ -1252,7 +1259,7 @@ export const useDesk = create<DeskState>()(
               const mark = prices[a.tokenId] ?? 0;
               const msg = `${a.symbol} ${a.above !== undefined && mark >= a.above ? "≥" : "≤"} $${a.above ?? a.below}`;
               notify({ severity: "info", title: `Alert: ${msg}`, body: `Mark $${mark.toFixed(4)}` });
-              telegramAlert(`Monroe alert\n${msg}\nMark $${mark.toFixed(4)}`);
+              routeAlert(`Monroe alert\n${msg}\nMark $${mark.toFixed(4)}`);
             }
           }
         }
@@ -1520,7 +1527,7 @@ export const useDesk = create<DeskState>()(
             const isProfit = trade.pnl > 0;
             return `${trade.reason === "TARGET" ? "✅ TP" : trade.reason === "STOP" ? "🛑 SL" : "📕 Closed"} ${trade.symbol} ${isProfit ? "+" : ""}$${trade.pnl.toFixed(2)}`;
           });
-          telegramAlert(`Monroe demo closes (${closedTrades.length}):\n${lines.slice(0, 8).join("\n")}`);
+          routeAlert(`Monroe demo closes (${closedTrades.length}):\n${lines.slice(0, 8).join("\n")}`);
         }
         archiveClosedTrades(closedTrades);
         
@@ -1750,7 +1757,7 @@ export const useDesk = create<DeskState>()(
               executions: [exec, ...st.executions].slice(0, 100),
               turboEntries: st.turboEntries + (turboNow ? 1 : 0),
             });
-            telegramAlert(`Monroe demo entry\n${noteLine}`);
+            routeAlert(`Monroe demo entry\n${noteLine}`);
           }
         }
 
@@ -1940,7 +1947,7 @@ export const useDesk = create<DeskState>()(
           executions: [exec, ...fresh.executions].slice(0, 100),
           turboEntries: fresh.turboEntries + (turboNow ? 1 : 0),
         });
-        telegramAlert(`Monroe demo entry\n${noteLine}`);
+        routeAlert(`Monroe demo entry\n${noteLine}`);
           } // end tapeAttempt
         }
 
@@ -2185,7 +2192,7 @@ export const useDesk = create<DeskState>()(
           executions: [exec, ...s.executions].slice(0, 100),
           turboEntries: s.turboEntries + (isTurbo && s.turboPhase === "running" ? 1 : 0),
         });
-        telegramAlert(`Monroe demo entry\n${note}`);
+        routeAlert(`Monroe demo entry\n${note}`);
         return { ok: true, note, verdict };
       },
 

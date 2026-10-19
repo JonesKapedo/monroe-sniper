@@ -44,6 +44,8 @@ export type DyorState = {
   pullLiveSocials: (id: string) => Promise<{ ok: boolean; note: string }>;
   /** Verified Telegram bot credentials for trade alerts (browser only). */
   telegramCreds: () => { token: string; chatId: string } | null;
+  /** Verified Discord incoming-webhook URL for trade alerts (browser only). */
+  discordWebhook: () => string | null;
 
   // Quick reset
   resetDyorCatalog: () => void;
@@ -95,6 +97,19 @@ const INITIAL_PROFILES: ConnectedProfile[] = [
     verified: false,
     verifiedAt: null,
     lastCheckNote: "Create a bot in BotFather, verify it, get trade alerts.",
+  },
+  {
+    id: "prof-discord",
+    provider: "DISCORD",
+    username: "",
+    displayName: "Discord Alerts (incoming webhook)",
+    connected: false,
+    scopes: ["alerts.send"],
+    syncStatus: "IDLE",
+    rateLimitRemaining: null,
+    verified: false,
+    verifiedAt: null,
+    lastCheckNote: "Channel settings → Integrations → Webhooks → copy URL to verify.",
   },
   {
     id: "prof-lunarcrush",
@@ -455,6 +470,11 @@ export const useDyorStore = create<DyorState>()(
             ok = res.ok;
             note = res.note;
             if (res.username) username = res.username;
+          } else if (provider === "DISCORD") {
+            const res = await mod.verifyDiscordWebhook({ data: { url: profile.secret ?? "" } });
+            ok = res.ok;
+            note = res.note;
+            if (res.username) username = res.username;
           } else if (provider === "LUNARCRUSH") {
             const res = await mod.verifyLunarcrushKey({ data: { key: profile.secret ?? "" } });
             ok = res.ok;
@@ -594,6 +614,12 @@ export const useDyorStore = create<DyorState>()(
         const p = get().connectedProfiles.find((x) => x.provider === "TELEGRAM");
         if (!p?.verified || !p.secret || !p.chatId) return null;
         return { token: p.secret, chatId: p.chatId };
+      },
+
+      discordWebhook: () => {
+        const p = get().connectedProfiles.find((x) => x.provider === "DISCORD");
+        if (!p?.verified || !p.secret) return null;
+        return p.secret;
       },
 
       resetDyorCatalog: () => {

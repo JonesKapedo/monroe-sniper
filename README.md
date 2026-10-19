@@ -75,9 +75,18 @@ in the repo, never as `VITE_` vars):
 | `SNIPER_LIVE_DAILY_LOSS_USD` | Halt entries after this daily loss (default 50). |
 | `SNIPER_LIVE_MAX_POSITIONS` | Max concurrent live positions (default 4). |
 | `SNIPER_LIVE_ALLOWLIST` | Comma-separated symbols allowed live (empty = any). |
+| `MONROE_WEBHOOK_TOKEN` | Optional shared secret for the TradingView intake (`?token=` or `x-webhook-token`). |
+| `MONROE_TV_RELAY_URL` | Optional URL that normalized webhook signals are POSTed on to (webhook-out). |
 
 > Validate the venue adapter with a minimum-size live smoke before trusting size —
 > the Kraken pair mapping and order shape are wired but unproven with real funds.
+
+**Alert routing & intake.** Telegram and Discord trade/price alerts are configured
+in-app (Integrations panel / vault, verified live before use — credentials stay in
+the browser, never on the server). Strategy alerts can be POSTed to
+`/api/webhooks/tradingview` as JSON or plain text (`BUY BTCUSDT @ 64000`); the
+endpoint validates and normalizes the signal and optionally relays it, but never
+places an order — execution stays inside the desk.
 
 ---
 

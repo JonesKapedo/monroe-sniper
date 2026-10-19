@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { useDesk } from "@/lib/desk-store";
+import { downloadText } from "@/lib/csv";
 import { money } from "@/lib/sniper/format";
 import { WorkspacePanel } from "@/components/terminal/panel";
 
@@ -34,6 +35,7 @@ export function Blotter() {
       )
       .join("\n");
     lastCsv.current = `${header}\n${body}`;
+    downloadText(`monroe-blotter-${Date.now()}.csv`, lastCsv.current);
     void navigator.clipboard?.writeText(lastCsv.current).then(
       () => {
         setCopied(true);

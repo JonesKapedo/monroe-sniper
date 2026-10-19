@@ -8,6 +8,7 @@ import { ChartPanel } from "@/components/terminal/chart-panel";
 import { OrderTicket } from "@/components/terminal/order-ticket";
 import { PositionsPanel } from "@/components/terminal/positions-panel";
 import { Blotter } from "@/components/terminal/blotter";
+import { IntegrationsPanel } from "@/components/terminal/integrations-panel";
 
 const HEIGHT = "h-[calc(100dvh-10.5rem)] min-h-[560px]";
 
@@ -85,6 +86,9 @@ export function Terminal() {
         <div className="h-[300px]">
           <Blotter />
         </div>
+        <div>
+          <IntegrationsPanel />
+        </div>
       </div>
     );
   }
@@ -110,12 +114,16 @@ export function Terminal() {
             onLayoutChanged={vertical.onLayoutChanged}
             className="h-full"
           >
-            <Panel id="chart" defaultSize="68%" minSize="35%">
+            <Panel id="chart" defaultSize="60%" minSize="30%">
               <ChartPanel />
             </Panel>
             <Handle vertical />
-            <Panel id="blotter" defaultSize="32%" minSize="16%" collapsible collapsedSize={0}>
+            <Panel id="blotter" defaultSize="26%" minSize="14%" collapsible collapsedSize={0}>
               <Blotter />
+            </Panel>
+            <Handle vertical />
+            <Panel id="integrations" defaultSize="22%" minSize="14%" collapsible collapsedSize={0}>
+              <IntegrationsPanel />
             </Panel>
           </Group>
         </Panel>
