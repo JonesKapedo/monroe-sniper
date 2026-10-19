@@ -76,7 +76,7 @@ export function useDeskNotifications() {
         power = desk.power;
         fire(
           power
-            ? { severity: "success", title: "Sniper armed", body: "Engine is scanning and may open paper positions." }
+            ? { severity: "success", title: "Sniper armed", body: "Engine is scanning and may open demo positions." }
             : { severity: "info", title: "Sniper on standby", body: "Engine paused; open positions still ride to exits." },
         );
       }

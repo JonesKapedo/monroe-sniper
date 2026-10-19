@@ -88,14 +88,14 @@ export function SignalsView() {
         badge={<Badge tone="live">Live tape</Badge>}
         subtitle={
           <>
-            Ranked by score · paper equity ${activeEq.toFixed(2)}{" "}
+            Ranked by score · demo equity ${activeEq.toFixed(2)}{" "}
             <span className="ml-1.5 font-mono text-faint">(${activeBook.cash.toFixed(2)} cash)</span>
           </>
         }
       >
         {readiness && (
           <p className="text-[11px] font-mono text-brass">
-            Paper discipline {readiness.readinessScore}% · {readiness.completedDemoTrades ?? 0} qualifying
+            Discipline {readiness.readinessScore}% · {readiness.completedDemoTrades ?? 0} qualifying
           </p>
         )}
       </PageHeader>
@@ -123,7 +123,7 @@ export function SignalsView() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search symbol (e.g. SOL, BTC)..."
+                placeholder="Search symbol (e.g. SOL, BTC)…"
                 className="field h-8 pl-8 pr-3 text-xs w-48 rounded-lg border-line bg-panel-2 text-cream outline-none focus:border-brass"
               />
             </div>

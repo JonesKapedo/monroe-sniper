@@ -428,7 +428,7 @@ export function enter(
     positions: [...book.positions, pos],
     peakEquity: Math.max(book.peakEquity, equity({ ...book, cash: book.cash - notionalToUse, positions: [...book.positions, pos] })),
   };
-  return { book: armIfNeeded(next), ok: true, note: `Paper fill ${c.symbol}` };
+  return { book: armIfNeeded(next), ok: true, note: `Simulated fill ${c.symbol}` };
 }
 
 export type MarkOptions = {

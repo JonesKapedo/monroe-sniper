@@ -334,7 +334,7 @@ export function Frame({ children }: { children: ReactNode }) {
           console.error("[trade-learning] Failed to restore database learning state:", error);
           useDesk.getState().setDbStatus({ source: "unknown", ok: false, error: message.slice(0, 300) });
           useDesk.setState((desk) => ({
-            note: "Database learning state is unavailable; local paper learning remains active.",
+            note: "Database learning state is unavailable; local demo learning remains active.",
             log: [`Database link failed (${message.slice(0, 120)}).`, ...desk.log].slice(0, 50),
           }));
         });
@@ -358,7 +358,7 @@ export function Frame({ children }: { children: ReactNode }) {
     return (
       <div className="flex min-h-screen flex-col justify-between bg-ink px-6 py-8 text-cream">
         <p className="text-sm tracking-widest text-brass uppercase">Monroe</p>
-        <p className="max-w-sm text-2xl font-medium">Opening the paper desk…</p>
+        <p className="max-w-sm text-2xl font-medium">Opening the desk…</p>
       </div>
     );
   }
@@ -390,7 +390,6 @@ function Shell({ children }: { children: ReactNode }) {
   }, []);
 
   const mode = useDesk((s) => s.mode);
-  const setMode = useDesk((s) => s.setMode);
   const power = useDesk((s) => s.power);
   const setPower = useDesk((s) => s.setPower);
   const demo = useDesk((s) => s.demo);
@@ -432,7 +431,7 @@ function Shell({ children }: { children: ReactNode }) {
                   : "border border-emerald-500/40 bg-emerald-500/20 text-emerald-300",
               )}
             >
-              {mode === "live" ? "LOCKED" : "PAPER"}
+              {mode === "live" ? "GATED" : "DEMO"}
             </span>
           </div>
           <p className="mt-1 text-lg font-medium">Sniper Bot</p>
@@ -500,13 +499,13 @@ function Shell({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-1.5 sm:gap-3">
             {readiness && (
               <div
-                title={`${readiness.completedDemoTrades} paper trades recorded`}
+                title={`${readiness.completedDemoTrades} demo trades recorded`}
                 className="hidden items-center gap-2 rounded-full border border-line bg-panel-2 px-3 py-1 lg:flex"
                 suppressHydrationWarning
               >
                 <ShieldCheck className="size-3.5 text-brass" />
                 <div className="flex items-center gap-1.5 text-xs">
-                  <span className="text-faint">Paper discipline:</span>
+                  <span className="text-faint">Discipline:</span>
                   <span
                     className={cn(
                       "font-semibold",
@@ -519,27 +518,12 @@ function Shell({ children }: { children: ReactNode }) {
               </div>
             )}
 
-            <div className="flex items-center rounded-full border border-line bg-panel-2 p-0.5" title="Paper simulation mode">
-              <button
-                type="button"
-                aria-label="Paper simulation mode"
-                onClick={() => setMode("demo")}
-                className={cn(
-                  "min-h-11 rounded-full px-2 py-1 text-[11px] font-medium transition-colors sm:px-2.5 sm:text-xs",
-                  mode === "demo" ? "bg-brass text-ink font-semibold shadow-xs" : "text-faint hover:text-cream",
-                )}
-              >
-                <span className="sm:hidden" aria-hidden="true">Demo</span>
-                <span className="hidden sm:inline">Paper</span>
-              </button>
-            </div>
-
             <div className="flex items-center rounded-full border border-brass/30 bg-brass/5 p-0.5" title="Read-only wallet connection">
               <WalletButton compact />
             </div>
 
             <div className="hidden text-right font-mono sm:block" suppressHydrationWarning>
-              <span className="text-[10px] tracking-wider text-faint uppercase">Paper balance:</span>{" "}
+              <span className="text-[10px] tracking-wider text-faint uppercase">Demo balance:</span>{" "}
               <Money value={activeEq} kind="balance" className={`text-sm font-semibold ${capitalMoodClass(activeBook.dayPnl)}`} />
               <span className="ml-2 text-[10px] text-faint">
                 cash ${activeBook.cash.toFixed(2)} · locked ${activeLocked.toFixed(2)}
@@ -560,7 +544,7 @@ function Shell({ children }: { children: ReactNode }) {
 
             <button
               type="button"
-              aria-label={power ? "Disarm paper bot" : "Arm paper bot"}
+              aria-label={power ? "Disarm demo bot" : "Arm demo bot"}
               onClick={requestStandby}
               className={cn(
                 "inline-flex min-h-11 items-center gap-1.5 rounded-full border px-2 text-xs font-medium transition-colors sm:gap-2 sm:px-3",
@@ -580,7 +564,7 @@ function Shell({ children }: { children: ReactNode }) {
               {power ? (
                 <>
                   <span className="sm:hidden">Armed</span>
-                  <span className="hidden sm:inline">Paper bot armed</span>
+                  <span className="hidden sm:inline">Bot armed</span>
                 </>
               ) : (
                 "Standby"
@@ -605,7 +589,7 @@ function Shell({ children }: { children: ReactNode }) {
         {mode === "live" && (
           <div className="flex items-center justify-between border-b border-amber-500/40 bg-panel-2 px-4 py-2 text-xs md:px-8">
             <span className="font-semibold text-amber-300">
-              Live execution is unavailable. This session is simulation-only.
+              Live execution is gated. Connect a broker to route orders — this session runs simulated fills.
             </span>
           </div>
         )}

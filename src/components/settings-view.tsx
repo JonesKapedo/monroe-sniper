@@ -10,7 +10,7 @@ import { cn } from "@/lib/cn";
 
 const THEMES: { id: ThemeId; label: string; detail: string }[] = [
   { id: "MONROE", label: "Monroe", detail: "Olive & brass" },
-  { id: "PAPER", label: "Paper", detail: "Warm light" },
+  { id: "PAPER", label: "Light", detail: "Warm parchment" },
   { id: "MIDNIGHT", label: "Pitch Black", detail: "True black backgrounds" },
 ];
 
@@ -411,7 +411,7 @@ export function SettingsView() {
       <Card>
         <Label>Sound</Label>
         <p className="mt-1 text-xs text-faint">
-          A hawk cries when Live trading engages; a soft chirp answers the return to paper.
+          A hawk cries when Live mode is selected; a soft chirp answers the return to demo.
         </p>
         <div className="mt-3 flex items-center justify-between gap-3">
           <div>

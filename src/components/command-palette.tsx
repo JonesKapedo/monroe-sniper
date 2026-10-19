@@ -51,7 +51,7 @@ export function CommandPalette() {
       {
         id: "act:flatten",
         label: "Flatten all positions",
-        hint: "close every open paper position",
+        hint: "close every open position",
         group: "Actions",
         run: () => useDesk.getState().flattenAll(),
       },

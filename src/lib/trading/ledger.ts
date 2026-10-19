@@ -122,7 +122,7 @@ export function createPaperAccount(cashUsd: number, at = Date.now()): TradingLed
     kind: "cash_deposit",
     at,
     engine: "system",
-    message: `Seeded unified paper cash $${seed.toFixed(2)}`,
+    message: `Seeded unified demo cash $${seed.toFixed(2)}`,
   });
   return ledger;
 }

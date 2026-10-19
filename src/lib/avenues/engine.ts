@@ -398,18 +398,18 @@ export function calculatePaperReadiness(
 
   let status: "TRAINING" | "QUALIFYING" | "PAPER_PROVEN" = "TRAINING";
   let statusMessage =
-    "Paper training is active; only bracket-resolved trades (targets and stops) count toward the edge estimate.";
+    "Simulation training is active; only bracket-resolved trades (targets and stops) count toward the edge estimate.";
   let recommendation =
-    `Keep the bot in paper mode while it collects ${targetDemoTrades} qualifying trades at a ${MIN_WIN_RATE}%+ win rate.`;
+    `Keep the bot in demo mode while it collects ${targetDemoTrades} qualifying trades at a ${MIN_WIN_RATE}%+ win rate.`;
 
   if (!floored && readinessScore >= 85 && completedDemoTrades >= targetDemoTrades) {
     status = "PAPER_PROVEN";
-    statusMessage = `Paper thresholds met: ${targetDemoTrades}+ qualifying trades at ${MIN_WIN_RATE}%+ win rate. This is not approval for real-money trading.`;
+    statusMessage = `Simulation thresholds met: ${targetDemoTrades}+ qualifying trades at ${MIN_WIN_RATE}%+ win rate. This is not approval for real-money trading.`;
     recommendation =
-      "The qualifying sample meets the configured paper thresholds. Live execution remains unavailable.";
+      "The qualifying sample meets the configured simulation thresholds. Live execution remains unavailable.";
   } else if (!floored && readinessScore >= 60) {
     status = "QUALIFYING";
-    statusMessage = "Paper review in progress; collecting qualifying target/stop outcomes.";
+    statusMessage = "Simulation review in progress; collecting qualifying target/stop outcomes.";
     recommendation =
       `Bot is performing well in simulated market flow. Allow it to finish the ${targetDemoTrades}-trade qualifying sample to confirm drawdown stability.`;
   } else if (floored && completedDemoTrades >= MIN_QUALIFYING) {

@@ -84,7 +84,7 @@ export function OperatorStrip() {
               "font-semibold",
               readiness.readinessScore >= 85 ? "text-gain" : "text-amber-400",
             )}
-            title="Paper discipline readiness (qualifying trades only)"
+            title="Discipline readiness (qualifying trades only)"
           >
             RDY {readiness.readinessScore}%
             <span className="ml-1 font-normal text-faint">
@@ -104,7 +104,7 @@ export function OperatorStrip() {
       )}
 
       <span className="ml-auto tracking-wider text-faint">
-        EQ ${activeEq.toFixed(0)} · {mode === "live" ? "LIVE·LOCKED" : "PAPER"} ·{" "}
+        EQ ${activeEq.toFixed(0)} · {mode === "live" ? "LIVE·GATED" : "DEMO"} ·{" "}
         <span className={power ? "text-gain" : "text-faint"}>{power ? "ARMED" : "STANDBY"}</span>
       </span>
     </div>

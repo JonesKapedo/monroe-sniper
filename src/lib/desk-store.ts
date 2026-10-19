@@ -637,7 +637,7 @@ export const useDesk = create<DeskState>()(
       memory: emptyMemory(),
       bucketBook: emptyBucketBook(),
       tape: [],
-      note: `Paper trading sandbox active ($${DEMO_START}). Arm power to auto-snipe.`,
+      note: `Demo sandbox active ($${DEMO_START}). Arm the desk to auto-trade.`,
       log: [`System initialized. Demo balance: $${DEMO_START}.00`, "Risk engine active: Volatility-adjusted ATR sizing"],
       executions: [],
       riskSettings: defaultRiskSettings,
@@ -746,7 +746,7 @@ export const useDesk = create<DeskState>()(
       startTurbo: () => {
         const s = get();
         if (s.mode !== "demo") {
-          return { ok: false, note: "Turbo runs on the paper desk only." };
+          return { ok: false, note: "Turbo runs on the demo desk only." };
         }
         if (s.turboPhase === "running") {
           return { ok: true, note: "Turbo run already in progress." };
@@ -1040,14 +1040,14 @@ export const useDesk = create<DeskState>()(
           power: s.mode === "live" ? false : on,
           note: on
             ? s.mode === "live"
-              ? "Live execution is unavailable. The desk only supports paper simulation."
-              : "Armed. Sniper is actively scanning simulated markets."
+              ? "Live execution is gated. This build runs simulated fills only."
+              : "Armed. The desk is actively scanning simulated markets."
             : s.demo.positions.length
-              ? "Standby. Automated entries and exits are paused; open paper positions remain held."
+              ? "Standby. Automated entries and exits are paused; open demo positions remain held."
               : "Standby. Automated trading is paused.",
           log: pushLog(
             s.log,
-            on && s.mode !== "live" ? "Sniper ARMED [DEMO]" : on ? "Live execution blocked" : "Sniper DISARMED",
+            on && s.mode !== "live" ? "Desk ARMED [DEMO]" : on ? "Live execution gated" : "Desk DISARMED",
           ),
         }));
         try {
@@ -1059,32 +1059,22 @@ export const useDesk = create<DeskState>()(
 
       setMode: (mode) => {
         // Mode sounds fire only on real transitions: hawk cry into live,
-        // soft chirp back to paper. (Live entry is still locked until the
-        // wallet phases unlock it — the cry is wired and waiting.)
+        // soft chirp back to demo. Switching modes always stands the desk
+        // down; live selection is honoured but execution stays gated until a
+        // broker is connected (there is no order routing in this build).
         const prevMode = get().mode;
-        if (mode === "live" && prevMode === "live") return;
-        if (mode === "demo" && prevMode === "demo") {
-          set({ mode: "demo" });
-          return;
-        }
-        set((s) => {
-          if (mode === "live") {
-            return {
-              mode: "demo",
-              power: false,
-              note: "Live execution is unavailable. No broker is connected; this desk is simulation-only.",
-              log: pushLog(s.log, "Live mode blocked: no broker execution integration"),
-            };
-          }
-          return {
-            mode,
-            power: mode === "demo" ? s.power : false,
-            note: `Switched to paper simulation. Balance: $${s.demo.cash.toFixed(2)}.`,
-            log: pushLog(s.log, "Mode switched to DEMO"),
-          };
-        });
-        if (mode === "live" && get().mode === "live") void playHawkCry();
-        else if (mode === "demo" && prevMode === "live") void playSoftChirp();
+        if (mode === prevMode) return;
+        set((s) => ({
+          mode,
+          power: false,
+          note:
+            mode === "live"
+              ? "Live mode selected. Execution is gated until a broker is connected — orders are not routed in this build."
+              : `Demo mode. Simulated book ready · $${s.demo.cash.toFixed(2)} available.`,
+          log: pushLog(s.log, mode === "live" ? "Mode switched to LIVE (gated)" : "Mode switched to DEMO"),
+        }));
+        if (mode === "live") void playHawkCry();
+        else void playSoftChirp();
       },
 
       setTape: (rows, note) => {
@@ -1297,7 +1287,7 @@ export const useDesk = create<DeskState>()(
             const isProfit = trade.pnl > 0;
             return `${trade.reason === "TARGET" ? "✅ TP" : trade.reason === "STOP" ? "🛑 SL" : "📕 Closed"} ${trade.symbol} ${isProfit ? "+" : ""}$${trade.pnl.toFixed(2)}`;
           });
-          telegramAlert(`Monroe paper closes (${closedTrades.length}):\n${lines.slice(0, 8).join("\n")}`);
+          telegramAlert(`Monroe demo closes (${closedTrades.length}):\n${lines.slice(0, 8).join("\n")}`);
         }
         archiveClosedTrades(closedTrades);
         
@@ -1517,7 +1507,7 @@ export const useDesk = create<DeskState>()(
               executions: [exec, ...st.executions].slice(0, 100),
               turboEntries: st.turboEntries + (turboNow ? 1 : 0),
             });
-            telegramAlert(`Monroe paper entry\n${noteLine}`);
+            telegramAlert(`Monroe demo entry\n${noteLine}`);
           }
         }
 
@@ -1684,7 +1674,7 @@ export const useDesk = create<DeskState>()(
           executions: [exec, ...fresh.executions].slice(0, 100),
           turboEntries: fresh.turboEntries + (turboNow ? 1 : 0),
         });
-        telegramAlert(`Monroe paper entry\n${noteLine}`);
+        telegramAlert(`Monroe demo entry\n${noteLine}`);
           } // end tapeAttempt
         }
 
@@ -1702,7 +1692,7 @@ export const useDesk = create<DeskState>()(
       manualEnter: (c: Candidate) => {
         const s = get();
         if (s.mode !== "demo") {
-          return { ok: false, note: "Live execution is unavailable; this desk only supports paper simulation." };
+          return { ok: false, note: "Live execution is gated; this desk runs simulated fills only." };
         }
         if (s.turboPhase === "cooling") {
           return { ok: false, note: "Turbo cooling — new entries resume when the cooldown lapses (or bypass it)." };
@@ -1783,7 +1773,7 @@ export const useDesk = create<DeskState>()(
           executions: [exec, ...s.executions].slice(0, 100),
           turboEntries: s.turboEntries + (isTurbo && s.turboPhase === "running" ? 1 : 0),
         });
-        telegramAlert(`Monroe paper entry\n${note}`);
+        telegramAlert(`Monroe demo entry\n${note}`);
         return { ok: true, note, verdict };
       },
 
@@ -1832,7 +1822,7 @@ export const useDesk = create<DeskState>()(
           [mode]: book,
           memory,
           bucketBook,
-          note: "All open paper positions flattened.",
+          note: "All open positions flattened.",
           log: pushLog(s.log, `Flattened all [${mode.toUpperCase()}]`),
         });
         archiveClosedTrades(closedTrades.map((trade) => ({ trade, mode })));
@@ -1869,18 +1859,18 @@ export const useDesk = create<DeskState>()(
             type: "DEPOSIT",
             amount,
             mode: "demo",
-            network: "Paper simulation",
+            network: "Demo simulation",
             status: "CONFIRMED",
-            note: `Paper balance increased by $${amount.toFixed(2)}.`,
+            note: `Demo balance increased by $${amount.toFixed(2)}.`,
           };
           set({
             demo: updatedBook,
             ...reanchorBaselines(s.profitLockState, s.equityGuardState, equity(updatedBook)),
             walletHistory: [tx, ...s.walletHistory],
-            note: `Added $${amount.toFixed(2)} to the paper balance.`,
-            log: pushLog(s.log, `Paper balance +$${amount.toFixed(2)}`),
+            note: `Added $${amount.toFixed(2)} to the demo balance.`,
+            log: pushLog(s.log, `Demo balance +$${amount.toFixed(2)}`),
           });
-          return { ok: true, note: `Added $${amount.toFixed(2)} to the paper balance.` };
+          return { ok: true, note: `Added $${amount.toFixed(2)} to the demo balance.` };
         }
 
         if (amount > targetBook.cash + 0.0001) {
@@ -1898,19 +1888,19 @@ export const useDesk = create<DeskState>()(
           type: "WITHDRAWAL",
           amount,
           mode: "demo",
-          network: "Paper simulation",
+          network: "Demo simulation",
           status: "CONFIRMED",
-          note: `Paper balance decreased by $${amount.toFixed(2)}.`,
+          note: `Demo balance decreased by $${amount.toFixed(2)}.`,
         };
 
         set({
           demo: wResult.book,
           ...reanchorBaselines(s.profitLockState, s.equityGuardState, equity(wResult.book)),
           walletHistory: [tx, ...s.walletHistory],
-          note: `Removed $${amount.toFixed(2)} from the paper balance.`,
-          log: pushLog(s.log, `Paper balance -$${amount.toFixed(2)}`),
+          note: `Removed $${amount.toFixed(2)} from the demo balance.`,
+          log: pushLog(s.log, `Demo balance -$${amount.toFixed(2)}`),
         });
-        return { ok: true, note: `Removed $${amount.toFixed(2)} from the paper balance.` };
+        return { ok: true, note: `Removed $${amount.toFixed(2)} from the demo balance.` };
       },
 
       resetDemo: () =>
@@ -1920,7 +1910,7 @@ export const useDesk = create<DeskState>()(
           ...reanchorBaselines(s.profitLockState, s.equityGuardState, DEMO_START),
           currentTier: detectTier(DEMO_START, "scale"),
           tierConfig: TIER_CONFIGS[detectTier(DEMO_START, "scale")],
-          note: `Paper ledger reset to $${DEMO_START}.00. Archived trade learning remains intact.`,
+          note: `Demo ledger reset to $${DEMO_START}.00. Archived trade learning remains intact.`,
           log: pushLog(s.log, `Demo reset to $${DEMO_START}.00`),
         })),
 
@@ -2064,7 +2054,7 @@ export const useDesk = create<DeskState>()(
               ? s.readinessTargets.winRate
               : Math.min(80, Math.max(50, patch.winRate)),
           },
-          log: pushLog(s.log, "Paper-discipline targets updated"),
+          log: pushLog(s.log, "Discipline targets updated"),
         })),
 
       // Equity guard

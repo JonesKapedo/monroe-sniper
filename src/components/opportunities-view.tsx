@@ -93,7 +93,7 @@ export function OpportunitiesView() {
           const pairs = await dexToken(position.chain, position.address);
           // Do not fall back to the pair's base token: the requested asset can
           // appear as the quote token, and marking it with the other asset's
-          // price would corrupt the paper ledger.
+          // price would corrupt the demo ledger.
           const preferred = pairs.find(pair => tokenKey(pair.chain, pair.address) === position.tokenId);
           if (!preferred) return null;
           const update: MarketUpdate = {
@@ -141,25 +141,25 @@ export function OpportunitiesView() {
     const execution = enterPaperPosition(portfolio, selected, Date.now());
     setPortfolio(execution.portfolio);
     setLastNotice(execution.entered
-      ? `PAPER FILL · ${selected.symbol} opened for ${money(execution.verdict.plannedNotionalUsd)}. No live order was sent.`
+      ? `SIMULATED FILL · ${selected.symbol} opened for ${money(execution.verdict.plannedNotionalUsd)}. No live order was sent.`
       : gateStatusText(execution.verdict));
   };
   const closePaper = (position: PaperPosition) => {
     setPortfolio(old => closePaperPosition(old, position.id, Date.now()));
-    setLastNotice(`PAPER CLOSE · ${position.symbol} marked and closed at ${money(position.currentPrice)}.`);
+    setLastNotice(`SIMULATED CLOSE · ${position.symbol} marked and closed at ${money(position.currentPrice)}.`);
   };
   const resetPaper = () => {
-    if (!window.confirm(`Reset the paper portfolio to $${PAPER_STARTING_CASH.toLocaleString("en-US")}? This clears open positions and paper trade history.`)) return;
+    if (!window.confirm(`Reset the demo portfolio to $${PAPER_STARTING_CASH.toLocaleString("en-US")}? This clears open positions and demo trade history.`)) return;
     setPortfolio(resetPaperPortfolio());
-    setLastNotice(`Paper portfolio reset to $${PAPER_STARTING_CASH.toLocaleString("en-US")}. No live funds are involved.`);
+    setLastNotice(`Demo portfolio reset to $${PAPER_STARTING_CASH.toLocaleString("en-US")}. No live funds are involved.`);
   };
 
   return <div className="mx-auto flex max-w-7xl flex-col gap-5">
     <PageHeader
       stage="discover"
       title="Opportunity scanner"
-      badge={<span className="inline-flex items-center gap-1 rounded-md border border-gain/40 px-2 py-1 text-[10px] tracking-wide text-gain"><span className="size-1.5 rounded-full bg-gain" />PAPER ONLY</span>}
-      subtitle="Scan real public token-pair data, inspect every risk gate, and simulate entries and exits in an isolated paper book."
+      badge={<span className="inline-flex items-center gap-1 rounded-md border border-gain/40 px-2 py-1 text-[10px] tracking-wide text-gain"><span className="size-1.5 rounded-full bg-gain" />SIMULATED</span>}
+      subtitle="Scan real public token-pair data, inspect every risk gate, and simulate entries and exits in an isolated demo book."
     >
       <Button onClick={() => void scan(query)} disabled={loading}>
         <RefreshCw className={cn("size-4", loading && "animate-spin")} />{loading ? "Scanning feeds…" : "Refresh scan"}
@@ -167,8 +167,8 @@ export function OpportunitiesView() {
     </PageHeader>
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <PortfolioMetric label="Paper equity" value={money(equity)} detail={`${totalPnl >= 0 ? "+" : ""}${money(totalPnl)} total P&L`} positive={totalPnl >= 0} icon="equity" />
-      <PortfolioMetric label="Available paper cash" value={money(portfolio.cashUsd)} detail="USD simulator ledger" icon="cash" />
+      <PortfolioMetric label="Demo equity" value={money(equity)} detail={`${totalPnl >= 0 ? "+" : ""}${money(totalPnl)} total P&L`} positive={totalPnl >= 0} icon="equity" />
+      <PortfolioMetric label="Available demo cash" value={money(portfolio.cashUsd)} detail="USD simulator ledger" icon="cash" />
       <PortfolioMetric label="Open risk" value={money(exposure)} detail={`${equity > 0 ? (exposure / equity * 100).toFixed(1) : "0.0"}% of equity · max 15%`} icon="risk" />
       <PortfolioMetric label="Open positions" value={`${portfolio.positions.length}/3`} detail={`Realized ${money(realizedPnl)} · Unrealized ${money(unrealizedPnl)}`} icon="positions" positive={realizedPnl + unrealizedPnl >= 0} />
     </div>
@@ -187,7 +187,7 @@ export function OpportunitiesView() {
       <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Metric label="Candidates" value={String(items.length)} />
         <Metric label="Security verified" value={String(items.filter(item => item.securityVerified).length)} />
-        <Metric label="Paper gate passed" value={String(items.filter(item => evaluateRiskGate(item, portfolio).allowed).length)} />
+        <Metric label="Gate passed" value={String(items.filter(item => evaluateRiskGate(item, portfolio).allowed).length)} />
         <Metric label="Danger flagged" value={String(items.filter(item => item.risk === "danger").length)} />
       </div>
     </Card>
@@ -195,7 +195,7 @@ export function OpportunitiesView() {
     <Card>
       <div className="flex items-center justify-between gap-3"><Label>Provider health</Label><span className="text-xs text-faint">{result ? `Updated ${new Date(result.scannedAt).toLocaleTimeString()}` : "Waiting for first scan"}</span></div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">{(result?.providers ?? skeleton).map(source => <Provider key={source.id} item={source} />)}</div>
-      <p className="mt-3 text-xs text-faint">Public endpoints can throttle or block browser requests. Missing or incomplete security evidence always blocks paper entry.</p>
+      <p className="mt-3 text-xs text-faint">Public endpoints can throttle or block browser requests. Missing or incomplete security evidence always blocks entry.</p>
     </Card>
 
     {error && <div role="alert" className="rounded-xl border border-loss/40 bg-loss/10 p-4 text-sm text-loss">{error}</div>}
@@ -215,7 +215,7 @@ export function OpportunitiesView() {
 
       <div className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-24">
         <Card>
-          <div className="flex items-center justify-between gap-2"><Label>Risk verdict & paper order</Label><ShieldCheck className="size-4 text-brass" /></div>
+          <div className="flex items-center justify-between gap-2"><Label>Risk verdict & order</Label><ShieldCheck className="size-4 text-brass" /></div>
           {selected && selectedVerdict ? <div className="mt-3">
             <div className="flex items-start justify-between gap-2">
               <div><p className="text-lg font-medium">{selected.symbol}</p><p className="text-xs text-faint">{selected.chain} · {short(selected.address)}</p></div>
@@ -223,7 +223,7 @@ export function OpportunitiesView() {
             </div>
             <div className={cn("mt-4 rounded-lg border p-3", selectedVerdict.allowed ? "border-gain/40 bg-gain/5" : "border-loss/40 bg-loss/5")}>
               <p className="flex items-center gap-2 text-xs uppercase tracking-wide">{selectedVerdict.allowed ? <CheckCircle2 className="size-4 text-gain" /> : <ShieldX className="size-4 text-loss" />}{selectedVerdict.allowed ? "Risk gates passed" : "ENTRY BLOCKED"}</p>
-              <p className="mt-1 text-sm">{selectedVerdict.allowed ? "Eligible for paper execution only." : `${selectedVerdict.checks.filter(check => !check.pass).length} gate(s) need to pass before an entry is permitted.`}</p>
+              <p className="mt-1 text-sm">{selectedVerdict.allowed ? "Eligible for simulated execution only." : `${selectedVerdict.checks.filter(check => !check.pass).length} gate(s) need to pass before an entry is permitted.`}</p>
             </div>
             <div className="mt-4 flex flex-col gap-3">
               {selectedVerdict.checks.map(check => <div key={check.id} className="flex items-start gap-2">
@@ -232,11 +232,11 @@ export function OpportunitiesView() {
               </div>)}
             </div>
             <div className="mt-4 rounded-lg border border-line p-3">
-              <div className="flex items-center justify-between gap-3 text-sm"><span className="text-faint">Proposed paper notional</span><span className="font-mono">{money(selectedVerdict.plannedNotionalUsd)}</span></div>
+              <div className="flex items-center justify-between gap-3 text-sm"><span className="text-faint">Proposed notional</span><span className="font-mono">{money(selectedVerdict.plannedNotionalUsd)}</span></div>
               <div className="mt-2 flex items-center justify-between gap-3 text-sm"><span className="text-faint">Stop loss</span><span className="font-mono">{selected.metrics.priceUsd ? money(selected.metrics.priceUsd * 0.92) : "—"} (−8%)</span></div>
               <div className="mt-2 flex items-center justify-between gap-3 text-sm"><span className="text-faint">First scale-out</span><span className="font-mono">{selected.metrics.priceUsd ? money(selected.metrics.priceUsd * 1.2) : "—"} (+20%)</span></div>
             </div>
-            <Button className="mt-4 w-full" disabled={!selectedVerdict.allowed || loading} onClick={executePaper}><Zap className="size-4" />Simulate paper entry</Button>
+            <Button className="mt-4 w-full" disabled={!selectedVerdict.allowed || loading} onClick={executePaper}><Zap className="size-4" />Simulate entry</Button>
             <p className="mt-2 text-center text-xs text-faint">No wallet connection, live order, or real money is used.</p>
             <div className="mt-4">
               <p className="text-xs tracking-wide text-faint uppercase">Signal rationale</p>
@@ -248,11 +248,11 @@ export function OpportunitiesView() {
         </Card>
 
         <Card>
-          <div className="flex items-center justify-between gap-2"><Label>Paper positions</Label><span className="text-xs text-faint">Auto-marked ~30s</span></div>
+          <div className="flex items-center justify-between gap-2"><Label>Open positions</Label><span className="text-xs text-faint">Auto-marked ~30s</span></div>
           {portfolio.positions.length ? <div className="mt-3 flex flex-col gap-3">
             {portfolio.positions.map(position => <PositionCard key={position.id} position={position} onClose={() => closePaper(position)} />)}
-          </div> : <div className="mt-3 rounded-lg border border-dashed border-line p-4"><Wallet className="size-5 text-faint" /><p className="mt-2 text-sm">No open paper positions.</p><p className="mt-1 text-xs text-faint">Only candidates passing every risk gate can open a position.</p></div>}
-          <div className="mt-4 flex items-center justify-between gap-3"><span className="text-xs text-faint">Paper history · {portfolio.trades.length} fills</span><button type="button" onClick={resetPaper} className="text-xs text-loss hover:underline">Reset paper book</button></div>
+          </div> : <div className="mt-3 rounded-lg border border-dashed border-line p-4"><Wallet className="size-5 text-faint" /><p className="mt-2 text-sm">No open positions.</p><p className="mt-1 text-xs text-faint">Only candidates passing every risk gate can open a position.</p></div>}
+          <div className="mt-4 flex items-center justify-between gap-3"><span className="text-xs text-faint">Trade history · {portfolio.trades.length} fills</span><button type="button" onClick={resetPaper} className="text-xs text-loss hover:underline">Reset demo book</button></div>
         </Card>
 
         <Card>
@@ -271,7 +271,7 @@ export function OpportunitiesView() {
     </div>
 
     <Card>
-      <Label>Execution discipline · guide-aligned paper simulation</Label>
+      <Label>Execution discipline · guide-aligned simulation</Label>
       <div className="mt-3 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Rule title="Position budget" body="At most 5% of equity per idea, no more than three open positions or 15% aggregate initial exposure." />
         <Rule title="Hard stop" body="Close the remaining position if price falls 8% below entry." />
@@ -316,7 +316,7 @@ function OpportunityCard({ item, selected, watched, verdict, onSelect, onWatch }
     <div className="mt-3 flex items-center gap-2 text-xs">
       {verdict.allowed ? <CheckCircle2 className="size-4 text-gain" /> : <ShieldX className="size-4 text-loss" />}
       <span className={verdict.allowed ? "text-gain" : "text-loss"}>{verdict.allowed ? "All risk gates pass" : `${verdict.checks.filter(check => !check.pass).length} gate(s) blocking`}</span>
-      <span className="ml-auto text-faint">{verdict.allowed ? "Paper only" : "No entry"}</span>
+      <span className="ml-auto text-faint">{verdict.allowed ? "Simulated only" : "No entry"}</span>
     </div>
   </article>;
 }
@@ -331,7 +331,7 @@ function PositionCard({ position, onClose }: { position: PaperPosition; onClose:
   const openedFor = Math.max(0, Date.now() - position.openedAt);
   const pnl = (position.currentPrice - position.entryPrice) * position.qty + position.realizedPnlUsd;
   return <div className="rounded-lg border border-line p-3">
-    <div className="flex items-start justify-between gap-2"><div><p className="font-medium">{position.symbol}</p><p className="text-xs text-faint">{position.chain} · {short(position.address)}</p></div><button type="button" onClick={onClose} className="inline-flex min-h-8 items-center gap-1 rounded-md border border-line px-2 text-xs text-faint hover:text-cream" aria-label={`Close ${position.symbol} paper position`}><XCircle className="size-3" />Close</button></div>
+    <div className="flex items-start justify-between gap-2"><div><p className="font-medium">{position.symbol}</p><p className="text-xs text-faint">{position.chain} · {short(position.address)}</p></div><button type="button" onClick={onClose} className="inline-flex min-h-8 items-center gap-1 rounded-md border border-line px-2 text-xs text-faint hover:text-cream" aria-label={`Close ${position.symbol} position`}><XCircle className="size-3" />Close</button></div>
     <div className="mt-3 grid grid-cols-2 gap-3"><Mini label="Mark / entry" value={`${money(position.currentPrice)} / ${money(position.entryPrice)}`} /><Mini label="Unrealized + realized" value={money(pnl)} /></div>
     <div className="mt-3 flex items-center justify-between gap-2 text-xs"><span className={change >= 0 ? "text-gain" : "text-loss"}>{pct(change)} price move</span><span className="text-faint">{ageText(openedFor)} open</span></div>
     <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-faint"><span className="rounded-md border border-line px-2 py-1">Stop {money(position.stopPrice)}</span><span className="rounded-md border border-line px-2 py-1">Scale {position.scaledOut ? "done" : money(position.scaleOutPrice)}</span><span className="rounded-md border border-line px-2 py-1">Trail {position.scaledOut ? money(position.highWaterPrice * 0.9) : "activates after scale"}</span></div>

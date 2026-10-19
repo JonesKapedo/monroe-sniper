@@ -257,8 +257,8 @@ export function WalletModal() {
                 <LogOut className="mr-1.5 size-3.5" /> Disconnect {wallet?.adapter.name ?? "wallet"}
               </Button>
               <p className="text-[11px] leading-relaxed text-faint">
-                Trading stays paper-only for now: the desk sizes against detected balances but
-                cannot move funds. Live execution unlocks in later phases.
+                Execution stays simulated: the desk sizes against detected balances but
+                cannot move funds. Live routing requires a connected broker.
               </p>
             </div>
           )}

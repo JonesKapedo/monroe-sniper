@@ -13,7 +13,7 @@ export const Route = createRootRoute({
       { title: "Monroe Sniper" },
       {
         name: "description",
-        content: "Paper trading desk that simulates every minute, sizes risk, and learns from its own fills.",
+        content: "Systematic trading desk that simulates every minute, sizes risk, and learns from its own fills.",
       },
       { name: "theme-color", content: "#000000" },
     ],

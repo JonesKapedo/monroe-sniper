@@ -103,14 +103,14 @@ function PositionCard({
         </p>
       </div>
       <p className="mt-2 text-[11px] text-faint">
-        Paper scenarios from the last quote; not forecasts. Standby leaves this position open.
+        Simulated scenarios from the last quote; not forecasts. Standby leaves this position open.
       </p>
       <button
         type="button"
         onClick={() => onClose(position.id)}
         className="mt-3 min-h-10 rounded-lg border border-loss/40 px-3 text-xs font-semibold text-loss hover:bg-loss/10"
       >
-        Close {position.symbol} at last paper mark
+        Close {position.symbol} at last mark
       </button>
     </article>
   );
@@ -416,7 +416,7 @@ export function TapeView() {
     0,
   );
 
-  // Paper fills plotted on the chart: nearest candle by time, skipped when off-scale.
+  // Simulated fills plotted on the chart: nearest candle by time, skipped when off-scale.
   const execMarkers = useMemo(() => {
     if (chartSource !== "solana-dex" || candles.length === 0) return [];
     return closedExecutions
@@ -435,23 +435,23 @@ export function TapeView() {
     <div className="mx-auto flex max-w-7xl flex-col gap-5">
       <PageHeader
         stage="now"
-        title="Market & Paper Activity"
-        badge={<Badge tone="live">Paper simulation</Badge>}
-        subtitle="Public market candles and simulated paper fills. No brokerage connection or real-money orders are available."
+        title="Market & Execution Activity"
+        badge={<Badge tone="live">Simulated</Badge>}
+        subtitle="Public market candles and simulated fills. No brokerage connection or real-money orders are available."
       >
         <div className="flex items-center gap-2 self-start rounded-lg border border-line bg-panel-2 px-3 py-2 text-xs sm:self-auto">
           <span
             className={cn("size-2 rounded-full", power ? "bg-gain" : "bg-faint")}
             aria-hidden="true"
           />
-          <span className="font-medium">{power ? "Paper bot armed" : "Standby"}</span>
+          <span className="font-medium">{power ? "Bot armed" : "Standby"}</span>
           <span className="text-faint">· {positions.length} held</span>
         </div>
       </PageHeader>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card>
-          <p className="text-[10px] tracking-wider text-faint uppercase">Paper equity</p>
+          <p className="text-[10px] tracking-wider text-faint uppercase">Demo equity</p>
           <p className="num mt-1 text-xl font-bold text-cream">${eq.toFixed(2)}</p>
           <p className="text-[11px] text-faint">Simulation balance</p>
         </Card>
@@ -465,7 +465,7 @@ export function TapeView() {
           >
             {formatUsd(unrealized)}
           </p>
-          <p className="text-[11px] text-faint">{positions.length} open paper positions</p>
+          <p className="text-[11px] text-faint">{positions.length} open demo positions</p>
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">Realized P&amp;L</p>
@@ -477,7 +477,7 @@ export function TapeView() {
           </p>
         </Card>
         <Card>
-          <p className="text-[10px] tracking-wider text-faint uppercase">Paper fills</p>
+          <p className="text-[10px] tracking-wider text-faint uppercase">Simulated fills</p>
           <p className="num mt-1 text-xl font-bold text-cream">{closedExecutions.length}</p>
           <p className="text-[11px] text-faint">This browser session</p>
         </Card>
@@ -893,7 +893,7 @@ export function TapeView() {
           <div className="flex items-center justify-between border-b border-line pb-3">
             <div className="flex items-center gap-2">
               <Activity className="size-4 text-brass" aria-hidden="true" />
-              <Label>Open paper positions</Label>
+              <Label>Open positions</Label>
             </div>
             <span className={cn("text-xs", power ? "text-gain" : "text-faint")}>
               {power ? "Bot armed" : "Held on standby"}
@@ -901,7 +901,7 @@ export function TapeView() {
           </div>
           <p className="text-xs leading-relaxed text-faint">
             {power
-              ? "Paper brackets are active while armed."
+              ? "Brackets are active while armed."
               : "Standby pauses automated entries and exits. Positions stay open; close them individually when ready."}
           </p>
           {positions.length ? (
@@ -912,7 +912,7 @@ export function TapeView() {
             </div>
           ) : (
             <p className="rounded-lg border border-dashed border-line px-4 py-8 text-center text-sm text-faint">
-              No open paper positions.
+              No open positions.
             </p>
           )}
         </Card>
@@ -921,7 +921,7 @@ export function TapeView() {
           <div className="flex items-center justify-between border-b border-line pb-3">
             <div className="flex items-center gap-2">
               <Radio className="size-4 text-brass" aria-hidden="true" />
-              <Label>Paper fill ledger</Label>
+              <Label>Fill ledger</Label>
             </div>
             <span className="text-xs text-faint">{closedExecutions.length} session fills</span>
           </div>
@@ -966,7 +966,7 @@ export function TapeView() {
               </table>
             ) : (
               <p className="py-8 text-center text-sm text-faint">
-                No paper fills have been recorded this session.
+                No fills have been recorded this session.
               </p>
             )}
           </div>
@@ -978,7 +978,7 @@ export function TapeView() {
           <Activity className="size-4 text-brass" aria-hidden="true" />
           <Label>Bot activity</Label>
           <span className="ml-auto text-xs text-faint">
-            {power ? "Running in paper mode" : "Paused"}
+            {power ? "Running in demo mode" : "Paused"}
           </span>
         </div>
         {log.length ? (
