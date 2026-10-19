@@ -207,7 +207,8 @@ export function scoreOpportunity(m: TokenMetrics, security: SecurityReport | nul
   if (security?.honeypot === true || security?.ownerCanMint === true || security?.ownerCanFreeze === true || security?.lpLocked === false) securityScore = 0;
   let score = 0.35 * liquidity + 0.25 * momentum + 0.2 * securityScore + 0.2 * novelty;
   if (volumeRatio > 0.5) { score += 8; flags.push("high-volume"); rationale.push("24h volume is high relative to market value"); }
-  if ((m.priceChange24h ?? 0) > 150 && volumeRatio > 1) { score -= 25; flags.push("PUMP-RISK"); rationale.push("Extreme price acceleration with outsized volume"); }
+  if ((m.priceChange24h ?? 0) > 40 || ((m.priceChange24h ?? 0) > 25 && volumeRatio > 0.5)) { score -= 25; flags.push("PUMP-RISK"); rationale.push("Vertical move — likely a blow-off, not an entry"); }
+  if (ageHours !== null && ageHours < 1) { score -= 12; rationale.push("Pair is under an hour old; book is not yet reliable"); }
   if ((m.liquidityUsd ?? 0) < 10_000) { flags.push("THIN-LIQUIDITY"); rationale.push("Liquidity is below $10k"); }
   if (!security) { flags.push("SECURITY-UNVERIFIED"); rationale.push("Security providers did not return a usable report"); }
   if (security?.honeypot === true) { flags.push("HONEYPOT"); rationale.push("Hard reject: honeypot detected"); }

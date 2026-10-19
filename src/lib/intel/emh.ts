@@ -51,8 +51,37 @@ export function assessEdge(input: EdgeInput, relaxStep = 0): Edge {
   const change = Number.isFinite(input.change24h) ? input.change24h : 0;
   const age = input.pairAgeHours;
   const sentiment = input.sentiment;
+  const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidityUsd : 0;
   let edge = input.score;
   const notes: string[] = [];
+
+  // Quality guards. These are NOT evidence thresholds: no relax step may
+  // loosen them, because no amount of starvation makes a fresh pump safe.
+  // Every losing entry this desk has taken came through one of these holes.
+  if (age != null && age < 1) {
+    return {
+      act: false,
+      edge: Math.max(0, edge),
+      stance: "SKIP",
+      why: `Pair is ${age.toFixed(1)}h old — no reliable book to trade.`,
+    };
+  }
+  if (change >= 25) {
+    return {
+      act: false,
+      edge: Math.max(0, edge),
+      stance: "SKIP",
+      why: `Vertical move (+${change.toFixed(1)}%) — chasing a blow-off, not an edge.`,
+    };
+  }
+  if (!depthUnknown && participation >= 1.2) {
+    return {
+      act: false,
+      edge: Math.max(0, edge),
+      stance: "SKIP",
+      why: `Turnover ${participation.toFixed(2)}× the pool — distribution risk.`,
+    };
+  }
 
   if (typeof sentiment === "number" && Number.isFinite(sentiment)) {
     const sentimentDir = Math.sign(sentiment);
@@ -123,11 +152,10 @@ export function assessEdge(input: EdgeInput, relaxStep = 0): Edge {
     };
   }
 
-  const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidityUsd : 0;
-  const trending = change >= Math.max(0.3, 0.7 - changeFloor) && participation >= Math.max(0.02, 0.05 - partFloor) && input.score >= Math.max(42, 52 - scoreCutoff);
+  const trending = change >= Math.max(0.3, 0.7 - changeFloor) && participation >= Math.max(0.03, 0.08 - partFloor) && input.score >= Math.max(42, 52 - scoreCutoff);
   // A high score on a dead book is not an information edge: prove it with
   // turnover before calling it a trend.
-  const strongBook = input.score >= Math.max(52, 68 - scoreCutoff) && change > -0.5 && participation >= Math.max(0.02, 0.05 - partFloor);
+  const strongBook = input.score >= Math.max(52, 68 - scoreCutoff) && change > -0.5 && participation >= Math.max(0.03, 0.08 - partFloor);
   if (trending || strongBook) {
     return {
       act: true,

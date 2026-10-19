@@ -59,7 +59,7 @@ export function auditAcademicSafeguards(
 
   // 1. INVESTOPEDIA MISTAKE #1: Anti-FOMO Green Candle Chaser Rule
   // (Buying at extreme extended peaks without pullbacks)
-  const isFomoTop = change > 75 && volToLiqRatio > 2.0;
+  const isFomoTop = change > 60 || (change > 35 && volToLiqRatio > 1.4);
   if (isFomoTop) {
     flags.push("FOMO_TOP_RISK");
   }
@@ -75,7 +75,7 @@ export function auditAcademicSafeguards(
 
   // 2. RESEARCHGATE & BINANCE: Insider Anticipated Purchases (IAP) & Pump-and-Dump Detector
   // Anomalous volume spike (>1.5x pool depth) combined with fresh token age or extreme spread
-  const isInsiderPump = volToLiqRatio > 1.8 && (candidate.pairAgeHours !== null && candidate.pairAgeHours < 12);
+  const isInsiderPump = volToLiqRatio > 1.2 && (candidate.pairAgeHours !== null && candidate.pairAgeHours < 12);
   if (isInsiderPump) {
     flags.push("INSIDER_PUMP_PATTERN");
   }

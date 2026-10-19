@@ -511,6 +511,9 @@ function absorb(
   return { book: next, memory: mem, newTrades };
 }
 
+/** Throttle so a DB-less deployment logs the degraded link at most once a minute. */
+let learningSaveLoggedAt = 0;
+
 function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>): void {
   for (const { trade, mode } of records) {
     if (trade.simulated || trade.reason === "MANUAL") {
@@ -561,14 +564,18 @@ function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>)
           useDesk.setState((prev) => ({
             tradeLearningDbCount: state.seen,
             // The database is the shared source of truth for the adaptive
-            // floor: adopt its aggregate so local + Neon never diverge.
-            memory: {
-              seen: state.seen,
-              wins: state.wins,
-              losses: state.losses,
-              realized: state.realized,
-              minScore: state.minScore,
-            },
+            // floor — but only when it has seen at least as much as we have.
+            // A fresh/empty database must never roll local learning back.
+            memory:
+              state.seen >= prev.memory.seen
+                ? {
+                    seen: state.seen,
+                    wins: state.wins,
+                    losses: state.losses,
+                    realized: state.realized,
+                    minScore: state.minScore,
+                  }
+                : prev.memory,
             dbEvents: [event, ...prev.dbEvents].slice(0, 200),
             dbGrossWin: prev.dbGrossWin + (trade.pnl > 0 ? trade.pnl : 0),
             dbGrossLoss: prev.dbGrossLoss + (trade.pnl < 0 ? -trade.pnl : 0),
@@ -599,12 +606,22 @@ function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>)
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error("[trade-learning] Failed to persist a closed trade:", error);
-        useDesk.setState((state) => ({
-          note: "Trade closed, but its learning record could not be saved. Check the database link.",
-          log: pushLog(state.log, `Trade learning save failed: ${trade.symbol} (${message.slice(0, 120)})`),
-          dbOk: false,
-          dbError: message.slice(0, 300),
-        }));
+        useDesk.setState((state) => {
+          // Local learning already applied — the DB is a sync layer, not the
+          // teacher. Report the degraded link once a minute, not once a trade.
+          const now = Date.now();
+          const stamp = `${message.slice(0, 120)}`;
+          const noisy = now - learningSaveLoggedAt < 60_000 && state.dbError === stamp;
+          if (!noisy) learningSaveLoggedAt = now;
+          return {
+            note: "Learning is kept locally; the database link is unavailable on this deployment.",
+            log: noisy
+              ? state.log
+              : pushLog(state.log, `Learning saved locally — database link degraded (${stamp}).`),
+            dbOk: false,
+            dbError: stamp,
+          };
+        });
       });
   }
 }
@@ -2163,6 +2180,9 @@ export const useDesk = create<DeskState>()(
         demo: s.demo,
         live: s.live,
         memory: s.memory,
+        // Learned per-symbol / per-venue floors survive a reload even when the
+        // database link is unavailable (the deployed common case).
+        bucketBook: s.bucketBook,
         log: s.log,
         walletHistory: s.walletHistory,
         tradingLedger: s.tradingLedger,

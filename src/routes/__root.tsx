@@ -15,7 +15,7 @@ export const Route = createRootRoute({
         name: "description",
         content: "Paper trading desk that simulates every minute, sizes risk, and learns from its own fills.",
       },
-      { name: "theme-color", content: "#10120e" },
+      { name: "theme-color", content: "#000000" },
     ],
     links: [
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
@@ -31,7 +31,7 @@ export const Route = createRootRoute({
     ],
   }),
   component: () => (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" data-theme="midnight" suppressHydrationWarning>
       <head suppressHydrationWarning>
         <HeadContent />
       </head>
