@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { create } from "zustand";
-import { AlertTriangle, LogOut, Wallet as WalletIcon, X } from "lucide-react";
+import { AlertTriangle, LogOut, ShieldCheck, Wallet as WalletIcon, X } from "lucide-react";
 import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { getLiveStatus } from "@/lib/trading/live/live.functions";
+import type { LiveStatus } from "@/lib/trading/live/types";
 import { SolanaWalletProvider } from "@/lib/wallet/provider";
 import {
   formatAddress,
@@ -125,6 +127,20 @@ export function WalletModal() {
   const { sol, usdc, loading, error, health, mismatch, expectedAddress, depositNote, refresh } = useWalletBalances();
   const [connectError, setConnectError] = useState<string | null>(null);
   const wcReady = Boolean(walletConnectProjectId());
+  const [live, setLive] = useState<LiveStatus | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancel = false;
+    void getLiveStatus()
+      .then((s) => {
+        if (!cancel) setLive(s);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancel = true;
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -188,6 +204,25 @@ export function WalletModal() {
                 Different wallet than expected ({expectedAddress ? formatAddress(expectedAddress) : "unknown"}).
                 If you did not switch wallets yourself, disconnect immediately.
               </p>
+            </div>
+          )}
+
+          {live && (
+            <div
+              className={cn(
+                "flex gap-2 rounded-xl border p-3 text-xs",
+                live.configured ? "border-gain/40 bg-gain/10 text-gain" : "border-line bg-panel-2 text-faint",
+              )}
+            >
+              <ShieldCheck className="size-4 shrink-0" />
+              <div>
+                <p className="font-semibold">Live execution · {live.venueLabel}</p>
+                <p className="mt-0.5 leading-relaxed">{live.note}</p>
+                <p className="mt-1 text-[10px] text-faint">
+                  Cap ${live.caps.maxNotionalUsd}/order · daily loss ${live.caps.dailyLossLimitUsd} · max {live.caps.maxOpenPositions} open
+                  {live.caps.allowlist.length ? ` · allowlist ${live.caps.allowlist.join(", ")}` : ""}
+                </p>
+              </div>
             </div>
           )}
 
