@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { bucketId, chooseEntry, emptyBook, emptyBucketBook, enter, entryVerdict, equity, floorFor, learnBuckets, markBook, sampleTape, setKill, simulateBuy, type Position } from "./paper.ts";
+import { bucketId, chooseEntry, closeOne, emptyBook, emptyBucketBook, enter, entryVerdict, equity, floorFor, learnBuckets, markBook, sampleTape, setKill, simulateBuy, type Position } from "./paper.ts";
 
 describe("paper desk", () => {
   it("blocks a thin fresh name", () => {
@@ -232,5 +232,24 @@ describe("same-venue marking", () => {
     assert.ok(book.trades.length >= 1);
     assert.equal(book.trades[0]?.markSource, "tape:weth");
     assert.equal(book.trades[0]?.reason, "TARGET");
+  });
+
+  it("closeOne labels a live exit reason so it can teach", () => {
+    const weth = sampleTape().find((c) => c.symbol === "WETH");
+    assert.ok(weth);
+    const opened = enter(emptyBook(), weth, 1_000);
+    assert.equal(opened.ok, true);
+    const pos = opened.book.positions[0];
+    assert.ok(pos);
+    // A real live fill is never flagged simulated; label the close STOP.
+    const marked = {
+      ...opened.book,
+      positions: opened.book.positions.map((p) => ({ ...p, mark: pos.entryPrice * 0.9, markSimulated: undefined })),
+    };
+    const closed = closeOne(marked, pos.id, 2_000, "STOP");
+    assert.equal(closed.positions.length, 0);
+    assert.equal(closed.trades[0]?.reason, "STOP");
+    assert.equal(closed.trades[0]?.simulated, undefined);
+    assert.ok((closed.trades[0]?.pnl ?? 0) < 0);
   });
 });

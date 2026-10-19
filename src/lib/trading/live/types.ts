@@ -30,6 +30,12 @@ export type LiveOrderRequest = {
    * it and its stop/target can fire. Ignored by the venue.
    */
   candidateId?: string;
+  /** Risk-engine stop (USD) captured at entry — the live exit band. */
+  stopPrice?: number;
+  /** Risk-engine target (USD) captured at entry. */
+  targetPrice?: number;
+  /** Why a live sell was queued (labels the close so it can teach). */
+  exitReason?: "STOP" | "TARGET";
 };
 
 export type LiveOrderResult =

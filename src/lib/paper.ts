@@ -591,7 +591,7 @@ export function markBook(
   return armIfNeeded(next);
 }
 
-export function closeOne(book: Book, id: string, now = Date.now()): Book {
+export function closeOne(book: Book, id: string, now = Date.now(), reason: string = "MANUAL"): Book {
   const p = book.positions.find((x) => x.id === id);
   if (!p) return book;
   const pnl = (p.mark - p.entryPrice) * p.qty;
@@ -605,7 +605,7 @@ export function closeOne(book: Book, id: string, now = Date.now()): Book {
         id: stamp("tr"),
         symbol: p.symbol,
         pnl,
-        reason: "MANUAL",
+        reason,
         simulated: p.markSimulated,
         closedAt: now,
         chain: p.chain,

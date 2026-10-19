@@ -1679,6 +1679,8 @@ export const useDesk = create<DeskState>()(
               qty,
               clientId: `entry-${pick.id}-${Date.now()}`,
               candidateId: pick.id,
+              stopPrice: verdict.stopPrice,
+              targetPrice: verdict.targetPrice,
             });
             cycleFills += 1;
             useDesk.setState((prev) => ({
@@ -1790,6 +1792,7 @@ export const useDesk = create<DeskState>()(
               priceUsd: p.mark,
               qty: p.qty,
               clientId: `exit-${p.id}`,
+              exitReason: atStop ? "STOP" : "TARGET",
             });
           }
 
@@ -1834,6 +1837,8 @@ export const useDesk = create<DeskState>()(
               const entered = enter(get().live, cand, Date.now(), 0, {
                 notional: res.filledQty * res.avgPriceUsd,
                 priceSource: `tape:${cand.id}`,
+                stop: req.stopPrice,
+                target: req.targetPrice,
               });
               set((prev) => ({
                 live: entered.book,
@@ -1844,11 +1849,23 @@ export const useDesk = create<DeskState>()(
               const liveBook = get().live;
               if (posId && liveBook.positions.some((p) => p.id === posId)) {
                 const marked = { ...liveBook, positions: liveBook.positions.map((p) => (p.id === posId ? { ...p, mark: res.avgPriceUsd } : p)) };
-                const closed = closeOne(marked, posId, Date.now());
-                set((prev) => ({
-                  live: closed,
-                  tradingLedger: touchLedgerFromBook(prev.tradingLedger, closed, "desk"),
-                }));
+                const priorIds = new Set(liveBook.trades.map((t) => t.id));
+                const closed = closeOne(marked, posId, Date.now(), req.exitReason ?? "MANUAL");
+                const trade = closed.trades.find((t) => !priorIds.has(t.id));
+                set((prev) => {
+                  const next: Partial<DeskState> = {
+                    live: closed,
+                    tradingLedger: touchLedgerFromBook(prev.tradingLedger, closed, "desk"),
+                  };
+                  // A real live close teaches the SAME shared memory and bucket
+                  // book as demo — one global discipline across both modes.
+                  if (trade && !trade.simulated) {
+                    next.memory = learn(prev.memory, trade.pnl, trade.lesson);
+                    next.bucketBook = learnBuckets(prev.bucketBook, trade.venue ?? "unknown", trade.reason, trade.symbol, trade.pnl, "live");
+                    archiveClosedTrades([{ trade, mode: "live" as Mode }]);
+                  }
+                  return next;
+                });
               }
             }
             set((prev) => ({
