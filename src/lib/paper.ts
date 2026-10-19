@@ -170,11 +170,18 @@ export function scoreCandidate(input: {
   const ageH = input.pairCreatedAt
     ? Math.max(0, (Date.now() - input.pairCreatedAt) / 3_600_000)
     : null;
-  // Unknown depth scores neutral — never fake-deep, never fake-thin.
-  const liqScore = liqUnknown ? 50 : Math.max(0, Math.min(100, (liq / 100_000) * 100));
+  // Unknown depth (CEX spot, index references): pool depth is unpublished, so a
+  // neutral depth proxy must NOT carry most of the weight. If it does, every
+  // major lands near 48 and can never clear the 52 entry floor — the desk
+  // starves on a healthy tape. Score these on real traded flow (log-scaled 24h
+  // quote volume) plus momentum instead. Known-depth (AMM) rows are unchanged.
+  const flowScore = vol > 0 ? Math.max(0, Math.min(100, (Math.log10(vol) - 5) * 28)) : 0;
+  const liqScore = Math.max(0, Math.min(100, (liq / 100_000) * 100));
   const mom = Math.max(0, Math.min(100, 50 + chg * 0.35));
   const novelty = ageH === null ? 30 : Math.max(0, Math.min(100, 100 - ageH * 1.5));
-  let score = 0.7 * liqScore + 0.2 * mom + 0.1 * novelty;
+  let score = liqUnknown
+    ? 0.35 * flowScore + 0.45 * mom + 0.2 * novelty
+    : 0.7 * liqScore + 0.2 * mom + 0.1 * novelty;
   const flags: string[] = [];
   const rationale: string[] = [];
   if (vol > 0 && liq > 0 && vol / liq > 0.4) {

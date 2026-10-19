@@ -1,8 +1,49 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { bucketId, chooseEntry, closeOne, emptyBook, emptyBucketBook, enter, entryVerdict, equity, floorFor, learnBuckets, markBook, sampleTape, setKill, simulateBuy, type Position } from "./paper.ts";
+import { bucketId, chooseEntry, closeOne, emptyBook, emptyBucketBook, enter, entryVerdict, equity, floorFor, learnBuckets, markBook, MIN_SCORE, sampleTape, scoreCandidate, setKill, simulateBuy, type Position } from "./paper.ts";
 
 describe("paper desk", () => {
+  it("scores an unknown-depth major high enough to clear the entry floor", () => {
+    // Regression: a CEX major with real flow must be able to clear MIN_SCORE.
+    // Previously 70% of the score was a neutral depth proxy, pinning every
+    // major near 48 — below the 52 floor — so the desk never traded.
+    const c = scoreCandidate({
+      symbol: "BTC",
+      name: "BTC / USDT",
+      chain: "binance",
+      address: "BTCUSDT",
+      priceUsd: 85_000,
+      liquidityUsd: null,
+      volume24h: 1_000_000_000,
+      change24h: 1.1,
+      pairCreatedAt: null,
+      url: null,
+      venue: "binance",
+      liquidityUnknown: true,
+    });
+    assert.ok(c);
+    assert.ok((c?.score ?? 0) >= MIN_SCORE, `expected >= ${MIN_SCORE}, got ${c?.score}`);
+  });
+
+  it("still scores a quiet, low-flow unknown-depth name below the floor", () => {
+    const c = scoreCandidate({
+      symbol: "QUIET",
+      name: "QUIET / USDT",
+      chain: "binance",
+      address: "QUIETUSDT",
+      priceUsd: 10,
+      liquidityUsd: null,
+      volume24h: 120_000,
+      change24h: 0,
+      pairCreatedAt: null,
+      url: null,
+      venue: "binance",
+      liquidityUnknown: true,
+    });
+    assert.ok(c);
+    assert.ok((c?.score ?? 0) < MIN_SCORE, `expected < ${MIN_SCORE}, got ${c?.score}`);
+  });
+
   it("blocks a thin fresh name", () => {
     const fresh = sampleTape().find((c) => c.symbol === "NEW");
     assert.ok(fresh);
