@@ -118,8 +118,12 @@ export function auditAcademicSafeguards(
   });
 
   // 4. INVESTOPEDIA MISTAKE #6: Transaction Fee & Slippage Erosion Guard
-  // Ensures micro trades or thin pools do not get eaten alive by gas + DEX swap fees
-  const estFeeUsd = candidate.venue === "binance" ? 0.05 : 0.45; // CEX vs Solana/L2 DEX fee
+  // Ensures micro trades or thin pools do not get eaten alive by gas + DEX swap fees.
+  // Reference/index rows (CoinGecko/CMC) pose market cap as liquidity but hold
+  // no AMM pool, so no on-chain swap fee applies — they clear at the CEX fee,
+  // same as the tape venues. A published DEX pool still pays the real swap cost.
+  const isCexVenue = candidate.venue === "binance";
+  const estFeeUsd = isCexVenue || depthUnknown ? 0.05 : 0.45; // CEX/reference vs Solana-L2 DEX fee
   const minExpectedProfit = plannedNotional * 0.04; // 4% minimum profit target
   const feeToProfitRatio = minExpectedProfit > 0 ? estFeeUsd / minExpectedProfit : 1;
   const isFeeErosion = feeToProfitRatio > 0.25; // Fees should never exceed 25% of expected profit
