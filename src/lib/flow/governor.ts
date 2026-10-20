@@ -120,7 +120,12 @@ export function tickGovernor(
       alert,
     };
   }
-  return { state: { ...state, starvedCycles: starved }, scoreFloorRelax: currentRelax(state), alert: null };
+  // Once the ladder is exhausted the desk cannot relax any further. Cap the
+  // counter so telemetry reads "starved N/N" instead of growing without bound.
+  const capped = state.relaxStep >= MAX_RELAX_STEPS
+    ? MAX_STARVED_CYCLES_BEFORE_RELAX
+    : starved;
+  return { state: { ...state, starvedCycles: capped }, scoreFloorRelax: currentRelax(state), alert: null };
 }
 
 /** Cumulative score-floor relaxation granted by the applied ladder steps. */

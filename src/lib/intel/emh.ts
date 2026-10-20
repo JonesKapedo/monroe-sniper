@@ -168,6 +168,19 @@ export function assessEdge(input: EdgeInput, relaxStep = 0): Edge {
     };
   }
 
+  // Conviction: an elite score that survived every hard guard (fresh pump,
+  // blow-off, pool turnover, thin book) is admitted even without a fresh
+  // momentum print. Without this the desk starves on quiet 80-score names,
+  // which is exactly the state the flow governor exists to prevent.
+  if (input.score >= Math.max(66, 78 - scoreCutoff)) {
+    return {
+      act: true,
+      edge: Math.min(100, edge),
+      stance: "TREND",
+      why: `High-conviction ${input.score}/100 on a clean book. ${notes.join(". ")}`.trim(),
+    };
+  }
+
   return {
     act: false,
     edge: Math.max(0, edge),

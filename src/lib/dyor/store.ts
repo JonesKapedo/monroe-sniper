@@ -9,6 +9,7 @@ import type {
   MarketEvaluation,
 } from "./types";
 import type { Candidate } from "../paper";
+import type { AvenueOpportunity } from "../avenues/types";
 import type { SecurityReport } from "../data/market-sources";
 
 export type DyorState = {
@@ -31,6 +32,8 @@ export type DyorState = {
 
   // Multi-source scanning & ingestion from live tape/candidates
   ingestCandidate: (candidate: Candidate) => void;
+  /** Ingest a live funding avenue and attach its venue risk report. */
+  ingestAvenue: (avenue: AvenueOpportunity) => void;
   runDeepEvaluation: (id: string) => void;
   /** Replace heuristic checks with a real dual-provider security report. */
   attachSecurity: (id: string, report: SecurityReport) => void;
@@ -304,6 +307,94 @@ export const useDyorStore = create<DyorState>()(
             instruments: [newInstrument, ...state.instruments.slice(0, 39)],
           }));
         }
+      },
+
+      ingestAvenue: (opp) => {
+        const id = `avenue:${opp.id}`;
+        const funding =
+          opp.fundingRate8h != null ? `${(opp.fundingRate8h * 100).toFixed(3)}% / 8h` : "n/a";
+        const discipline = opp.disciplineNotes?.length
+          ? opp.disciplineNotes.join(" · ")
+          : opp.disciplineApproved
+            ? "All discipline gates passed."
+            : "Gated by discipline rules.";
+        const riskScore =
+          opp.rugScore ?? (opp.disciplineApproved ? Math.max(60, opp.confidenceScore) : 45);
+
+        // Venue-native report: funding, R:R and discipline gates. This is not a
+        // contract audit — the source label says so.
+        const report: HoneypotCheck = {
+          source: "Hyperliquid venue risk report (funding + discipline gates)",
+          isHoneypot: false,
+          buyTaxPct: 0,
+          sellTaxPct: 0,
+          transferTaxPct: 0,
+          isMintable: false,
+          isProxy: false,
+          ownerCanBlacklist: false,
+          canRenounce: false,
+          liquidityLockedPct: 0,
+          lockDurationDays: 0,
+          score: riskScore,
+          verdict: opp.disciplineApproved ? "SAFE" : "SUSPICIOUS",
+          details: `${opp.title}. Funding ${funding}. R:R ${
+            opp.riskRewardRatio?.toFixed(1) ?? "n/a"
+          }:1. ${discipline}`,
+        };
+        const market: MarketEvaluation = {
+          source: "Hyperliquid live carry feed",
+          priceUsd: opp.priceA,
+          liquidityUsd: 0,
+          volume24h: 0,
+          spreadBps: 0,
+          orderbookDepthRatio: 1,
+          volatilityRegime:
+            opp.estimatedAtrPct == null
+              ? "NORMAL"
+              : opp.estimatedAtrPct > 4
+                ? "HIGH"
+                : opp.estimatedAtrPct > 1.5
+                  ? "NORMAL"
+                  : "LOW",
+          smartMoneyInflowUsd: 0,
+        };
+        const snapshot: EvaluatedInstrument = {
+          id,
+          symbol: opp.symbol,
+          name: opp.title || opp.symbol,
+          chain: "hyperliquid",
+          address: opp.anchorSymbol ?? opp.id,
+          venue: "dex",
+          status: "EVALUATING",
+          userNote: discipline,
+          addedAt: Date.now(),
+          updatedAt: Date.now(),
+          overallSafetyScore: riskScore,
+          overallConfidence: opp.confidenceScore,
+          honeypotMultiSource: [report],
+          socialIntelligence: [],
+          marketEvaluations: [market],
+          tags: ["HYPERLIQUID", opp.category, `Score: ${opp.confidenceScore}`],
+        };
+
+        set((state) => {
+          const existing = state.instruments.find((i) => i.id === id);
+          return {
+            instruments: existing
+              ? state.instruments.map((i) =>
+                  i.id === id
+                    ? {
+                        ...snapshot,
+                        addedAt: i.addedAt,
+                        status: i.status,
+                        userNote: i.userNote ?? snapshot.userNote,
+                      }
+                    : i,
+                )
+              : [snapshot, ...state.instruments.slice(0, 39)],
+            selectedInstrumentId: id,
+          };
+        });
       },
 
       runDeepEvaluation: (id) => {

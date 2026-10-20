@@ -102,6 +102,7 @@ import {
   recordEntryFilled,
   recordRejection,
   currentRelax,
+  MAX_STARVED_CYCLES_BEFORE_RELAX,
   type FlowGovernorState,
 } from "./flow/governor";
 import {
@@ -1814,7 +1815,7 @@ export const useDesk = create<DeskState>()(
                   securityVerdictOf(live.security, id),
                 );
                 useDesk.setState((prev) => ({
-                  log: pushLog(prev.log, `${diag.summary} · starved ${govAfter.starvedCycles}/30`),
+                  log: pushLog(prev.log, `${diag.summary} · starved ${govAfter.starvedCycles}/${MAX_STARVED_CYCLES_BEFORE_RELAX}`),
                 }));
               }
             }

@@ -17,19 +17,19 @@ import {
   TrendingUp,
   Zap,
 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import { useFeedHealth } from "@/lib/feeds/status";
 import { formatNairobiTime } from "@/lib/sniper/nairobi-time";
-import { scanAllAvenues, tapeContextFor } from "@/lib/avenues/engine";
+import { scanAllAvenues } from "@/lib/avenues/engine";
 import { stakeBudgetFor } from "@/lib/sniper/tier-config";
-import type { AvenueCategory, AvenueOpportunity } from "@/lib/avenues/types";
 import {
   equity,
   exposure,
   portfolioLines,
   DEMO_START,
-  type Candidate,
 } from "@/lib/paper";
 import { useDesk } from "@/lib/desk-store";
+import { useDyorStore } from "@/lib/dyor/store";
 import { loadFeeds } from "@/lib/market.functions";
 import { Badge, Button, Card, Label, PageHeader } from "@/components/ui";
 import { WalletButton } from "@/components/wallet-modal";
@@ -38,7 +38,7 @@ import { cn } from "@/lib/cn";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 import { useMascot } from "@/lib/mascot";
 import { EquityDashboard } from "@/components/equity-dashboard";
-import { AvenuesTable } from "@/components/avenues-table";
+import { AvenuesTable, type DyorTarget } from "@/components/avenues-table";
 
 const money = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -67,7 +67,6 @@ export function Desk() {
   const tape = useDesk((s) => s.tape);
   const log = useDesk((s) => s.log);
   const setTape = useDesk((s) => s.setTape);
-  const manualEnter = useDesk((s) => s.manualEnter);
   const flatten = useDesk((s) => s.flatten);
   const flattenAll = useDesk((s) => s.flattenAll);
   const resetDemo = useDesk((s) => s.resetDemo);
@@ -93,10 +92,14 @@ export function Desk() {
 
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
-  const [filterVenue, setFilterVenue] = useState<"all" | "binance" | "dex">("all");
-  const [avenueFilter, setAvenueFilter] = useState<"ALL" | AvenueCategory>("ALL");
   const [showReadinessModal, setShowReadinessModal] = useState(false);
   const [showStandbyModal, setShowStandbyModal] = useState(false);
+
+  const navigate = useNavigate();
+  const ingestCandidate = useDyorStore((s) => s.ingestCandidate);
+  const ingestAvenue = useDyorStore((s) => s.ingestAvenue);
+  const setSelectedInstrument = useDyorStore((s) => s.setSelectedInstrument);
+  const runDeepEvaluation = useDyorStore((s) => s.runDeepEvaluation);
 
   // Live ticking clock for Nairobi EAT
   const [nowTs, setNowTs] = useState(Date.now());
@@ -132,33 +135,19 @@ export function Desk() {
     }
   }, [setTape]);
 
-  const snipeAvenue = useCallback(
-    (opp: AvenueOpportunity) => {
-      // Manual snipes use the same live tape context as the bot — no entry
-      // without a live quote for the anchor.
-      const ctx = tapeContextFor(opp.anchorSymbol, tape);
-      if (!ctx) return;
-      const aveCand: Candidate = {
-        id: opp.id,
-        symbol: opp.symbol,
-        name: opp.symbol,
-        address: opp.id,
-        chain: opp.chain,
-        venue: opp.venueA.toLowerCase().includes("binance") ? "binance" : "dex",
-        priceUsd: opp.priceA,
-        change24h: ctx.change24h,
-        volume24h: ctx.volume24h,
-        liquidityUsd: ctx.liquidityUsd ?? 0,
-        liquidityUnknown: ctx.liquidityUnknown || undefined,
-        score: opp.confidenceScore,
-        pairAgeHours: null,
-        url: null,
-        flags: [],
-        rationale: [opp.title, ...(opp.disciplineNotes ?? [])],
-      };
-      manualEnter(aveCand);
+  const openDyor = useCallback(
+    (target: DyorTarget) => {
+      if (target.kind === "avenue") {
+        ingestAvenue(target.avenue);
+        setSelectedInstrument(`avenue:${target.avenue.id}`);
+      } else {
+        ingestCandidate(target.candidate);
+        setSelectedInstrument(target.candidate.id);
+        runDeepEvaluation(target.candidate.id);
+      }
+      navigate({ to: "/learn" });
     },
-    [manualEnter, tape],
+    [ingestAvenue, ingestCandidate, navigate, runDeepEvaluation, setSelectedInstrument],
   );
 
   // Initial feed load
@@ -184,11 +173,6 @@ export function Desk() {
     }
     if (useDesk.getState().demo.positions.length) setShowStandbyModal(true);
   };
-
-  const filteredTape = tape.filter((c) => {
-    if (filterVenue === "all") return true;
-    return c.venue === filterVenue;
-  });
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5">
@@ -728,87 +712,12 @@ export function Desk() {
         </div>
       </div>
 
-        {/* Horizontal Ticker Ribbon */}
-        <div className="flex w-full min-w-0 max-w-full gap-2.5 overflow-x-auto pb-1.5 scrollbar-thin">
-          {filteredTape.slice(0, 14).map((c) => {
-            const isHeld = book.positions.some((p) => p.tokenId === c.id);
-            const clearsScore = c.score >= memory.minScore;
-            return (
-              <div
-                key={c.id}
-                className={cn(
-                  "flex min-w-[220px] flex-col justify-between rounded-xl border p-3 transition-colors",
-                  isHeld
-                    ? "border-gain/60 bg-gain/5"
-                    : clearsScore
-                      ? "border-brass/40 bg-panel hover:border-brass"
-                      : "border-line bg-panel hover:border-line/80",
-                )}
-              >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-cream">{c.symbol}</span>
-                      <span
-                        className={cn(
-                          "rounded px-1 text-[9px] font-semibold uppercase",
-                          c.venue === "binance"
-                            ? "bg-amber-500/20 text-amber-300"
-                            : "bg-purple-500/20 text-purple-300",
-                        )}
-                      >
-                        {c.venue === "binance" ? "Binance" : c.chain}
-                      </span>
-                    </div>
-                    <p className="num text-xs text-faint">Vol ${Math.round(c.volume24h).toLocaleString()}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="num text-sm font-semibold">{px(c.priceUsd)}</p>
-                    <p
-                      className={cn(
-                        "num text-xs font-medium",
-                        c.change24h >= 0 ? "text-gain" : "text-loss",
-                      )}
-                    >
-                      {c.change24h >= 0 ? "+" : ""}
-                      {c.change24h.toFixed(2)}%
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-2.5 flex items-center justify-between border-t border-line/60 pt-2 text-xs">
-                  <span
-                    className={cn(
-                      "font-mono font-medium",
-                      clearsScore ? "text-brass" : "text-faint",
-                    )}
-                  >
-                    Score: {c.score}/100
-                  </span>
-                  <button
-                    type="button"
-                    disabled={isHeld || book.positions.length >= 3}
-                    onClick={() => manualEnter(c)}
-                    className={cn(
-                      "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
-                      isHeld
-                        ? "cursor-default text-gain"
-                        : "bg-panel-2 text-cream hover:bg-brass hover:text-ink",
-                    )}
-                  >
-                    {isHeld ? "Held" : "Snipe"}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
       <AvenuesTable
         avenues={avenues}
+        tape={tape}
         book={book}
-        onSnipe={snipeAvenue}
-        maxSlots={riskSettings?.maxPositions ?? 4}
+        minScore={memory.minScore}
+        onDyor={openDyor}
       />
 
       {/* Performance review modal */}
