@@ -943,3 +943,18 @@ async function upsertBucketKey(key: string, mem: Memory, mode: string): Promise<
     .upsert({ key, minScore: mem.minScore, seen: mem.seen, wins: mem.wins, losses: mem.losses, realized: mem.realized, mode });
   if (error) console.error("[learnBuckets] upsert error", error);
 }
+
+export const CEX_ENTRY_FLOOR_CEIL = 64;
+/**
+ * Ceiling for the learned entry floor on unknown-depth (CEX/index) candidates.
+ * A top-liquidity major prints ~64 from the flow model (0.35·100 flow +
+ * 0.45·~50 momentum + 0.2·30 novelty ≈ 64), and only clears the EMH gate on a
+ * move that keeps it there — so this is exactly what a strong major can
+ * deliver. A learned floor above it would be unreachable no matter how good the
+ * tape and the desk would starve right after a losing streak. Losses still
+ * raise the bar; they just can't push it past a reachable, disciplined level.
+ */
+
+export function entryFloorFor(c: { liquidityUnknown?: boolean }, floor: number): number {
+  return c.liquidityUnknown === true ? Math.min(floor, CEX_ENTRY_FLOOR_CEIL) : floor;
+}

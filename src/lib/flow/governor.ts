@@ -46,7 +46,7 @@ export const FLOW_RELAX_STEPS: ReadonlyArray<{
 
 export const MAX_RELAX_STEPS = FLOW_RELAX_STEPS.length;
 
-export const MAX_STARVED_CYCLES_BEFORE_RELAX = 30;
+export const MAX_STARVED_CYCLES_BEFORE_RELAX = 10;
 export const REJECTION_RING_SIZE = 200;
 export const ALERT_RING_SIZE = 50;
 
@@ -151,7 +151,7 @@ export function flowSummary(state: FlowGovernorState): {
   lastRelax: string | null;
 } {
   return {
-    status: state.relaxStep > 0 ? "RELAXED" : state.starvedCycles > 15 ? "STARVING" : "FLOWING",
+    status: state.relaxStep > 0 ? "RELAXED" : state.starvedCycles > 6 ? "STARVING" : "FLOWING",
     starvedCycles: state.starvedCycles,
     relaxStep: state.relaxStep,
     lastRelax: state.relaxStep > 0 ? FLOW_RELAX_STEPS[Math.min(state.relaxStep, MAX_RELAX_STEPS) - 1].description : null,
