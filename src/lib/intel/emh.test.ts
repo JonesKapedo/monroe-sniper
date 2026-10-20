@@ -118,3 +118,9 @@ test("a quiet, high-score unknown-depth major still leans in rather than starvin
   assert.equal(edge.act, true, `expected act, got: ${edge.why}`);
 });
 
+
+test("admits an elite score that cleared every hard guard even without a fresh print", () => {
+  const edge = assessEdge({ ...base, score: 80, change24h: 0.1, pairAgeHours: 400, volume24h: 2_000 });
+  assert.equal(edge.act, true, `expected act, got: ${edge.why}`);
+  assert.match(edge.why, /High-conviction 80\/100/);
+});
