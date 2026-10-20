@@ -259,7 +259,7 @@ export const defaultSettings: Settings = {
   timeStop: 28,
   scanSeconds: 2,
   dailyWithdrawCap: 10000,
-  appearance: { theme: "MONROE", showMascot: true },
+  appearance: { theme: "MIDNIGHT", showMascot: true },
   sources: {
     INVO: { enabled: true, weight: 1 },
     FINVIZ: { enabled: true, weight: 1.1 },

@@ -59,4 +59,18 @@ describe("avenue anchors", () => {
     });
     assert.deepEqual(longOnly, []);
   });
+
+  it("surfaces SPOT_MOMENTUM swing avenues from the tape (not perps-only)", () => {
+    const trending = [
+      { symbol: "PEPE", priceUsd: 0.000011, liquidityUsd: 2_000_000, volume24h: 3_000_000, change24h: 9.5 },
+      { symbol: "USDC", priceUsd: 1, liquidityUsd: 9_000_000, volume24h: 9_000_000, change24h: 0.1 },
+    ];
+    const found = scanAllAvenues(emptyBook(), undefined, Date.now(), { tape: trending });
+    const spot = found.find((a) => a.category === "SPOT_MOMENTUM");
+    assert.ok(spot, "expected a spot momentum avenue");
+    assert.equal(spot?.anchorSymbol, "PEPE");
+    assert.equal(spot?.perpSide, "LONG");
+    assert.ok((spot?.confidenceScore ?? 0) >= 60);
+    assert.ok(!found.some((a) => a.symbol === "USDC"), "stablecoins are never surfaced");
+  });
 });

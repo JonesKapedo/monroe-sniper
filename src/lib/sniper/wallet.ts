@@ -11,10 +11,10 @@ export function withdrawnToday(ledger: LedgerEntry[], now = Date.now()) {
 
 export function withdrawBlock(book: Book, amount: number, now = Date.now()) {
   const clean = round2(amount);
-  if (!(clean >= 1)) return "Enter at least $1 of paper cash.";
-  if (clean > snapshot(book).free) return "That is more than free cash. Close a position or deposit paper funds.";
+  if (!(clean >= 1)) return "Enter at least $1 of demo cash.";
+  if (clean > snapshot(book).free) return "That is more than free cash. Close a position or deposit demo funds.";
   if (withdrawnToday(book.ledger, now) + clean > book.settings.dailyWithdrawCap) {
-    return "That crosses today's paper withdrawal cap. Raise it in Settings if you mean to.";
+    return "That crosses today's demo withdrawal cap. Raise it in Settings if you mean to.";
   }
   return null;
 }
@@ -36,7 +36,7 @@ export function applyDeposit(book: Book, amount: number): Book {
           id: `dep-${book.ledger.length}-${book.minute}`,
           ts: book.minute,
           tone: "info" as const,
-          text: `Paper deposit ${clean.toFixed(2)}`,
+          text: `Demo deposit ${clean.toFixed(2)}`,
         },
         ...book.activity,
       ].slice(0, 80),
@@ -46,7 +46,7 @@ export function applyDeposit(book: Book, amount: number): Book {
       wall: Date.now(),
       kind: "DEPOSIT",
       amount: clean,
-      note: "Paper deposit",
+      note: "Demo deposit",
       balanceAfter: cash,
     },
   );
@@ -65,7 +65,7 @@ export function applyWithdraw(book: Book, amount: number): Book {
           id: `wd-${book.ledger.length}-${book.minute}`,
           ts: book.minute,
           tone: "info" as const,
-          text: `Paper withdrawal ${clean.toFixed(2)}`,
+          text: `Demo withdrawal ${clean.toFixed(2)}`,
         },
         ...book.activity,
       ].slice(0, 80),
@@ -75,7 +75,7 @@ export function applyWithdraw(book: Book, amount: number): Book {
       wall: Date.now(),
       kind: "WITHDRAW",
       amount: -clean,
-      note: "Paper withdrawal",
+      note: "Demo withdrawal",
       balanceAfter: cash,
     },
   );

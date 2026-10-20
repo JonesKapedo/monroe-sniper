@@ -2,6 +2,8 @@
  * Ordered from most conservative to most aggressive:
  *   Conservative ([paranoid]) → Sweet Spot (gradient) → Aggressive Growth ([elvis]) → Turbo Gambler ([degen])
  */
+import type { ExitProfile } from "./exits";
+
 export type RiskModelProfile = {
   id: "[paranoid]" | "[elvis]" | "gradient" | "[degen]";
   name: string;
@@ -43,8 +45,8 @@ export const MODELS: Record<RiskModelProfile["id"], RiskModelProfile> = {
     name: "Sweet Spot",
     description:
       "Balanced daily driver: moderate score floor, edge-aware conviction sizing, 1:2 R:R. Designed to generate real learning volume without reckless exposure.",
-    minEdge: -0.12,
-    minScore: 48,
+    minEdge: -0.18,
+    minScore: 42,
     baseNotionalPct: 1.5,
     maxNotionalPct: 3,
     convictionScale: 0.3,
@@ -57,8 +59,8 @@ export const MODELS: Record<RiskModelProfile["id"], RiskModelProfile> = {
     name: "Aggressive Growth",
     description:
       "Higher throughput: lower score floor, faster conviction, 1:1.5 R:R. Accepts more noise in exchange for more closed outcomes.",
-    minEdge: 0.05,
-    minScore: 45,
+    minEdge: 0.0,
+    minScore: 40,
     baseNotionalPct: 2,
     maxNotionalPct: 4,
     convictionScale: 0.3,
@@ -72,7 +74,7 @@ export const MODELS: Record<RiskModelProfile["id"], RiskModelProfile> = {
     description:
       "Timed turbo runs (34 min), aggressive hunting, audits at 8/13/21 min, short cooldown. Highest throughput, highest variance.",
     minEdge: 0,
-    minScore: 38,
+    minScore: 34,
     baseNotionalPct: 3,
     maxNotionalPct: 5,
     convictionScale: 0.3,
@@ -93,3 +95,26 @@ export function selectModel(id: RiskModelProfile["id"]): RiskModelProfile | unde
 
 /** Default model is Sweet Spot (gradient) — balanced enough to produce real trades and learning. */
 export const DEFAULT_MODEL_ID = "gradient";
+
+/**
+ * Translate a model's edge/sizing identity into a concrete exit ladder so the
+ * four models behave differently once a trade is open — not just at entry.
+ *  - takeProfitR drives the scale-out run: bank earlier (tighter models) or
+ *    ride deeper (conservative) without ever letting a winner round-trip.
+ *  - trailPct drives the runner trail width (null = wide/no trail churn).
+ *  - exitAtRunBoundary (Turbo) caps the time stop at the run length.
+ */
+export function exitProfileForModel(profile: RiskModelProfile): ExitProfile {
+  const tp = Math.max(0.5, profile.takeProfitR);
+  const trailMult =
+    profile.trailPct == null ? 3.0 : profile.trailPct >= 1.5 ? 1.5 : profile.trailPct >= 1 ? 2.0 : 2.6;
+  return {
+    breakevenTriggerR: Math.min(0.75, Math.max(0.5, tp * 0.5)),
+    scaleOut1AtR: Math.max(0.75, tp * 0.5),
+    scaleOut2AtR: tp,
+    runnerTrailAtrMult: trailMult,
+    volSpikeTrailAtrMult: Math.max(1, Math.round((trailMult - 0.6) * 10) / 10),
+    // Reap dead trades in 4h rather than letting a stalled name hold a slot all day.
+    timeStopMinutes: profile.exitAtRunBoundary ? (profile.runMinutes ?? 34) : 240,
+  };
+}

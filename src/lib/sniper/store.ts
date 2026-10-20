@@ -162,7 +162,20 @@ export const useSniper = create<SniperStore>()(
     {
       name: "monroe-sniper-v1",
       skipHydration: true,
-      version: 1,
+      version: 2,
+      migrate: (persisted) => {
+        const state = persisted as { book?: Book } | undefined;
+        // v1 shipped the greenish "MONROE" theme as the default. Pitch black
+        // ("MIDNIGHT") is the house default now — migrate the stored default
+        // once. A deliberate switch to PAPER is left untouched.
+        if (state?.book?.settings?.appearance?.theme === "MONROE") {
+          state.book.settings.appearance = {
+            ...state.book.settings.appearance,
+            theme: "MIDNIGHT",
+          };
+        }
+        return state as never;
+      },
       partialize: (state) => ({ book: state.book }),
       storage: createJSONStorage(() => (typeof window === "undefined" ? memoryStorage : localStorage)),
     },

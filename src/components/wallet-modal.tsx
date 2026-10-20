@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { create } from "zustand";
-import { AlertTriangle, LogOut, Wallet as WalletIcon, X } from "lucide-react";
+import { AlertTriangle, LogOut, ShieldCheck, Wallet as WalletIcon, X } from "lucide-react";
 import { Button, Card, Label } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { getLiveStatus } from "@/lib/trading/live/live.functions";
+import type { LiveStatus } from "@/lib/trading/live/types";
 import { SolanaWalletProvider } from "@/lib/wallet/provider";
 import {
   formatAddress,
@@ -67,7 +69,7 @@ function NetworkSwitch() {
 
 /** Header wallet button: connect prompt, or address + network when linked. */
 export function WalletButton({ compact = false }: { compact?: boolean }) {
-  const { publicKey, disconnect } = useWallet();
+  const { publicKey, disconnect, wallet } = useWallet();
   const network = useSolNetwork((s) => s.network);
   const setOpen = useWalletModal((s) => s.setOpen);
   const { health, mismatch } = useWalletBalances();
@@ -92,7 +94,7 @@ export function WalletButton({ compact = false }: { compact?: boolean }) {
     <button
       type="button"
       onClick={() => setOpen(true)}
-      title="Wallet settings (click to disconnect)"
+      title={`${wallet?.adapter.name ?? "Wallet"} connected (click for settings)`}
       onDoubleClick={() => void disconnect().catch(() => undefined)}
       className={cn(
         "inline-flex min-h-11 items-center gap-1.5 rounded-full border px-2 font-mono text-xs transition-colors sm:px-3",
@@ -107,6 +109,9 @@ export function WalletButton({ compact = false }: { compact?: boolean }) {
           health === "live" ? "bg-gain" : health === "idle" ? "bg-faint" : "bg-warn",
         )}
       />
+      <span className="hidden text-[10px] tracking-wide text-faint uppercase sm:inline">
+        {wallet?.adapter.name ?? "Wallet"}
+      </span>
       {formatAddress(publicKey.toBase58())}
       <span className={cn("rounded px-1 text-[10px] uppercase", network === "mainnet-beta" ? "bg-loss/20 text-loss" : "bg-panel-2 text-faint")}>
         {network === "mainnet-beta" ? "main" : "dev"}
@@ -122,6 +127,20 @@ export function WalletModal() {
   const { sol, usdc, loading, error, health, mismatch, expectedAddress, depositNote, refresh } = useWalletBalances();
   const [connectError, setConnectError] = useState<string | null>(null);
   const wcReady = Boolean(walletConnectProjectId());
+  const [live, setLive] = useState<LiveStatus | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancel = false;
+    void getLiveStatus()
+      .then((s) => {
+        if (!cancel) setLive(s);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancel = true;
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -185,6 +204,25 @@ export function WalletModal() {
                 Different wallet than expected ({expectedAddress ? formatAddress(expectedAddress) : "unknown"}).
                 If you did not switch wallets yourself, disconnect immediately.
               </p>
+            </div>
+          )}
+
+          {live && (
+            <div
+              className={cn(
+                "flex gap-2 rounded-xl border p-3 text-xs",
+                live.configured ? "border-gain/40 bg-gain/10 text-gain" : "border-line bg-panel-2 text-faint",
+              )}
+            >
+              <ShieldCheck className="size-4 shrink-0" />
+              <div>
+                <p className="font-semibold">Live execution · {live.venueLabel}</p>
+                <p className="mt-0.5 leading-relaxed">{live.note}</p>
+                <p className="mt-1 text-[10px] text-faint">
+                  Cap ${live.caps.maxNotionalUsd}/order · daily loss ${live.caps.dailyLossLimitUsd} · max {live.caps.maxOpenPositions} open
+                  {live.caps.allowlist.length ? ` · allowlist ${live.caps.allowlist.join(", ")}` : ""}
+                </p>
+              </div>
             </div>
           )}
 
@@ -257,8 +295,8 @@ export function WalletModal() {
                 <LogOut className="mr-1.5 size-3.5" /> Disconnect {wallet?.adapter.name ?? "wallet"}
               </Button>
               <p className="text-[11px] leading-relaxed text-faint">
-                Trading stays paper-only for now: the desk sizes against detected balances but
-                cannot move funds. Live execution unlocks in later phases.
+                Execution stays simulated: the desk sizes against detected balances but
+                cannot move funds. Live routing requires a connected broker.
               </p>
             </div>
           )}

@@ -32,7 +32,7 @@ import {
   type WhaleMoveRow,
   type WhaleWatch,
 } from "@/lib/whales.functions";
-import { Card, Label, Button } from "@/components/ui";
+import { Badge, Card, Label, Button, PageHeader } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
 function ProviderIcon({ provider }: { provider: ConnectedProfile["provider"] }) {
@@ -402,19 +402,12 @@ export function LearnView() {
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5">
       {/* DYOR Main Mission Header */}
-      <div className="flex flex-col gap-4 rounded-xl border border-line bg-panel p-4 md:flex-row md:items-center md:justify-between md:p-5">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">DYOR Intelligence Engine</h1>
-            <span className="rounded-full border border-brass/50 bg-brass/10 px-2.5 py-0.5 text-xs font-semibold text-brass uppercase">
-              Multi-Source Verification & Safety Gate
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-faint md:text-sm">
-            Continuous deep research on every financial instrument the sniper interacts with. Cross-checks honeypots across multiple security engines, monitors social velocity on X & Decrypt, and automatically quarantines blacklisted contracts.
-          </p>
-        </div>
-
+      <PageHeader
+        stage="research"
+        title="DYOR Intelligence Engine"
+        badge={<Badge tone="live">Multi-Source Verification & Safety Gate</Badge>}
+        subtitle="Continuous deep research on every financial instrument the sniper interacts with. Cross-checks honeypots across multiple security engines, monitors social velocity on X & Decrypt, and automatically quarantines blacklisted contracts."
+      >
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="ghost"
@@ -434,7 +427,7 @@ export function LearnView() {
             <RotateCcw className="mr-1.5 size-3.5" /> Reset Catalog
           </Button>
         </div>
-      </div>
+      </PageHeader>
 
       {/* Top Level Metric Chips */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">

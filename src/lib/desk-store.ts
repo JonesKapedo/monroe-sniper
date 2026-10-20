@@ -12,12 +12,18 @@ import {
   emptyMemory,
   enter,
   learn,
+  learnBuckets,
+  emptyBucketBook,
+  symbolBucketFloor,
+  entryFloorFor,
   markBook,
+  explainTapeIdle,
   setKill,
   withdraw,
   equity,
   exposure,
   DEMO_START,
+  type BucketBook,
 } from "./paper";
 import {
   evaluateRiskAndSize,
@@ -26,7 +32,7 @@ import {
   type SizingProfile,
   type SizingVerdict,
 } from "./sniper/risk-engine";
-import { MODELS, type RiskModelProfile } from "./sniper/risk-models";
+import { MODELS, exitProfileForModel, type RiskModelProfile } from "./sniper/risk-models";
 import {
   TIER_CONFIGS,
   applyStakeBudget,
@@ -34,7 +40,7 @@ import {
   type TierConfig,
   type TierName,
 } from "./sniper/tier-config";
-import { resolveConcurrentSlots } from "./sniper/slots";
+import { MAX_CONCURRENT, resolveConcurrentSlots } from "./sniper/slots";
 import {
   DEFAULT_PROFIT_LOCK_CONFIG,
   applyProfitLock,
@@ -61,7 +67,20 @@ import {
 import { setupVector, type SetupVector } from "./math/vectors";
 import { fibReentryDelayMin } from "./math/fib";
 import { useMascot } from "./mascot";
+import { notify } from "./notifications";
 import { getDbHealth, saveTradeLearning, type TradeLearningEvent } from "./trade-memory.functions";
+import { getLiveStatus, placeLiveOrder } from "./trading/live/live.functions";
+import type { LiveOrderRequest, LiveStatus } from "./trading/live/types";
+import { shouldTrigger, type WorkingOrderType } from "./trading/working-orders";
+export type { WorkingOrderType };
+
+/** A real-order outcome for the live activity feed. */
+export type LiveOrderLogEntry = { at: number; ok: boolean; symbol: string; side: "buy" | "sell"; note: string };
+
+/** Client ids already queued this session — kills duplicate enqueues. */
+const liveQueuedIds = new Set<string>();
+/** Re-entrancy guard so overlapping ticks cannot place the same cycle twice. */
+let liveStepBusy = false;
 import { markWhaleActed } from "./whales.functions";
 import { evaluateWhaleMoveForCopy, type WhaleProfile } from "./whales/intelligence";
 import type { AvenueCategory, DisciplineRules, PaperReadiness } from "./avenues/types";
@@ -78,6 +97,14 @@ import { useDyorStore } from "./dyor/store";
 import { playHawkCry, playSoftChirp } from "./sound";
 import { assessEdge } from "./intel/emh";
 import {
+  initFlowGovernor,
+  tickGovernor,
+  recordEntryFilled,
+  recordRejection,
+  currentRelax,
+  type FlowGovernorState,
+} from "./flow/governor";
+import {
   selectDiversifiedEntries,
   type RankedOpportunity,
 } from "./intel/entry-strategy";
@@ -88,6 +115,43 @@ import {
 } from "./trading/ledger";
 
 export type Mode = "demo" | "live";
+
+/** Manual order-ticket overrides. All optional; the risk engine still caps them. */
+export type ManualEnterOptions = {
+  /** Requested notional (USD). Clamped down to the risk-approved stake — never up. */
+  notionalUsd?: number;
+  /** Absolute stop (USD); defaults to the risk-engine stop. */
+  stop?: number;
+  /** Absolute take-profit (USD); defaults to the risk-engine target. */
+  target?: number;
+};
+
+export type WorkingOrder = {
+  id: string;
+  symbol: string;
+  tokenId: string;
+  side: "buy" | "sell";
+  type: WorkingOrderType;
+  notionalUsd: number;
+  /** Trigger price: buy limit fills at/below, buy stop at/above (inverted for sells). */
+  trigger: number;
+  stop?: number;
+  target?: number;
+  tif: "GTC" | "IOC" | "FOK";
+  createdAt: number;
+  status: "WORKING" | "FILLED" | "CANCELLED";
+  note: string;
+};
+
+export type AlertRule = {
+  id: string;
+  symbol: string;
+  tokenId: string;
+  above?: number;
+  below?: number;
+  createdAt: number;
+  fired: boolean;
+};
 export type DbSource = "neon" | "pglite" | "unknown";
 export type TurboPhase = "off" | "running" | "cooling";
 
@@ -151,6 +215,8 @@ type DeskState = {
   demo: Book;
   live: Book;
   memory: Memory;
+  /** Per-(venue × reason × symbol) learning evidence — richer than the global Memory. */
+  bucketBook: BucketBook;
   tape: Candidate[];
   note: string;
   log: string[];
@@ -169,6 +235,15 @@ type DeskState = {
   /** Gross sums across persisted closes — profit-factor inputs for readiness. */
   dbGrossWin: number;
   dbGrossLoss: number;
+  /** Secret-free live-execution status from the server (null until loaded). */
+  liveStatus: LiveStatus | null;
+  /** Queued real orders awaiting the async live runner. */
+  liveQueue: LiveOrderRequest[];
+  /** Recent real-order outcomes, newest first. */
+  liveOrders: LiveOrderLogEntry[];
+  refreshLiveStatus: () => Promise<LiveStatus | null>;
+  enqueueLiveOrder: (req: LiveOrderRequest) => void;
+  liveStep: () => Promise<void>;
   botStartedAt: number;
   restoreLearningState: (memory: Memory, storedTradeCount: number, source?: DbSource) => void;
   setDbStatus: (patch: { source?: DbSource; ok?: boolean; error?: string | null }) => void;
@@ -203,13 +278,34 @@ type DeskState = {
   setPower: (on: boolean) => void;
   setMode: (mode: Mode) => void;
   setTape: (rows: Candidate[], note: string) => void;
+  /** Read-only market pull for the workspace (loads the tape without arming). Returns row count. */
+  refreshTape: () => Promise<number>;
+  /** Resting limit/stop orders, evaluated against marks each engine cycle. */
+  workingOrders: WorkingOrder[];
+  alerts: AlertRule[];
+  placeWorkingOrder: (input: {
+    tokenId: string;
+    symbol: string;
+    side: "buy" | "sell";
+    type: WorkingOrderType;
+    notionalUsd: number;
+    trigger: number;
+    stop?: number;
+    target?: number;
+    tif: WorkingOrder["tif"];
+  }) => { ok: boolean; note: string };
+  cancelWorkingOrder: (id: string) => void;
+  /** Evaluate resting orders + price alerts against the latest marks. */
+  workOrders: (prices: Record<string, number>) => void;
+  addAlert: (input: { tokenId: string; symbol: string; above?: number; below?: number }) => { ok: boolean; note: string };
+  removeAlert: (id: string) => void;
   tick: (
     prices: Record<string, number>,
     monitorOnly?: boolean,
     staleIds?: ReadonlySet<string>,
   ) => void;
   autoStep: () => void;
-  manualEnter: (c: Candidate) => { ok: boolean; note: string; verdict?: SizingVerdict };
+  manualEnter: (c: Candidate, opts?: ManualEnterOptions) => { ok: boolean; note: string; verdict?: SizingVerdict };
   flatten: (id: string) => void;
   startTurbo: () => { ok: boolean; note: string };
   bypassTurboCooldown: () => void;
@@ -231,6 +327,8 @@ type DeskState = {
   // Equity guard
   equityGuardState: EquityGuardState;
   equityGuardConfig: EquityGuardConfig;
+  // Flow governor: starvation counter + relaxation ladder (blueprint I1)
+  flowGovernor: FlowGovernorState;
   // Risk-model selection — persists across page visits via localStorage.
   selectedModel: RiskModelProfile;
   setSelectedModel: (id: RiskModelProfile["id"]) => void;
@@ -447,13 +545,20 @@ function mathOverlays(book: Book): { winnerVectors: SetupVector[]; openVectors: 
 }
 
 /** Fire-and-forget Telegram trade alert — alerts never break trading. */
-function telegramAlert(text: string): void {
+function routeAlert(text: string): void {
   try {
     const creds = useDyorStore.getState().telegramCreds();
-    if (!creds) return;
-    void import("./integrations.functions")
-      .then((m) => m.sendTelegramAlert({ data: { ...creds, text } }))
-      .catch(() => undefined);
+    if (creds) {
+      void import("./integrations.functions")
+        .then((m) => m.sendTelegramAlert({ data: { ...creds, text } }))
+        .catch(() => undefined);
+    }
+    const discord = useDyorStore.getState().discordWebhook();
+    if (discord) {
+      void import("./integrations.functions")
+        .then((m) => m.sendDiscordAlert({ data: { url: discord, text } }))
+        .catch(() => undefined);
+    }
   } catch {
     // Alerts never break trading.
   }
@@ -493,6 +598,9 @@ function absorb(
   }
   return { book: next, memory: mem, newTrades };
 }
+
+/** Throttle so a DB-less deployment logs the degraded link at most once a minute. */
+let learningSaveLoggedAt = 0;
 
 function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>): void {
   for (const { trade, mode } of records) {
@@ -544,14 +652,18 @@ function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>)
           useDesk.setState((prev) => ({
             tradeLearningDbCount: state.seen,
             // The database is the shared source of truth for the adaptive
-            // floor: adopt its aggregate so local + Neon never diverge.
-            memory: {
-              seen: state.seen,
-              wins: state.wins,
-              losses: state.losses,
-              realized: state.realized,
-              minScore: state.minScore,
-            },
+            // floor — but only when it has seen at least as much as we have.
+            // A fresh/empty database must never roll local learning back.
+            memory:
+              state.seen >= prev.memory.seen
+                ? {
+                    seen: state.seen,
+                    wins: state.wins,
+                    losses: state.losses,
+                    realized: state.realized,
+                    minScore: state.minScore,
+                  }
+                : prev.memory,
             dbEvents: [event, ...prev.dbEvents].slice(0, 200),
             dbGrossWin: prev.dbGrossWin + (trade.pnl > 0 ? trade.pnl : 0),
             dbGrossLoss: prev.dbGrossLoss + (trade.pnl < 0 ? -trade.pnl : 0),
@@ -582,12 +694,22 @@ function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>)
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error("[trade-learning] Failed to persist a closed trade:", error);
-        useDesk.setState((state) => ({
-          note: "Trade closed, but its learning record could not be saved. Check the database link.",
-          log: pushLog(state.log, `Trade learning save failed: ${trade.symbol} (${message.slice(0, 120)})`),
-          dbOk: false,
-          dbError: message.slice(0, 300),
-        }));
+        useDesk.setState((state) => {
+          // Local learning already applied — the DB is a sync layer, not the
+          // teacher. Report the degraded link once a minute, not once a trade.
+          const now = Date.now();
+          const stamp = `${message.slice(0, 120)}`;
+          const noisy = now - learningSaveLoggedAt < 60_000 && state.dbError === stamp;
+          if (!noisy) learningSaveLoggedAt = now;
+          return {
+            note: "Learning is kept locally; the database link is unavailable on this deployment.",
+            log: noisy
+              ? state.log
+              : pushLog(state.log, `Learning saved locally — database link degraded (${stamp}).`),
+            dbOk: false,
+            dbError: stamp,
+          };
+        });
       });
   }
 }
@@ -598,14 +720,16 @@ export const useDesk = create<DeskState>()(
       power: false,
       mode: "demo",
       demo: emptyBook(DEMO_START),
-          tradingLedger: createPaperAccount(DEMO_START),
+      tradingLedger: createPaperAccount(DEMO_START),
       live: emptyBook(0),
       memory: emptyMemory(),
+      bucketBook: emptyBucketBook(),
       tape: [],
-      note: `Paper trading sandbox active ($${DEMO_START}). Arm power to auto-snipe.`,
+      workingOrders: [],
+      alerts: [],
+      note: `Demo sandbox active ($${DEMO_START}). Arm the desk to auto-trade.`,
       log: [`System initialized. Demo balance: $${DEMO_START}.00`, "Risk engine active: Volatility-adjusted ATR sizing"],
       executions: [],
-      tradingLedger: createPaperAccount(DEMO_START),
       riskSettings: defaultRiskSettings,
       disciplineRules: defaultDisciplineRules,
       tradeLearningDbCount: 0,
@@ -616,6 +740,9 @@ export const useDesk = create<DeskState>()(
       dbEvents: [],
       dbGrossWin: 0,
       dbGrossLoss: 0,
+      liveStatus: null,
+      liveQueue: [],
+      liveOrders: [],
       fxPrices: {},
       perpFunding: [],
       security: {},
@@ -665,6 +792,7 @@ export const useDesk = create<DeskState>()(
         lastUpdated: Date.now(),
       },
       equityGuardConfig: DEFAULT_EQUITY_GUARD_CONFIG,
+      flowGovernor: initFlowGovernor(),
       // Bot interoperability — which engines may open entries.
       entrySources: { avenues: true, tape: true, whale: true },
       // Background engine cycle (market + whale refresh, guard, profit lock).
@@ -693,12 +821,19 @@ export const useDesk = create<DeskState>()(
       ],
 
       restoreLearningState: (memory, storedTradeCount, source = "unknown") =>
-        set({
-          memory,
-          tradeLearningDbCount: storedTradeCount,
-          dbSource: source,
-          dbOk: true,
-          dbError: null,
+        set((s) => {
+          // Never regress: a stale DB snapshot (fewer closes seen) must not
+          // overwrite richer learning the desk has already accumulated locally.
+          const localSeen = s.memory?.seen ?? 0;
+          const incomingSeen = memory?.seen ?? 0;
+          const keepLocal = localSeen > incomingSeen;
+          return {
+            memory: keepLocal ? s.memory : memory,
+            tradeLearningDbCount: Math.max(storedTradeCount, localSeen, incomingSeen),
+            dbSource: source,
+            dbOk: true,
+            dbError: null,
+          };
         }),
 
       setDbStatus: (patch) =>
@@ -711,7 +846,7 @@ export const useDesk = create<DeskState>()(
       startTurbo: () => {
         const s = get();
         if (s.mode !== "demo") {
-          return { ok: false, note: "Turbo runs on the paper desk only." };
+          return { ok: false, note: "Turbo runs on the demo desk only." };
         }
         if (s.turboPhase === "running") {
           return { ok: true, note: "Turbo run already in progress." };
@@ -1005,14 +1140,14 @@ export const useDesk = create<DeskState>()(
           power: s.mode === "live" ? false : on,
           note: on
             ? s.mode === "live"
-              ? "Live execution is unavailable. The desk only supports paper simulation."
-              : "Armed. Sniper is actively scanning simulated markets."
+              ? "Live execution is gated. This build runs simulated fills only."
+              : "Armed. The desk is actively scanning simulated markets."
             : s.demo.positions.length
-              ? "Standby. Automated entries and exits are paused; open paper positions remain held."
+              ? "Standby. Automated entries and exits are paused; open demo positions remain held."
               : "Standby. Automated trading is paused.",
           log: pushLog(
             s.log,
-            on && s.mode !== "live" ? "Sniper ARMED [DEMO]" : on ? "Live execution blocked" : "Sniper DISARMED",
+            on && s.mode !== "live" ? "Desk ARMED [DEMO]" : on ? "Live execution gated" : "Desk DISARMED",
           ),
         }));
         try {
@@ -1024,32 +1159,160 @@ export const useDesk = create<DeskState>()(
 
       setMode: (mode) => {
         // Mode sounds fire only on real transitions: hawk cry into live,
-        // soft chirp back to paper. (Live entry is still locked until the
-        // wallet phases unlock it — the cry is wired and waiting.)
+        // soft chirp back to demo. Switching modes always stands the desk
+        // down; live selection is honoured but execution stays gated until a
+        // broker is connected (there is no order routing in this build).
         const prevMode = get().mode;
-        if (mode === "live" && prevMode === "live") return;
-        if (mode === "demo" && prevMode === "demo") {
-          set({ mode: "demo" });
-          return;
+        if (mode === prevMode) return;
+        set((s) => ({
+          mode,
+          power: false,
+          note:
+            mode === "live"
+              ? "Live mode selected. Execution is gated until a broker is connected — orders are not routed in this build."
+              : `Demo mode. Simulated book ready · $${s.demo.cash.toFixed(2)} available.`,
+          log: pushLog(s.log, mode === "live" ? "Mode switched to LIVE (gated)" : "Mode switched to DEMO"),
+        }));
+        if (mode === "live") void playHawkCry();
+        else void playSoftChirp();
+      },
+
+      refreshTape: async () => {
+        const { loadFeeds } = await import("./market.functions");
+        const feeds = await loadFeeds({ data: {} });
+        const combined = [...feeds.binance, ...feeds.dex];
+        if (combined.length) {
+          get().setTape(combined, feeds.note);
+          return combined.length;
         }
-        set((s) => {
-          if (mode === "live") {
-            return {
-              mode: "demo",
-              power: false,
-              note: "Live execution is unavailable. No broker is connected; this desk is simulation-only.",
-              log: pushLog(s.log, "Live mode blocked: no broker execution integration"),
-            };
+        return 0;
+      },
+
+      placeWorkingOrder: (input) => {
+        if (!Number.isFinite(input.trigger) || input.trigger <= 0) {
+          return { ok: false, note: "Enter a valid trigger price." };
+        }
+        const price = get().tape.find((c) => c.id === input.tokenId)?.priceUsd ?? Number.NaN;
+        const marketable = shouldTrigger(input.type, input.side, input.trigger, price);
+        if (input.tif !== "GTC" && Number.isFinite(price) && !marketable) {
+          return { ok: false, note: `${input.tif} not marketable at $${price.toFixed(4)} — cancelled.` };
+        }
+        const order: WorkingOrder = {
+          id: `wo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          symbol: input.symbol,
+          tokenId: input.tokenId,
+          side: input.side,
+          type: input.type,
+          notionalUsd: Math.max(1, input.notionalUsd),
+          trigger: input.trigger,
+          stop: input.stop,
+          target: input.target,
+          tif: input.tif,
+          createdAt: Date.now(),
+          status: "WORKING",
+          note: "Resting",
+        };
+        set((s) => ({
+          workingOrders: [order, ...s.workingOrders].slice(0, 60),
+          log: pushLog(s.log, `Working ${input.type} ${input.side} ${input.symbol} @ $${input.trigger} (${input.tif})`),
+        }));
+        return { ok: true, note: `${input.type.toUpperCase()} ${input.side} ${input.symbol} @ $${input.trigger} working.` };
+      },
+
+      cancelWorkingOrder: (id) =>
+        set((s) => ({
+          workingOrders: s.workingOrders.map((o) =>
+            o.id === id && o.status === "WORKING" ? { ...o, status: "CANCELLED" as const, note: "Cancelled" } : o,
+          ),
+        })),
+
+      addAlert: (input) => {
+        if (input.above === undefined && input.below === undefined) {
+          return { ok: false, note: "Set an above or below price." };
+        }
+        const alert: AlertRule = {
+          id: `al-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+          symbol: input.symbol,
+          tokenId: input.tokenId,
+          above: input.above,
+          below: input.below,
+          createdAt: Date.now(),
+          fired: false,
+        };
+        set((s) => ({ alerts: [alert, ...s.alerts].slice(0, 40), log: pushLog(s.log, `Price alert set on ${input.symbol}`) }));
+        return { ok: true, note: `Alert armed on ${input.symbol}.` };
+      },
+
+      removeAlert: (id) => set((s) => ({ alerts: s.alerts.filter((a) => a.id !== id) })),
+
+      workOrders: (prices) => {
+        // Price alerts first — independent of resting orders.
+        const pending = get().alerts.filter((a) => !a.fired);
+        if (pending.length) {
+          const hit = pending.filter((a) => {
+            const p = prices[a.tokenId];
+            if (!Number.isFinite(p)) return false;
+            return (a.above !== undefined && p >= a.above) || (a.below !== undefined && p <= a.below);
+          });
+          if (hit.length) {
+            set((s) => ({ alerts: s.alerts.map((a) => (hit.some((h) => h.id === a.id) ? { ...a, fired: true } : a)) }));
+            for (const a of hit) {
+              const mark = prices[a.tokenId] ?? 0;
+              const msg = `${a.symbol} ${a.above !== undefined && mark >= a.above ? "≥" : "≤"} $${a.above ?? a.below}`;
+              notify({ severity: "info", title: `Alert: ${msg}`, body: `Mark $${mark.toFixed(4)}` });
+              routeAlert(`Monroe alert\n${msg}\nMark $${mark.toFixed(4)}`);
+            }
           }
-          return {
-            mode,
-            power: mode === "demo" ? s.power : false,
-            note: `Switched to paper simulation. Balance: $${s.demo.cash.toFixed(2)}.`,
-            log: pushLog(s.log, "Mode switched to DEMO"),
-          };
-        });
-        if (mode === "live" && get().mode === "live") void playHawkCry();
-        else if (mode === "demo" && prevMode === "live") void playSoftChirp();
+        }
+
+        const working = get().workingOrders.filter((o) => o.status === "WORKING");
+        for (const order of working) {
+          const price = prices[order.tokenId];
+          if (!Number.isFinite(price)) continue;
+          const triggered = shouldTrigger(order.type, order.side, order.trigger, price);
+          if (!triggered) continue;
+
+          const cur = get();
+          let ok = false;
+          let note = "";
+          if (order.side === "buy") {
+            const cand = cur.tape.find((c) => c.id === order.tokenId);
+            if (cand) {
+              const res = cur.manualEnter(
+                { ...cand, priceUsd: order.trigger },
+                { notionalUsd: order.notionalUsd, stop: order.stop, target: order.target },
+              );
+              ok = res.ok;
+              note = res.ok ? `Filled ${order.symbol} @ $${order.trigger}` : res.note;
+            } else {
+              note = "Symbol left the tape";
+            }
+          } else {
+            const pos = cur[cur.mode].positions.find(
+              (p) => p.tokenId === order.tokenId || p.symbol === order.symbol,
+            );
+            if (pos) {
+              cur.flatten(pos.id);
+              ok = true;
+              note = `Flattened ${order.symbol} @ $${order.trigger}`;
+            } else {
+              note = "No position to close";
+            }
+          }
+          set((s) => ({
+            workingOrders: s.workingOrders.map((o) =>
+              o.id === order.id
+                ? { ...o, status: (ok ? "FILLED" : "CANCELLED") as WorkingOrder["status"], note }
+                : o,
+            ),
+            log: pushLog(
+              s.log,
+              ok
+                ? `Working ${order.type} ${order.side} filled: ${order.symbol}`
+                : `Working order dropped: ${order.symbol} — ${note}`,
+            ),
+          }));
+        }
       },
 
       setTape: (rows, note) => {
@@ -1141,6 +1404,7 @@ export const useDesk = create<DeskState>()(
         if (openPositions.some((p) => !(enriched[p.tokenId] > 0))) {
           const anchors = avenueAnchors(s.demo, s.disciplineRules, Date.now(), {
             funding: s.perpFunding,
+            tape: s.tape,
           });
           for (const p of openPositions) {
             if (enriched[p.tokenId] > 0) continue;
@@ -1175,7 +1439,10 @@ export const useDesk = create<DeskState>()(
           }
         }
         const demoAbs = absorb(s.demo, enriched, s.memory, monitorOnly, staleIds, sources);
-        const liveAbs = absorb(s.live, enriched, demoAbs.memory, monitorOnly, staleIds, sources);
+        // When live is armed, never let the sync engine simulate a live close —
+        // it still marks positions, but exits become REAL orders in liveStep.
+        const liveArmedNow = s.mode === "live" && (s.liveStatus?.configured ?? false);
+        const liveAbs = absorb(s.live, enriched, demoAbs.memory, monitorOnly || liveArmedNow, staleIds, sources);
         const closedTrades = [
           ...demoAbs.newTrades.map((trade) => ({ trade, mode: "demo" as const })),
           ...liveAbs.newTrades.map((trade) => ({ trade, mode: "live" as const })),
@@ -1185,6 +1452,22 @@ export const useDesk = create<DeskState>()(
         const stopStreak = { ...s.stopStreak };
         const lastStopAt = { ...s.lastStopAt };
         const lastCloseAt = { ...s.lastCloseAt };
+
+        // Bucket learning: fold every teachable close into its venue × reason
+        // and per-symbol buckets so a winning symbol and a bleeding one stop
+        // cancelling out in a single global average.
+        let bucketBook = s.bucketBook;
+        for (const { trade, mode } of closedTrades) {
+          if (trade.simulated || trade.reason === "MANUAL") continue;
+          bucketBook = learnBuckets(
+            bucketBook,
+            trade.venue ?? "unknown",
+            trade.reason,
+            trade.symbol,
+            trade.pnl,
+            mode,
+          );
+        }
 
         for (const { trade, mode } of closedTrades) {
           // Any close sits the symbol out: TARGET loops re-firing every cycle
@@ -1233,6 +1516,7 @@ export const useDesk = create<DeskState>()(
           demo: demoAbs.book,
           live: liveAbs.book,
           memory: liveAbs.memory,
+          bucketBook,
           executions: nextExecs,
           log: nextLog,
           stopStreak,
@@ -1244,7 +1528,7 @@ export const useDesk = create<DeskState>()(
             const isProfit = trade.pnl > 0;
             return `${trade.reason === "TARGET" ? "✅ TP" : trade.reason === "STOP" ? "🛑 SL" : "📕 Closed"} ${trade.symbol} ${isProfit ? "+" : ""}$${trade.pnl.toFixed(2)}`;
           });
-          telegramAlert(`Monroe paper closes (${closedTrades.length}):\n${lines.slice(0, 8).join("\n")}`);
+          routeAlert(`Monroe demo closes (${closedTrades.length}):\n${lines.slice(0, 8).join("\n")}`);
         }
         archiveClosedTrades(closedTrades);
         
@@ -1265,7 +1549,17 @@ export const useDesk = create<DeskState>()(
       autoStep: () => {
         get().tickTurbo();
         const s = get();
-        if (!s.power || s.mode !== "demo") return;
+        if (!s.power) return;
+        // Demo AND live run the same signal pipeline. Demo fills are simulated;
+        // in live mode the candidate pipeline only ENQUEUES a real order — the
+        // async `liveStep` places it and applies the venue's real fill. Never a
+        // simulated fill in the live book.
+        const liveArmed = s.mode === "live" && (s.liveStatus?.configured ?? false);
+        // Live with unknown status must never fall through to simulated fills.
+        if (s.mode === "live" && s.liveStatus === null) {
+          void get().refreshLiveStatus();
+          return;
+        }
         // Cooling halts entries only — open positions still ride to exits via tick().
         if (s.turboPhase === "cooling") return;
         
@@ -1324,11 +1618,19 @@ export const useDesk = create<DeskState>()(
           return; // Intraday loss limit circuit breaker triggers
         }
 
+        // Flow governor (blueprint I1): every starved cycle walks the
+        // relaxation ladder upward; every filled entry resets starvation.
+        const govStart = get().flowGovernor ?? initFlowGovernor();
+        let cycleFills = 0;
+        let govAfter = govStart;
+        const feedsAlive = useDesk.getState().tape.length > 0 ? 2 : 0;
+
         // 1. Professional avenue entries — diversified multi-slot (not one stuck perp).
         const avenues = scanAllAvenues(currentBook, s.disciplineRules, Date.now(), {
           funding: s.perpFunding,
+          tape: s.tape,
         });
-        if (s.entrySources.avenues && avenues.length > 0) {
+        if (s.entrySources.avenues && avenues.length > 0 && s.mode === "demo") {
           const maxSlots = cycleMaxSlots;
           const slotsLeft = Math.max(0, maxSlots - currentBook.positions.length);
           // Per-symbol cooldown only — a loss on BTC does not freeze SOL/ETH.
@@ -1346,14 +1648,14 @@ export const useDesk = create<DeskState>()(
               category: a.category,
               confidenceScore: a.confidenceScore,
               entryScore: a.confidenceScore,
-              perpSide: a.perpSide,
+              perpSide: a.perpSide === "DELTA_NEUTRAL" ? undefined : a.perpSide,
               fundingRate8h: a.fundingRate8h,
               disciplineApproved: a.disciplineApproved,
             }));
           const picks = selectDiversifiedEntries(
             ranked,
             currentBook.positions.map((pos) => ({ tokenId: pos.tokenId, symbol: pos.symbol })),
-            Math.min(slotsLeft, 3),
+            Math.min(slotsLeft, 6),
             55,
           );
           for (const pick of picks) {
@@ -1366,9 +1668,13 @@ export const useDesk = create<DeskState>()(
 
             const turboNow = st.selectedModel.id === "[degen]";
             const profileFloorNow = st.selectedModel.minScore ?? 48;
-            const floor = turboNow
+            const baseFloor = turboNow
               ? Math.max(40, Math.min(st.memory.minScore, profileFloorNow) - 12)
               : Math.min(st.memory.minScore, profileFloorNow);
+            const floor = Math.max(
+              baseFloor,
+              symbolBucketFloor(st.bucketBook, st.memory, "hyperliquid", avenue.symbol, st.mode),
+            );
 
             const aveCand: Candidate = {
               id: avenue.id,
@@ -1409,14 +1715,19 @@ export const useDesk = create<DeskState>()(
               continue;
             }
             const notional = stake.notional;
+            const anchor = (avenue.anchorSymbol ?? avenue.symbol).toUpperCase();
+            const priceSource =
+              avenue.category === "PERPS" ? `hyperliquid:${anchor}` : `anchor:${anchor}`;
             const result = enter(bookNow, aveCand, Date.now(), floor, {
               notional,
               stop: avenue.stopLossPrice,
               target: avenue.targetPrice,
-              priceSource: `hyperliquid:${(avenue.anchorSymbol ?? avenue.symbol).toUpperCase()}`,
+              priceSource,
               maxPositions: maxSlots,
+              exitProfile: exitProfileForModel(st.selectedModel),
             });
             if (!result.ok) continue;
+            cycleFills += 1;
 
             const hashStr = `ave-${avenue.id}-${Date.now().toString(36)}`;
             const exec: TapeExecution = {
@@ -1424,7 +1735,7 @@ export const useDesk = create<DeskState>()(
               hash: hashStr,
               ts: Date.now(),
               symbol: avenue.symbol,
-              venue: "hyperliquid",
+              venue: venueFor(aveCand),
               side: avenue.perpSide === "SHORT" ? "SELL" : "BUY",
               price: avenue.priceA,
               qty: notional / avenue.priceA,
@@ -1447,39 +1758,81 @@ export const useDesk = create<DeskState>()(
               executions: [exec, ...st.executions].slice(0, 100),
               turboEntries: st.turboEntries + (turboNow ? 1 : 0),
             });
-            telegramAlert(`Monroe paper entry\n${noteLine}`);
+            routeAlert(`Monroe demo entry\n${noteLine}`);
           }
         }
 
-        // 2. Market tape — fill up to remaining slots this cycle.
+        // 2. Market tape — fill EVERY remaining slot this cycle.
+        // The old loop tried three times and broke on the first rejection, so
+        // the desk only ever carried one tape name at a time. Now held /
+        // cooling / halted names are screened out up front and we keep taking
+        // the next-best admissible setup until the slots are full.
         if (s.entrySources.tape) {
-          for (let tapeAttempt = 0; tapeAttempt < 3; tapeAttempt++) {
+          const attempted = new Set<string>();
+          for (let tapeAttempt = 0; tapeAttempt < MAX_CONCURRENT; tapeAttempt++) {
           const live = useDesk.getState();
           const tapeBook = live[live.mode];
           const tapeMaxSlots = resolveConcurrentSlots(live.riskSettings.maxPositions);
           if (tapeBook.positions.length >= tapeMaxSlots) break;
           const turboNow = live.riskSettings.sizingProfile === "TURBO";
           const profileFloorNow = live.selectedModel.minScore ?? 48;
-          const floorNow = turboNow
-            ? Math.max(40, Math.min(live.memory.minScore, profileFloorNow) - 12)
-            : Math.min(live.memory.minScore, profileFloorNow);
-          const pick = chooseEntry(tapeBook, live.tape, floorNow, Date.now(), (id) =>
-            securityVerdictOf(live.security, id),
+          const relaxStep = Math.min(3, govAfter.relaxStep);
+          const floorNow = Math.max(
+            34,
+            (turboNow
+              ? Math.max(40, Math.min(live.memory.minScore, profileFloorNow) - 12)
+              : Math.min(live.memory.minScore, profileFloorNow)) - currentRelax(govAfter),
           );
-          if (!pick || fibBlocked(pick.symbol) || isHalted(pick.symbol, live.eventHalts)) {
-            if (tapeAttempt === 0 && live.tape.length > 0) {
+          const held = new Set(tapeBook.positions.map((pos) => pos.id));
+          const eligible = live.tape.filter(
+            (c) =>
+              !held.has(c.id) &&
+              !attempted.has(c.id) &&
+              !fibBlocked(c.symbol) &&
+              !isHalted(c.symbol, live.eventHalts),
+          );
+          const pick = chooseEntry(
+            tapeBook,
+            eligible,
+            floorNow,
+            Date.now(),
+            (id) => securityVerdictOf(live.security, id),
+            relaxStep,
+          );
+          if (!pick) {
+            if (attempted.size === 0 && live.tape.length > 0) {
               const lastIdle = (globalThis as unknown as { __monroeTapeIdle?: number }).__monroeTapeIdle ?? 0;
-              if (Date.now() - lastIdle > 10 * 60_000) {
+              if (Date.now() - lastIdle > 90_000) {
                 (globalThis as unknown as { __monroeTapeIdle?: number }).__monroeTapeIdle = Date.now();
+                const diag = explainTapeIdle(tapeBook, live.tape, floorNow, relaxStep, (id) =>
+                  securityVerdictOf(live.security, id),
+                );
                 useDesk.setState((prev) => ({
-                  log: pushLog(
-                    prev.log,
-                    `Tape scanned (${live.tape.length} names) — no setup cleared edge/score gates this cycle`,
-                  ),
+                  log: pushLog(prev.log, `${diag.summary} · starved ${govAfter.starvedCycles}/30`),
                 }));
               }
             }
             break;
+          }
+
+          attempted.add(pick.id);
+
+          // Learned per-symbol floor: a symbol with its own losing history must
+          // clear a higher bar than the global average, even mid-cycle. Capped
+          // for unknown-depth rows so it stays reachable (see entryFloorFor).
+          const pickSymbolFloor = entryFloorFor(
+            pick,
+            symbolBucketFloor(live.bucketBook, live.memory, pick.venue, pick.symbol, live.mode),
+          );
+          if (pick.score < pickSymbolFloor) {
+            govAfter = recordRejection(govAfter, {
+              symbol: pick.symbol,
+              source: "tape",
+              gate: "edge",
+              observed: `learned floor ${Math.round(pickSymbolFloor)} > score ${pick.score}`,
+              wouldBeSizeUsd: 0,
+            });
+            continue;
           }
 
           // Run through the quantitative risk engine
@@ -1493,7 +1846,16 @@ export const useDesk = create<DeskState>()(
             live.selectedModel.id,
           );
 
-          if (!verdict.allowed || verdict.notional <= 0) break;
+          if (!verdict.allowed || verdict.notional <= 0) {
+            govAfter = recordRejection(govAfter, {
+              symbol: pick.symbol,
+              source: "tape",
+              gate: "guard",
+              observed: (verdict.reasons[0] ?? "risk engine verdict not allowed").slice(0, 180),
+              wouldBeSizeUsd: verdict.notional,
+            });
+            continue;
+          }
 
           // Final stake guard: portfolio budget split by this position's target.
           const tapeStake = clampToStakeBudget(
@@ -1507,8 +1869,38 @@ export const useDesk = create<DeskState>()(
             useDesk.setState((prev) => ({
               log: pushLog(prev.log, `Stake guard blocked ${pick.symbol}: ${tapeStake.reason}`),
             }));
+            govAfter = recordRejection(govAfter, {
+              symbol: pick.symbol,
+              source: "tape",
+              gate: "budget",
+              observed: (tapeStake.reason ?? "stake budget blocked").slice(0, 180),
+              wouldBeSizeUsd: verdict.notional,
+            });
             break;
           }
+
+          if (liveArmed) {
+            const qty = pick.priceUsd > 0 ? tapeStake.notional / pick.priceUsd : 0;
+            if (qty <= 0) break;
+            get().enqueueLiveOrder({
+              symbol: pick.symbol,
+              side: "buy",
+              notionalUsd: tapeStake.notional,
+              priceUsd: pick.priceUsd,
+              qty,
+              clientId: `entry-${pick.id}-${Date.now()}`,
+              candidateId: pick.id,
+              stopPrice: verdict.stopPrice,
+              targetPrice: verdict.targetPrice,
+            });
+            cycleFills += 1;
+            useDesk.setState((prev) => ({
+              log: pushLog(prev.log, `Live BUY queued: ${pick.symbol} $${tapeStake.notional.toFixed(2)} @ $${pick.priceUsd.toFixed(4)} \u2192 ${live.liveStatus?.venueLabel ?? "venue"}`),
+            }));
+            continue;
+          }
+          // Live but not armed → never simulate a fill into the live book.
+          if (live.mode === "live") break;
 
           const result = enter(tapeBook, pick, Date.now(), floorNow, {
             notional: tapeStake.notional,
@@ -1516,9 +1908,11 @@ export const useDesk = create<DeskState>()(
             target: verdict.targetPrice,
             priceSource: `tape:${pick.id}`,
             maxPositions: tapeMaxSlots,
+            exitProfile: exitProfileForModel(live.selectedModel),
           });
 
           if (!result.ok) break;
+          cycleFills += 1;
 
         const venueName = venueFor(pick);
         const hashStr = pick.chain === "solana" ? makeSolHash() : makeHash();
@@ -1556,15 +1950,169 @@ export const useDesk = create<DeskState>()(
           executions: [exec, ...fresh.executions].slice(0, 100),
           turboEntries: fresh.turboEntries + (turboNow ? 1 : 0),
         });
-        telegramAlert(`Monroe paper entry\n${noteLine}`);
+        routeAlert(`Monroe demo entry\n${noteLine}`);
           } // end tapeAttempt
+        }
+
+        // Close the cycle: feed the governor (fills reset starvation; starved
+        // cycles with an alive tape walk the relaxation ladder and alert when
+        // a new step applies).
+        if (cycleFills > 0) govAfter = recordEntryFilled(govAfter);
+        const ticked = tickGovernor(govAfter, { entriesFilled: cycleFills, guardHalted: false, feedsAlive });
+        useDesk.setState((prev) => ({
+          flowGovernor: ticked.state,
+          log: ticked.alert ? pushLog(prev.log, ticked.alert) : prev.log,
+        }));
+      },
+
+      refreshLiveStatus: async () => {
+        try {
+          const status = await getLiveStatus();
+          set({ liveStatus: status });
+          return status;
+        } catch (error) {
+          const note = error instanceof Error ? error.message.slice(0, 200) : "Live status unavailable";
+          set((prev) => ({ liveStatus: null, log: pushLog(prev.log, `Live status unavailable: ${note}`) }));
+          return null;
         }
       },
 
-      manualEnter: (c: Candidate) => {
+      enqueueLiveOrder: (req) => {
+        if (liveQueuedIds.has(req.clientId)) return;
+        liveQueuedIds.add(req.clientId);
+        set((prev) => ({ liveQueue: [...prev.liveQueue, req] }));
+      },
+
+      liveStep: async () => {
         const s = get();
-        if (s.mode !== "demo") {
-          return { ok: false, note: "Live execution is unavailable; this desk only supports paper simulation." };
+        if (s.mode !== "live" || !s.power) return;
+        let status = s.liveStatus;
+        if (!status) status = await get().refreshLiveStatus();
+        if (!status?.configured || liveStepBusy) return;
+        liveStepBusy = true;
+        try {
+          // 1. Real exits: any live position at/past its stop or target is sold.
+          for (const p of get().live.positions) {
+            const atStop = p.stop > 0 && p.mark > 0 && p.mark <= p.stop;
+            const atTarget = typeof p.target === "number" && p.target > 0 && p.mark >= p.target;
+            if (!atStop && !atTarget) continue;
+            get().enqueueLiveOrder({
+              symbol: p.symbol,
+              side: "sell",
+              notionalUsd: p.qty * p.mark,
+              priceUsd: p.mark,
+              qty: p.qty,
+              clientId: `exit-${p.id}`,
+              exitReason: atStop ? "STOP" : "TARGET",
+            });
+          }
+
+          // 2. Drain the queue against the venue.
+          const queue = get().liveQueue;
+          if (queue.length === 0) return;
+          set({ liveQueue: [] });
+          for (const req of queue) {
+            const res = await placeLiveOrder({
+              data: {
+                ...req,
+                realizedTodayUsd: get().live.dayPnl,
+                openPositions: get().live.positions.length,
+              },
+            });
+            if (!res.ok) {
+              liveQueuedIds.delete(req.clientId);
+              set((prev) => ({
+                liveOrders: [{ at: Date.now(), ok: false, symbol: req.symbol, side: req.side, note: res.reason }, ...prev.liveOrders].slice(0, 30),
+                log: pushLog(prev.log, `Live ${req.side} ${req.symbol} rejected: ${res.reason}`),
+              }));
+              continue;
+            }
+            if (req.side === "buy") {
+              const cand: Candidate = {
+                id: req.candidateId ?? `live-${req.clientId}`,
+                symbol: req.symbol,
+                name: req.symbol,
+                chain: "cex",
+                address: "",
+                priceUsd: res.avgPriceUsd,
+                liquidityUsd: 0,
+                volume24h: 0,
+                change24h: 0,
+                pairAgeHours: null,
+                url: null,
+                score: 0,
+                flags: ["LIVE"],
+                rationale: [`${res.venue} market fill`],
+                venue: "binance",
+              };
+              const entered = enter(get().live, cand, Date.now(), 0, {
+                notional: res.filledQty * res.avgPriceUsd,
+                priceSource: `tape:${cand.id}`,
+                stop: req.stopPrice,
+                target: req.targetPrice,
+              });
+              set((prev) => ({
+                live: entered.book,
+                tradingLedger: touchLedgerFromBook(prev.tradingLedger, entered.book, "desk"),
+              }));
+            } else {
+              const posId = req.clientId.startsWith("exit-") ? req.clientId.slice(5) : "";
+              const liveBook = get().live;
+              if (posId && liveBook.positions.some((p) => p.id === posId)) {
+                const marked = { ...liveBook, positions: liveBook.positions.map((p) => (p.id === posId ? { ...p, mark: res.avgPriceUsd } : p)) };
+                const priorIds = new Set(liveBook.trades.map((t) => t.id));
+                const closed = closeOne(marked, posId, Date.now(), req.exitReason ?? "MANUAL");
+                const trade = closed.trades.find((t) => !priorIds.has(t.id));
+                set((prev) => {
+                  const next: Partial<DeskState> = {
+                    live: closed,
+                    tradingLedger: touchLedgerFromBook(prev.tradingLedger, closed, "desk"),
+                  };
+                  // A real live close teaches the SAME shared memory and bucket
+                  // book as demo — one global discipline across both modes.
+                  if (trade && !trade.simulated) {
+                    next.memory = learn(prev.memory, trade.pnl, trade.lesson);
+                    next.bucketBook = learnBuckets(prev.bucketBook, trade.venue ?? "unknown", trade.reason, trade.symbol, trade.pnl, "live");
+                    archiveClosedTrades([{ trade, mode: "live" as Mode }]);
+                  }
+                  return next;
+                });
+              }
+            }
+            set((prev) => ({
+              liveOrders: [{ at: Date.now(), ok: true, symbol: req.symbol, side: req.side, note: `${res.venue} ${res.venueOrderId}` }, ...prev.liveOrders].slice(0, 30),
+              log: pushLog(prev.log, `Live ${req.side} ${req.symbol} filled @ $${res.avgPriceUsd.toFixed(4)} (${res.venue})`),
+            }));
+          }
+        } catch (error) {
+          const note = error instanceof Error ? error.message : "live step failed";
+          set((prev) => ({ log: pushLog(prev.log, `Live step error: ${note}`) }));
+        } finally {
+          liveStepBusy = false;
+        }
+      },
+
+      manualEnter: (c: Candidate, opts?: ManualEnterOptions) => {
+        const s = get();
+        if (s.mode === "live") {
+          if (!(s.liveStatus?.configured ?? false)) {
+            return { ok: false, note: "Live execution is not armed — set SNIPER_LIVE_ENABLED and CEX credentials on the server, then retry." };
+          }
+          const notional = Math.max(1, opts?.notionalUsd ?? 25);
+          const qty = c.priceUsd > 0 ? notional / c.priceUsd : 0;
+          if (qty <= 0) return { ok: false, note: "No price available for this symbol." };
+          get().enqueueLiveOrder({
+            symbol: c.symbol,
+            side: "buy",
+            notionalUsd: notional,
+            priceUsd: c.priceUsd,
+            qty,
+            clientId: `manual-${c.id}-${Date.now()}`,
+            candidateId: c.id,
+            stopPrice: opts?.stop,
+            targetPrice: opts?.target,
+          });
+          return { ok: true, note: `Live BUY queued: ${c.symbol} $${notional.toFixed(2)} \u2192 ${s.liveStatus?.venueLabel ?? "venue"}. Guardrails apply on submit.` };
         }
         if (s.turboPhase === "cooling") {
           return { ok: false, note: "Turbo cooling — new entries resume when the cooldown lapses (or bypass it)." };
@@ -1604,12 +2152,15 @@ export const useDesk = create<DeskState>()(
             verdict,
           };
         }
-        const notional = manualStake.notional;
+        const notional = opts?.notionalUsd && opts.notionalUsd > 0
+          ? Math.min(opts.notionalUsd, manualStake.notional)
+          : manualStake.notional;
         const result = enter(currentBook, c, Date.now(), floor, {
           notional,
-          stop: verdict.stopPrice,
-          target: verdict.targetPrice,
+          stop: opts?.stop ?? verdict.stopPrice,
+          target: opts?.target ?? verdict.targetPrice,
           priceSource: `tape:${c.id}`,
+          exitProfile: exitProfileForModel(s.selectedModel),
         });
 
         if (!result.ok) {
@@ -1644,7 +2195,7 @@ export const useDesk = create<DeskState>()(
           executions: [exec, ...s.executions].slice(0, 100),
           turboEntries: s.turboEntries + (isTurbo && s.turboPhase === "running" ? 1 : 0),
         });
-        telegramAlert(`Monroe paper entry\n${note}`);
+        routeAlert(`Monroe demo entry\n${note}`);
         return { ok: true, note, verdict };
       },
 
@@ -1655,9 +2206,13 @@ export const useDesk = create<DeskState>()(
         const didClose = book.positions.length < s[mode].positions.length;
         const closed = didClose ? book.trades[0] : undefined;
         const memory = didClose && closed ? learn(s.memory, closed.pnl) : s.memory;
+        const bucketBook = didClose && closed
+          ? learnBuckets(s.bucketBook, closed.venue ?? "unknown", closed.reason, closed.symbol, closed.pnl, mode)
+          : s.bucketBook;
         set({
           [mode]: book,
           memory,
+          bucketBook,
           note: didClose && closed ? `Flattened ${closed.symbol}: PnL $${closed.pnl.toFixed(2)}` : "Position closed",
           log: pushLog(
             s.log,
@@ -1674,6 +2229,7 @@ export const useDesk = create<DeskState>()(
         const mode = s.mode;
         let book = s[mode];
         let memory = s.memory;
+        let bucketBook = s.bucketBook;
         const closedTrades: ClosedTrade[] = [];
         for (const position of [...book.positions]) {
           book = closeOne(book, position.id);
@@ -1681,12 +2237,14 @@ export const useDesk = create<DeskState>()(
           if (closed) {
             closedTrades.push(closed);
             memory = learn(memory, closed.pnl);
+            bucketBook = learnBuckets(bucketBook, closed.venue ?? "unknown", closed.reason, closed.symbol, closed.pnl, mode);
           }
         }
         set({
           [mode]: book,
           memory,
-          note: "All open paper positions flattened.",
+          bucketBook,
+          note: "All open positions flattened.",
           log: pushLog(s.log, `Flattened all [${mode.toUpperCase()}]`),
         });
         archiveClosedTrades(closedTrades.map((trade) => ({ trade, mode })));
@@ -1723,18 +2281,18 @@ export const useDesk = create<DeskState>()(
             type: "DEPOSIT",
             amount,
             mode: "demo",
-            network: "Paper simulation",
+            network: "Demo simulation",
             status: "CONFIRMED",
-            note: `Paper balance increased by $${amount.toFixed(2)}.`,
+            note: `Demo balance increased by $${amount.toFixed(2)}.`,
           };
           set({
             demo: updatedBook,
             ...reanchorBaselines(s.profitLockState, s.equityGuardState, equity(updatedBook)),
             walletHistory: [tx, ...s.walletHistory],
-            note: `Added $${amount.toFixed(2)} to the paper balance.`,
-            log: pushLog(s.log, `Paper balance +$${amount.toFixed(2)}`),
+            note: `Added $${amount.toFixed(2)} to the demo balance.`,
+            log: pushLog(s.log, `Demo balance +$${amount.toFixed(2)}`),
           });
-          return { ok: true, note: `Added $${amount.toFixed(2)} to the paper balance.` };
+          return { ok: true, note: `Added $${amount.toFixed(2)} to the demo balance.` };
         }
 
         if (amount > targetBook.cash + 0.0001) {
@@ -1752,19 +2310,19 @@ export const useDesk = create<DeskState>()(
           type: "WITHDRAWAL",
           amount,
           mode: "demo",
-          network: "Paper simulation",
+          network: "Demo simulation",
           status: "CONFIRMED",
-          note: `Paper balance decreased by $${amount.toFixed(2)}.`,
+          note: `Demo balance decreased by $${amount.toFixed(2)}.`,
         };
 
         set({
           demo: wResult.book,
           ...reanchorBaselines(s.profitLockState, s.equityGuardState, equity(wResult.book)),
           walletHistory: [tx, ...s.walletHistory],
-          note: `Removed $${amount.toFixed(2)} from the paper balance.`,
-          log: pushLog(s.log, `Paper balance -$${amount.toFixed(2)}`),
+          note: `Removed $${amount.toFixed(2)} from the demo balance.`,
+          log: pushLog(s.log, `Demo balance -$${amount.toFixed(2)}`),
         });
-        return { ok: true, note: `Removed $${amount.toFixed(2)} from the paper balance.` };
+        return { ok: true, note: `Removed $${amount.toFixed(2)} from the demo balance.` };
       },
 
       resetDemo: () =>
@@ -1774,7 +2332,7 @@ export const useDesk = create<DeskState>()(
           ...reanchorBaselines(s.profitLockState, s.equityGuardState, DEMO_START),
           currentTier: detectTier(DEMO_START, "scale"),
           tierConfig: TIER_CONFIGS[detectTier(DEMO_START, "scale")],
-          note: `Paper ledger reset to $${DEMO_START}.00. Archived trade learning remains intact.`,
+          note: `Demo ledger reset to $${DEMO_START}.00. Archived trade learning remains intact.`,
           log: pushLog(s.log, `Demo reset to $${DEMO_START}.00`),
         })),
 
@@ -1918,7 +2476,7 @@ export const useDesk = create<DeskState>()(
               ? s.readinessTargets.winRate
               : Math.min(80, Math.max(50, patch.winRate)),
           },
-          log: pushLog(s.log, "Paper-discipline targets updated"),
+          log: pushLog(s.log, "Discipline targets updated"),
         })),
 
       // Equity guard
@@ -2023,6 +2581,7 @@ export const useDesk = create<DeskState>()(
           demo: stripTrades(s.demo),
           live: stripTrades(s.live),
           memory: emptyMemory(),
+          bucketBook: emptyBucketBook(),
           dbEvents: [],
           dbGrossWin: 0,
           dbGrossLoss: 0,
@@ -2049,11 +2608,16 @@ export const useDesk = create<DeskState>()(
         demo: s.demo,
         live: s.live,
         memory: s.memory,
+        // Learned per-symbol / per-venue floors survive a reload even when the
+        // database link is unavailable (the deployed common case).
+        bucketBook: s.bucketBook,
         log: s.log,
         walletHistory: s.walletHistory,
         tradingLedger: s.tradingLedger,
         riskSettings: s.riskSettings,
         disciplineRules: s.disciplineRules,
+        workingOrders: s.workingOrders,
+        alerts: s.alerts,
         tradeLearningDbCount: s.tradeLearningDbCount,
         dbSource: s.dbSource,
         dbLastWriteAt: s.dbLastWriteAt,
@@ -2077,6 +2641,8 @@ export const useDesk = create<DeskState>()(
         // Equity guard
         equityGuardState: s.equityGuardState,
         equityGuardConfig: s.equityGuardConfig,
+        // Flow governor starvation state
+        flowGovernor: s.flowGovernor,
         // Bot interoperability + discipline targets
         entrySources: s.entrySources,
         engineCycle: s.engineCycle,

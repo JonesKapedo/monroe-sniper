@@ -3,6 +3,7 @@ import {
   Activity,
   Clock,
   LayoutDashboard,
+  LayoutGrid,
   LogOut,
   Radar,
   ScanSearch,
@@ -33,6 +34,10 @@ import { defaultSettings } from "@/lib/sniper/types";
 import { StandbyPositionsModal } from "@/components/standby-positions-modal";
 import { OperatorStrip } from "@/components/operator-strip";
 import { TelemetryStrip } from "@/components/telemetry-strip";
+import { SystemBar } from "@/components/system-bar";
+import { NotificationBell, NotificationToasts } from "@/components/notification-center";
+import { CommandPalette, OPEN_PALETTE_EVENT } from "@/components/command-palette";
+import { useDeskNotifications } from "@/lib/use-desk-notifications";
 import { getDbHealth, getTradeLearningEvents } from "@/lib/trade-memory.functions";
 
 import { loadFeeds, loadFxSpot, loadPerpFunding, verifyInstrument } from "@/lib/market.functions";
@@ -43,20 +48,50 @@ import { FX_PAIRS } from "@/lib/fx/twelvedata";
 
 const EMPTY_FX_STALE: ReadonlySet<string> = new Set<string>();
 
-const NAV = [
-  { to: "/", label: "Desk", short: "Desk", icon: LayoutDashboard },
-  { to: "/tape", label: "Tape", short: "Tape", icon: Activity },
-  { to: "/signals", label: "Signals", short: "Feed", icon: Radar },
-  { to: "/opportunities", label: "Scanner", short: "Scan", icon: ScanSearch },
-  { to: "/learn", label: "DYOR", short: "DYOR", icon: Search },
-  { to: "/wallet", label: "Wallet", short: "Funds", icon: Wallet },
-  { to: "/settings", label: "Settings", short: "Setup", icon: SlidersHorizontal },
-] as const;
+type NavItem = { to: string; label: string; short: string; icon: typeof LayoutDashboard };
+
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: "Trade",
+    items: [{ to: "/terminal", label: "Terminal", short: "Term", icon: LayoutGrid }],
+  },
+  {
+    label: "Live · now",
+    items: [
+      { to: "/", label: "Desk", short: "Desk", icon: LayoutDashboard },
+      { to: "/tape", label: "Tape", short: "Tape", icon: Activity },
+      { to: "/signals", label: "Signals", short: "Feed", icon: Radar },
+    ],
+  },
+  {
+    label: "Discover",
+    items: [{ to: "/opportunities", label: "Scanner", short: "Scan", icon: ScanSearch }],
+  },
+  {
+    label: "Research",
+    items: [{ to: "/learn", label: "DYOR", short: "DYOR", icon: Search }],
+  },
+  {
+    label: "Account",
+    items: [
+      { to: "/wallet", label: "Wallet", short: "Funds", icon: Wallet },
+      { to: "/settings", label: "Settings", short: "Setup", icon: SlidersHorizontal },
+    ],
+  },
+];
+
+const NAV: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 export function Frame({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const gate = useSupabaseGate();
-  const signedIn = gate.status === "signed-in";
+  // The platform ships auth OFF (`VITE_AUTH_ENABLED=false`, .grok/app-env.json).
+  // In that mode the Supabase sign-in gate is bypassed so the desk actually runs
+  // — and therefore learns — without a configured Supabase project. When auth is
+  // enabled the sign-in gate is enforced exactly as before.
+  const authDisabled = import.meta.env.VITE_AUTH_ENABLED === "false";
+  const signedIn = authDisabled || gate.status === "signed-in";
+  useDeskNotifications();
 
   useEffect(() => {
     if (!signedIn) return;
@@ -88,7 +123,9 @@ export function Frame({ children }: { children: ReactNode }) {
         useSniper.getState().runTicks(0);
       }
 
-      if ((desk.power || desk.demo.positions.length > 0) && tickCount % 3 === 0) {
+      const hasWorking = useDesk.getState().workingOrders.some((o) => o.status === "WORKING");
+      const hasAlerts = useDesk.getState().alerts.some((a) => !a.fired);
+      if ((desk.power || desk.demo.positions.length > 0 || hasWorking || hasAlerts) && tickCount % 3 === 0) {
         try {
           const feeds = await loadFeeds({ data: {} });
           const combined = [...feeds.binance, ...feeds.dex];
@@ -111,6 +148,7 @@ export function Frame({ children }: { children: ReactNode }) {
               try {
                 const avenues = scanAllAvenues(current[current.mode], current.disciplineRules, Date.now(), {
                   funding: current.perpFunding,
+                  tape: combined,
                 });
                 const onTape = new Set(
                   combined.map((c) => c.symbol.toUpperCase().split(/[/:_\- ]/)[0]),
@@ -165,6 +203,7 @@ export function Frame({ children }: { children: ReactNode }) {
             }
             if (current.power) current.tick(prices, false, fxStale);
             else if (current.demo.positions.length > 0) current.tick(prices, true, fxStale);
+            useDesk.getState().workOrders(prices);
             lastPrices = prices;
             lastHadPrices = true;
           }
@@ -174,6 +213,10 @@ export function Frame({ children }: { children: ReactNode }) {
       }
 
       if (useDesk.getState().power) useDesk.getState().autoStep();
+      // Live mode: drain queued real orders and apply venue fills (no-op when
+      // live execution is not armed). Runs after autoStep so this cycle's
+      // candidates are already enqueued.
+      if (useDesk.getState().mode === "live") void useDesk.getState().liveStep();
 
       {
         const cfg = useDesk.getState().engineCycle;
@@ -278,6 +321,7 @@ export function Frame({ children }: { children: ReactNode }) {
       ]);
       if (cancel) return;
       setReady(true);
+      void useDesk.getState().refreshLiveStatus();
       void getDbHealth()
         .then((health) => {
           if (!health.ok || !health.state) {
@@ -305,10 +349,12 @@ export function Frame({ children }: { children: ReactNode }) {
         })
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
-          console.error("[trade-learning] Failed to restore database learning state:", error);
+          // No DB configured (auth-off deploys keep learning in localStorage) is
+          // the normal state, not a failure — log at info, surface via dbStatus.
+          console.info("[trade-learning] Database learning unavailable; keeping learning local.", message.slice(0, 160));
           useDesk.getState().setDbStatus({ source: "unknown", ok: false, error: message.slice(0, 300) });
           useDesk.setState((desk) => ({
-            note: "Database learning state is unavailable; local paper learning remains active.",
+            note: "Database learning state is unavailable; local demo learning remains active.",
             log: [`Database link failed (${message.slice(0, 120)}).`, ...desk.log].slice(0, 50),
           }));
         });
@@ -320,11 +366,11 @@ export function Frame({ children }: { children: ReactNode }) {
     };
   }, [signedIn]);
 
-  if (gate.status === "misconfigured") {
+  if (!authDisabled && gate.status === "misconfigured") {
     return <LoginView client={null} misconfigured />;
   }
 
-  if (gate.status === "signed-out") {
+  if (!authDisabled && gate.status === "signed-out") {
     return <LoginView client={gate.client} misconfigured={false} />;
   }
 
@@ -332,7 +378,7 @@ export function Frame({ children }: { children: ReactNode }) {
     return (
       <div className="flex min-h-screen flex-col justify-between bg-ink px-6 py-8 text-cream">
         <p className="text-sm tracking-widest text-brass uppercase">Monroe</p>
-        <p className="max-w-sm text-2xl font-medium">Opening the paper desk…</p>
+        <p className="max-w-sm text-2xl font-medium">Opening the desk…</p>
       </div>
     );
   }
@@ -364,7 +410,6 @@ function Shell({ children }: { children: ReactNode }) {
   }, []);
 
   const mode = useDesk((s) => s.mode);
-  const setMode = useDesk((s) => s.setMode);
   const power = useDesk((s) => s.power);
   const setPower = useDesk((s) => s.setPower);
   const demo = useDesk((s) => s.demo);
@@ -406,7 +451,7 @@ function Shell({ children }: { children: ReactNode }) {
                   : "border border-emerald-500/40 bg-emerald-500/20 text-emerald-300",
               )}
             >
-              {mode === "live" ? "LOCKED" : "PAPER"}
+              {mode === "live" ? "GATED" : "DEMO"}
             </span>
           </div>
           <p className="mt-1 text-lg font-medium">Sniper Bot</p>
@@ -427,8 +472,15 @@ function Shell({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
-          {NAV.map((item) => (
-            <NavLink key={item.to} {...item} />
+          {NAV_GROUPS.map((group, i) => (
+            <div key={group.label} className={cn("flex flex-col gap-1", i > 0 && "mt-3")}>
+              <p className="px-3 text-[10px] font-semibold tracking-wider text-faint/70 uppercase">
+                {group.label}
+              </p>
+              {group.items.map((item) => (
+                <NavLink key={item.to} {...item} />
+              ))}
+            </div>
           ))}
         </nav>
 
@@ -467,13 +519,13 @@ function Shell({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-1.5 sm:gap-3">
             {readiness && (
               <div
-                title={`${readiness.completedDemoTrades} paper trades recorded`}
+                title={`${readiness.completedDemoTrades} demo trades recorded`}
                 className="hidden items-center gap-2 rounded-full border border-line bg-panel-2 px-3 py-1 lg:flex"
                 suppressHydrationWarning
               >
                 <ShieldCheck className="size-3.5 text-brass" />
                 <div className="flex items-center gap-1.5 text-xs">
-                  <span className="text-faint">Paper discipline:</span>
+                  <span className="text-faint">Discipline:</span>
                   <span
                     className={cn(
                       "font-semibold",
@@ -486,37 +538,33 @@ function Shell({ children }: { children: ReactNode }) {
               </div>
             )}
 
-            <div className="flex items-center rounded-full border border-line bg-panel-2 p-0.5" title="Paper simulation mode">
-              <button
-                type="button"
-                aria-label="Paper simulation mode"
-                onClick={() => setMode("demo")}
-                className={cn(
-                  "min-h-11 rounded-full px-2 py-1 text-[11px] font-medium transition-colors sm:px-2.5 sm:text-xs",
-                  mode === "demo" ? "bg-brass text-ink font-semibold shadow-xs" : "text-faint hover:text-cream",
-                )}
-              >
-                <span className="sm:hidden" aria-hidden="true">Demo</span>
-                <span className="hidden sm:inline">Paper</span>
-              </button>
-            </div>
-
             <div className="flex items-center rounded-full border border-brass/30 bg-brass/5 p-0.5" title="Read-only wallet connection">
               <WalletButton compact />
             </div>
 
             <div className="hidden text-right font-mono sm:block" suppressHydrationWarning>
-              <span className="text-[10px] tracking-wider text-faint uppercase">Paper balance:</span>{" "}
+              <span className="text-[10px] tracking-wider text-faint uppercase">{mode === "live" ? "Wallet balance:" : "Demo balance:"}</span>{" "}
               <Money value={activeEq} kind="balance" className={`text-sm font-semibold ${capitalMoodClass(activeBook.dayPnl)}`} />
               <span className="ml-2 text-[10px] text-faint">
                 cash ${activeBook.cash.toFixed(2)} · locked ${activeLocked.toFixed(2)}
               </span>
             </div>
+            <button
+              type="button"
+              aria-label="Open command palette"
+              title="Command palette (Ctrl/⌘ + K)"
+              onClick={() => window.dispatchEvent(new Event(OPEN_PALETTE_EVENT))}
+              className="hidden min-h-11 items-center gap-1.5 rounded-full border border-line bg-panel px-3 text-faint transition-colors hover:text-cream lg:inline-flex"
+            >
+              <Search className="size-4" />
+              <span className="font-mono text-[10px] tracking-wider">⌘K</span>
+            </button>
+            <NotificationBell />
             <DbBadge />
 
             <button
               type="button"
-              aria-label={power ? "Disarm paper bot" : "Arm paper bot"}
+              aria-label={power ? "Disarm demo bot" : "Arm demo bot"}
               onClick={requestStandby}
               className={cn(
                 "inline-flex min-h-11 items-center gap-1.5 rounded-full border px-2 text-xs font-medium transition-colors sm:gap-2 sm:px-3",
@@ -536,7 +584,7 @@ function Shell({ children }: { children: ReactNode }) {
               {power ? (
                 <>
                   <span className="sm:hidden">Armed</span>
-                  <span className="hidden sm:inline">Paper bot armed</span>
+                  <span className="hidden sm:inline">Bot armed</span>
                 </>
               ) : (
                 "Standby"
@@ -555,12 +603,13 @@ function Shell({ children }: { children: ReactNode }) {
         </header>
 
         <OperatorStrip />
+        <SystemBar />
         <TelemetryStrip />
 
         {mode === "live" && (
           <div className="flex items-center justify-between border-b border-amber-500/40 bg-panel-2 px-4 py-2 text-xs md:px-8">
             <span className="font-semibold text-amber-300">
-              Live execution is unavailable. This session is simulation-only.
+              Live execution is gated. Connect a broker to route orders — this session runs simulated fills.
             </span>
           </div>
         )}
@@ -577,6 +626,8 @@ function Shell({ children }: { children: ReactNode }) {
       {locked && <PinGate />}
       {showStandbyModal && <StandbyPositionsModal isOpen={showStandbyModal} onClose={() => setShowStandbyModal(false)} />}
       <WalletModal />
+      <NotificationToasts />
+      <CommandPalette />
     </div>
   );
 }

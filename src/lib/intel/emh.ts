@@ -27,7 +27,16 @@ export type Edge = {
 
 const HARD = ["HONEYPOT", "LP-UNLOCKED", "MINT-AUTHORITY", "FREEZE-AUTHORITY", "HIGH-TAX"];
 
-export function assessEdge(input: EdgeInput): Edge {
+/**
+ * relaxStep lowers the EVIDENCE thresholds (momentum size, participation,
+ * score cutoffs) so a starved desk admits near-miss setups. It can NEVER
+ * bypass: hard risk flags, the $10k book floor, or the +edge bias itself.
+ */
+export function assessEdge(input: EdgeInput, relaxStep = 0): Edge {
+  const relax = Math.max(0, Math.min(3, relaxStep));
+  const scoreCutoff = 4 * relax; // 0 / 4 / 8 / 12
+  const changeFloor = 0.15 * relax; // 0.0 / 0.15 / 0.30 / 0.45 off the majors bar
+  const partFloor = 0.015 * relax; // participation floor relief
   const flags = input.flags ?? [];
   if (flags.some((flag) => HARD.includes(flag))) {
     return { act: false, edge: 0, stance: "SKIP", why: "Hard risk flag. No trade." };
@@ -42,8 +51,37 @@ export function assessEdge(input: EdgeInput): Edge {
   const change = Number.isFinite(input.change24h) ? input.change24h : 0;
   const age = input.pairAgeHours;
   const sentiment = input.sentiment;
+  const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidityUsd : 0;
   let edge = input.score;
   const notes: string[] = [];
+
+  // Quality guards. These are NOT evidence thresholds: no relax step may
+  // loosen them, because no amount of starvation makes a fresh pump safe.
+  // Every losing entry this desk has taken came through one of these holes.
+  if (age != null && age < 1) {
+    return {
+      act: false,
+      edge: Math.max(0, edge),
+      stance: "SKIP",
+      why: `Pair is ${age.toFixed(1)}h old — no reliable book to trade.`,
+    };
+  }
+  if (change >= 25) {
+    return {
+      act: false,
+      edge: Math.max(0, edge),
+      stance: "SKIP",
+      why: `Vertical move (+${change.toFixed(1)}%) — chasing a blow-off, not an edge.`,
+    };
+  }
+  if (!depthUnknown && participation >= 1.2) {
+    return {
+      act: false,
+      edge: Math.max(0, edge),
+      stance: "SKIP",
+      why: `Turnover ${participation.toFixed(2)}× the pool — distribution risk.`,
+    };
+  }
 
   if (typeof sentiment === "number" && Number.isFinite(sentiment)) {
     const sentimentDir = Math.sign(sentiment);
@@ -68,21 +106,24 @@ export function assessEdge(input: EdgeInput): Edge {
   }
 
   if (depthUnknown) {
-    notes.push("CEX depth unpublished");
+    notes.push("Depth unpublished");
   }
 
-  // CEX majors: liquidity-weighted novelty filters are meaningless (depth
-  // unpublished, pairs are never "fresh"), so the screen is purely momentum.
-  // A major printing a real move is tradeable regardless of pool metrics.
+  // Unknown-depth majors (CEX spot, index references): liquidity-weighted
+  // novelty filters are meaningless here — depth is unpublished and pairs are
+  // never "fresh" — so the screen is purely momentum + conviction. A major
+  // printing a real move, or a flow-backed name with a high score, is
+  // tradeable regardless of pool metrics. Market cap is NOT pool turnover.
   if (depthUnknown) {
-    const moving = Math.abs(change) >= 0.55 && input.score >= 48;
-    const solid = input.score >= 58 && Math.abs(change) >= 0.25;
-    if (moving || solid) {
+    const moving = Math.abs(change) >= Math.max(0.3, 0.55 - changeFloor) && input.score >= 48 - scoreCutoff;
+    const solid = input.score >= Math.max(44, 58 - scoreCutoff) && Math.abs(change) >= Math.max(0.12, 0.25 - changeFloor);
+    const strong = input.score >= Math.max(56, 66 - scoreCutoff) && change > -0.5;
+    if (moving || solid || strong) {
       return {
         act: true,
         edge: Math.min(100, edge),
         stance: "TREND",
-        why: `Major printing ${change.toFixed(1)}% on live CEX flow. ${notes.join(". ")}`.trim(),
+        why: `Major printing ${change.toFixed(1)}% on live flow. ${notes.join(". ")}`.trim(),
       };
     }
     return {
@@ -93,9 +134,9 @@ export function assessEdge(input: EdgeInput): Edge {
     };
   }
 
-  const quiet = Math.abs(change) < 0.35;
+  const quiet = Math.abs(change) < Math.max(0.15, 0.35 - changeFloor);
   const mature = age == null || age > 48;
-  if (quiet && mature && input.score < 58) {
+  if (quiet && mature && input.score < Math.max(46, 58 - scoreCutoff)) {
     return {
       act: false,
       edge: Math.max(0, edge),
@@ -105,7 +146,7 @@ export function assessEdge(input: EdgeInput): Edge {
   }
 
   const young = age != null && age >= 0 && age < 12;
-  if (young && input.score >= 55 && input.liquidityUsd >= 12_000 && change > -5) {
+  if (young && input.score >= Math.max(43, 55 - scoreCutoff) && input.liquidityUsd >= 12_000 && change > -5) {
     return {
       act: true,
       edge: Math.min(100, edge + 8),
@@ -114,9 +155,10 @@ export function assessEdge(input: EdgeInput): Edge {
     };
   }
 
-  const participation = input.liquidityUsd > 0 ? input.volume24h / input.liquidityUsd : 0;
-  const trending = change >= 0.7 && participation >= 0.05 && input.score >= 52;
-  const strongBook = input.score >= 68 && change > -0.5;
+  const trending = change >= Math.max(0.3, 0.7 - changeFloor) && participation >= Math.max(0.03, 0.08 - partFloor) && input.score >= Math.max(42, 52 - scoreCutoff);
+  // A high score on a dead book is not an information edge: prove it with
+  // turnover before calling it a trend.
+  const strongBook = input.score >= Math.max(52, 68 - scoreCutoff) && change > -0.5 && participation >= Math.max(0.03, 0.08 - partFloor);
   if (trending || strongBook) {
     return {
       act: true,

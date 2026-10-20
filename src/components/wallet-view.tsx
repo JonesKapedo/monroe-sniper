@@ -3,7 +3,7 @@ import { ArrowDownLeft, ArrowUpRight, History, Wallet } from "lucide-react";
 import { useMascot } from "@/lib/mascot";
 import { useDesk } from "@/lib/desk-store";
 import { equity, exposure } from "@/lib/paper";
-import { Button, Card, Label } from "@/components/ui";
+import { Badge, Button, Card, Label, PageHeader } from "@/components/ui";
 import { Money, capitalMoodClass } from "@/components/money";
 import { cn } from "@/lib/cn";
 import { WalletButton } from "@/components/wallet-modal";
@@ -79,7 +79,7 @@ function OnchainBalancesCard() {
       {error && <p className="text-xs text-loss">{error}</p>}
       <p className="text-[11px] text-faint">
         Read-only link. Deposits are manual transfers you make in your wallet; the desk detects
-        new balance and sizes paper risk against it. Trading stays paper-only.
+        new balance and sizes demo risk against it. Execution stays simulated.
       </p>
     </Card>
   );
@@ -114,8 +114,8 @@ export function WalletView() {
     }
     setSuccess(
       operation === "in"
-        ? `$${amountValue.toFixed(2)} added to the local paper balance.`
-        : `$${amountValue.toFixed(2)} removed from the local paper balance.`,
+        ? `$${amountValue.toFixed(2)} added to the local demo balance.`
+        : `$${amountValue.toFixed(2)} removed from the local demo balance.`,
     );
     useMascot.getState().ping(operation === "in" ? "bright" : "focus");
     setAmount("");
@@ -123,53 +123,46 @@ export function WalletView() {
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-5">
-      <header className="flex flex-col gap-4 rounded-xl border border-line bg-panel p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Paper Wallet & Ledger</h1>
-            <span className="rounded-full border border-line bg-panel-2 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-faint">
-              SIMULATION
-            </span>
-          </div>
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-faint">
-            Paper-trading balance only — no real deposits, withdrawals, or on-chain transfers occur
-            here. Connect your wallet below to link real on-chain balances (read-only).
-          </p>
-        </div>
+      <PageHeader
+        stage="account"
+        title="Demo Wallet & Ledger"
+        badge={<Badge tone="muted">Simulation</Badge>}
+        subtitle="Demo balance only — no real deposits, withdrawals, or on-chain transfers occur here. Connect your wallet below to link real on-chain balances (read-only)."
+      >
         <div className="shrink-0">
           <WalletButton />
         </div>
-      </header>
+      </PageHeader>
 
       <OnchainBalancesCard />
 
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Paper account summary">
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Account summary">
         <Card>
-          <p className="text-[10px] tracking-wider text-faint uppercase">PAPER EQUITY</p>
+          <p className="text-[10px] tracking-wider text-faint uppercase">DEMO EQUITY</p>
           <p className="num mt-1 text-2xl font-bold"><Money value={totalEquity} kind="balance" className={capitalMoodClass(demo.dayPnl)} /></p>
           <p className="mt-1 text-[11px] text-faint">Simulated balance</p>
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">AVAILABLE</p>
           <p className="num mt-1 text-2xl font-bold"><Money value={demo.cash} kind="balance" className={capitalMoodClass(demo.dayPnl)} /></p>
-          <p className="mt-1 text-[11px] text-faint">Paper cash</p>
+          <p className="mt-1 text-[11px] text-faint">Demo cash</p>
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">EXPOSURE</p>
           <p className="num mt-1 text-2xl font-bold"><Money value={currentExposure} kind="balance" className={capitalMoodClass(demo.dayPnl)} /></p>
-          <p className="mt-1 text-[11px] text-faint">{demo.positions.length} paper positions</p>
+          <p className="mt-1 text-[11px] text-faint">{demo.positions.length} demo positions</p>
         </Card>
         <Card>
           <p className="text-[10px] tracking-wider text-faint uppercase">REALIZED P&L</p>
           <p className="num mt-1 text-2xl font-bold"><Money value={demo.dayPnl} kind="delta" /></p>
-          <p className="mt-1 text-[11px] text-faint">{demo.trades.length} paper closes</p>
+          <p className="mt-1 text-[11px] text-faint">{demo.trades.length} demo closes</p>
         </Card>
       </section>
 
       <Card className="flex flex-col gap-4">
         <div className="flex items-center gap-2 border-b border-line pb-3">
           <Wallet className="size-4 text-brass" aria-hidden="true" />
-          <Label>Paper balance adjustment</Label>
+          <Label>Demo balance adjustment</Label>
         </div>
         <div className="flex w-fit rounded-lg border border-line bg-panel-2 p-1">
           <button
@@ -186,7 +179,7 @@ export function WalletView() {
             )}
           >
             <ArrowDownLeft className="size-3.5" aria-hidden="true" />
-            Add paper funds
+            Add demo funds
           </button>
           <button
             type="button"
@@ -202,15 +195,15 @@ export function WalletView() {
             )}
           >
             <ArrowUpRight className="size-3.5" aria-hidden="true" />
-            Remove paper funds
+            Remove demo funds
           </button>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
-          <label className="flex flex-col gap-1.5 text-xs font-semibold text-faint" htmlFor="paper-amount">
-            Amount (simulation only)
+          <label className="flex flex-col gap-1.5 text-xs font-semibold text-faint" htmlFor="demo-amount">
+            Amount (demo only)
             <input
-              id="paper-amount"
+              id="demo-amount"
               type="number"
               min="0"
               step="any"
@@ -221,12 +214,12 @@ export function WalletView() {
                 setError("");
                 setSuccess("");
               }}
-              placeholder="Enter an amount"
+              placeholder="0.00"
               className="field h-11 rounded-xl border border-line bg-panel-2 px-3.5 font-mono text-base text-cream outline-none focus:border-brass"
             />
           </label>
           <Button onClick={postPaperAdjustment} className="min-h-11 sm:min-w-44">
-            {operation === "in" ? "Add to paper balance" : "Remove from paper balance"}
+            {operation === "in" ? "Add to demo balance" : "Remove from demo balance"}
           </Button>
         </div>
         {error ? <p role="alert" className="text-xs font-medium text-loss">{error}</p> : null}
@@ -237,13 +230,13 @@ export function WalletView() {
         <div className="flex items-center justify-between border-b border-line pb-3">
           <div className="flex items-center gap-2">
             <History className="size-4 text-brass" aria-hidden="true" />
-            <Label>Paper ledger history</Label>
+            <Label>Demo ledger history</Label>
           </div>
           <span className="text-xs text-faint">{walletHistory.length} local records</span>
         </div>
 
         {walletHistory.length === 0 ? (
-          <p className="mt-3 text-xs text-faint">No paper ledger adjustments recorded.</p>
+          <p className="mt-3 text-xs text-faint">No demo ledger adjustments recorded.</p>
         ) : (
           <div className="mt-3 overflow-x-auto">
             <table className="w-full min-w-[34rem] text-left text-xs">
@@ -252,7 +245,7 @@ export function WalletView() {
                   <th className="pb-2 font-normal">Time</th>
                   <th className="pb-2 font-normal">Entry</th>
                   <th className="pb-2 font-normal">Details</th>
-                  <th className="pb-2 text-right font-normal">Paper amount</th>
+                  <th className="pb-2 text-right font-normal">Amount</th>
                   <th className="pb-2 text-right font-normal">Record</th>
                 </tr>
               </thead>

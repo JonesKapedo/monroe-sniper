@@ -31,7 +31,7 @@ import {
 } from "@/lib/paper";
 import { useDesk } from "@/lib/desk-store";
 import { loadFeeds } from "@/lib/market.functions";
-import { Button, Card, Label } from "@/components/ui";
+import { Badge, Button, Card, Label, PageHeader } from "@/components/ui";
 import { WalletButton } from "@/components/wallet-modal";
 import { Money, capitalMoodClass } from "@/components/money";
 import { cn } from "@/lib/cn";
@@ -112,7 +112,7 @@ export function Desk() {
   const wins = book.trades.filter((t) => t.pnl > 0).length;
   const hitRate = book.trades.length > 0 ? (wins / book.trades.length) * 100 : 0;
   const perpFunding = useDesk((s) => s.perpFunding);
-  const avenues = scanAllAvenues(book, disciplineRules, nowTs, { funding: perpFunding });
+  const avenues = scanAllAvenues(book, disciplineRules, nowTs, { funding: perpFunding, tape });
 
   const scan = useCallback(async (q: string) => {
     setBusy(true);
@@ -193,51 +193,61 @@ export function Desk() {
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5">
       {/* Top Desk Header with Mode Switcher & Bot Controls */}
-      <div className="flex flex-col gap-4 rounded-xl border border-line bg-panel p-4 md:flex-row md:items-center md:justify-between md:p-5">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Global Sniper Desk</h1>
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-0.5 text-xs font-semibold tracking-wider uppercase",
-                mode === "live"
-                  ? "border border-amber-500/40 bg-amber-500/15 text-amber-300"
-                  : "border border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
-              )}
-            >
-              {mode === "live" ? "Legacy state locked" : `Paper simulation ($${DEMO_START})`}
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-faint md:text-sm">
-            {mode === "live"
-              ? "Live execution is unavailable. This app has no broker connection and cannot move real funds."
-              : `Paper environment. Starts at $${DEMO_START}. Simulated closes train the paper risk threshold.`}
-          </p>
-        </div>
-
+      <PageHeader
+        stage="now"
+        title="Global Sniper Desk"
+        badge={
+          <Badge tone={mode === "live" ? "warn" : "good"}>
+            {mode === "live" ? "Live · execution gated" : `Demo · $${DEMO_START} simulated`}
+          </Badge>
+        }
+        subtitle={
+          mode === "live"
+            ? "Live mode is selected but execution is gated — connect a broker to route orders. No real funds move in this build."
+            : `Demo environment. Starts at $${DEMO_START}. Simulated closes train the risk threshold.`
+        }
+      >
         {/* Mode Switch Button & Power Button */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          {/* Trading mode (paper) — separated from wallet connection */}
-          <div
-            className="flex items-center rounded-xl border border-line bg-panel-2 p-1"
-            title="Paper simulation mode. Live execution stays locked."
+          {/* Single Demo <-> Live switch (live execution stays gated) */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={mode === "live"}
+            aria-label={mode === "live" ? "Switch to demo trading" : "Switch to live trading"}
+            onClick={() => setMode(mode === "live" ? "demo" : "live")}
+            title={
+              mode === "live"
+                ? "Live mode — execution gated until a broker is connected. Click for demo."
+                : "Demo mode — simulated fills only. Click for live."
+            }
+            className={cn(
+              "inline-flex min-h-10 items-center gap-1 rounded-xl border p-1 text-xs font-semibold transition-colors",
+              mode === "live" ? "border-loss/50 bg-loss/10" : "border-line bg-panel-2",
+            )}
           >
-            <button
-              type="button"
-              onClick={() => setMode("demo")}
+            <span
               className={cn(
-                "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
-                mode === "demo" ? "bg-brass text-ink shadow-sm" : "text-faint hover:text-cream",
+                "rounded-lg px-3 py-1.5 transition-all",
+                mode === "demo" ? "bg-brass text-ink shadow-sm" : "text-faint",
               )}
             >
-              Paper trading
-            </button>
-          </div>
+              Demo
+            </span>
+            <span
+              className={cn(
+                "rounded-lg px-3 py-1.5 transition-all",
+                mode === "live" ? "bg-loss text-ink shadow-sm" : "text-faint",
+              )}
+            >
+              Live
+            </span>
+          </button>
 
           {/* Wallet connection — distinct zone */}
           <div
             className="flex items-center rounded-xl border border-brass/30 bg-brass/5 p-1"
-            title="Connect a read-only wallet for balance awareness. Trading stays paper-only."
+            title="Connect a read-only wallet for balance awareness. Execution stays simulated."
           >
             <WalletButton compact />
           </div>
@@ -404,7 +414,7 @@ export function Desk() {
             </Button>
           )}
         </div>
-      </div>
+      </PageHeader>
 
       {/* Equity protection: profit lock + tier + guard */}
       <EquityDashboard />
@@ -430,12 +440,12 @@ export function Desk() {
           </div>
         </div>
 
-        {/* Paper risk history */}
+        {/* Discipline / risk history */}
         {readiness && (
           <div className="flex items-center gap-3 border-t border-line/60 pt-2 sm:border-t-0 sm:pt-0">
             <div className="text-left sm:text-right">
               <div className="flex items-center gap-1.5 text-xs">
-                <span className="text-faint">Paper discipline:</span>
+                <span className="text-faint">Discipline:</span>
                 <span
                   className={cn(
                     "font-bold",
@@ -446,7 +456,7 @@ export function Desk() {
                 </span>
               </div>
               <p className="text-[11px] text-faint">
-                {readiness.completedDemoTrades}/{readiness.targetDemoTrades} paper closes · {readiness.currentWinRatePct}% win rate
+                {readiness.completedDemoTrades}/{readiness.targetDemoTrades} demo closes · {readiness.currentWinRatePct}% win rate
               </p>
             </div>
             <Button
@@ -454,16 +464,16 @@ export function Desk() {
               onClick={() => setShowReadinessModal(true)}
               className="h-8 border border-line px-2.5 text-xs text-brass hover:border-brass"
             >
-              <ShieldCheck className="mr-1 size-3.5" />               Review paper history
+              <ShieldCheck className="mr-1 size-3.5" />               Review history
             </Button>
           </div>
         )}
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard
-          label={`${mode.toUpperCase()} EQUITY`}
+          label={mode === "live" ? "WALLET EQUITY" : "DEMO EQUITY"}
           value={<Money value={eq} kind="balance" className={`text-lg font-bold sm:text-xl ${capitalMoodClass(book.dayPnl)}`} />}
-          sub="Paper balance"
+          sub={mode === "live" ? "Wallet balance" : "Demo balance"}
         />
         <StatCard
           label="DAY P&L"
@@ -794,7 +804,6 @@ export function Desk() {
           })}
         </div>
 
-
       <AvenuesTable
         avenues={avenues}
         book={book}
@@ -802,7 +811,7 @@ export function Desk() {
         maxSlots={riskSettings?.maxPositions ?? 4}
       />
 
-      {/* Paper-performance audit modal */}
+      {/* Performance review modal */}
       {showReadinessModal && readiness && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 p-4 backdrop-blur-sm">
           <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-y-auto rounded-2xl border border-line bg-panel p-6 shadow-2xl">
@@ -812,9 +821,9 @@ export function Desk() {
                   <ShieldCheck className="size-5" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-cream">Paper Performance Review</h3>
+                  <h3 className="text-lg font-bold text-cream">Performance Review</h3>
                   <p className="text-xs text-faint">
-                    Quantitative scorecard for transitioning from Demo Sandbox to Live Funds
+                    Quantitative scorecard for graduating from the demo sandbox to live capital
                   </p>
                 </div>
               </div>
@@ -829,7 +838,7 @@ export function Desk() {
 
             {/* Overall Gauge */}
             <div className="my-5 rounded-xl border border-line bg-panel-2 p-4 text-center">
-              <div className="text-xs text-faint">Paper discipline score</div>
+              <div className="text-xs text-faint">Discipline score</div>
               <div className="mt-1 font-mono text-4xl font-extrabold text-brass">
                 {readiness.readinessScore}%
               </div>

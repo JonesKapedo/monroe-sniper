@@ -34,3 +34,87 @@ test("honeypot is a hard skip", () => {
   const edge = assessEdge({ ...base, flags: ["HONEYPOT"] });
   assert.equal(edge.stance, "SKIP");
 });
+
+// --- Quality guards: no relax step may loosen these (the losing entries). ---
+
+test("never chases a vertical blow-off, even fully relaxed", () => {
+  for (const relax of [0, 1, 2, 3]) {
+    const edge = assessEdge({ ...base, change24h: 90, volume24h: 260_000 }, relax);
+    assert.equal(edge.act, false, `relax ${relax} must not admit a +90% pump`);
+    assert.match(edge.why, /Vertical move/);
+  }
+});
+
+test("never enters a pair under an hour old, even fully relaxed", () => {
+  for (const relax of [0, 1, 2, 3]) {
+    const edge = assessEdge({ ...base, pairAgeHours: 0.5, change24h: 6 }, relax);
+    assert.equal(edge.act, false, `relax ${relax} must not admit a 0.5h pair`);
+    assert.match(edge.why, /old/);
+  }
+});
+
+test("never enters a book turning over faster than its own pool, even fully relaxed", () => {
+  for (const relax of [0, 1, 2, 3]) {
+    const edge = assessEdge({ ...base, change24h: 10, liquidityUsd: 40_000, volume24h: 56_000 }, relax);
+    assert.equal(edge.act, false, `relax ${relax} must not admit 1.4x pool turnover`);
+    assert.match(edge.why, /Turnover/);
+  }
+});
+
+test("a trend needs real turnover — 6% of the pool is not a trend", () => {
+  const edge = assessEdge({ ...base, change24h: 3, liquidityUsd: 100_000, volume24h: 6_000 });
+  assert.equal(edge.act, false);
+});
+
+test("a real, mature trend still clears the raised participation floor", () => {
+  const edge = assessEdge({ ...base, change24h: 4, liquidityUsd: 100_000, volume24h: 12_000, pairAgeHours: 40 });
+  assert.equal(edge.act, true);
+  assert.equal(edge.stance, "TREND");
+});
+
+test("CEX majors with unpublished depth are unaffected by the turnover guard", () => {
+  const edge = assessEdge({
+    ...base,
+    liquidityUnknown: true,
+    liquidityUsd: 0,
+    volume24h: 0,
+    pairAgeHours: null,
+    score: 60,
+    change24h: 2,
+  });
+  assert.equal(edge.act, true);
+  assert.equal(edge.stance, "TREND");
+});
+
+// --- Reference (index/coin) majors must not be screened as AMM pools. ---
+
+test("a reference major with market-cap-as-liquidity is screened on flow, not turnover", () => {
+  // Regression: referenceRows posed market cap as liquidity, so turnover
+  // (volume / market cap) was structurally tiny and every listed major fell
+  // through to "Edge does not clear the prior." A score-80 name must trade.
+  const edge = assessEdge({
+    score: 80,
+    change24h: 0.3,
+    liquidityUsd: 2_000_000_000,
+    volume24h: 40_000_000,
+    pairAgeHours: null,
+    liquidityUnknown: true,
+    flags: [],
+  });
+  assert.equal(edge.act, true, `expected act, got: ${edge.why}`);
+  assert.equal(edge.stance, "TREND");
+});
+
+test("a quiet, high-score unknown-depth major still leans in rather than starving", () => {
+  const edge = assessEdge({
+    score: 78,
+    change24h: 0.05,
+    liquidityUsd: 5_000_000_000,
+    volume24h: 50_000_000,
+    pairAgeHours: null,
+    liquidityUnknown: true,
+    flags: [],
+  });
+  assert.equal(edge.act, true, `expected act, got: ${edge.why}`);
+});
+

@@ -1,11 +1,11 @@
 import type { Book, Candidate } from "../paper";
-import { equity, exposure } from "../paper";
+import { equity, entryFloorFor, exposure } from "../paper";
 import { auditAcademicSafeguards } from "./investopedia-mistakes-guard";
 import { fibExtensions, snapToFib } from "../math/fib";
 import { isCorrelatedDuplicate, setupVector, winnerResemblance, type SetupVector } from "../math/vectors";
 import { MODELS, selectModel, type RiskModelProfile } from "./risk-models";
 import { TIER_CONFIGS, applyStakeBudget, detectTier } from "./tier-config";
-import { resolveConcurrentSlots } from "./slots";
+import { resolveConcurrentSlots, viableConcurrentSlots } from "./slots";
 
 export type SizingModel = "VOLATILITY_PARITY" | "FRACTIONAL_KELLY" | "FIXED_FRACTION";
 export type SizingProfile = "CONSERVATIVE" | "OPTIMUM_SWEET_SPOT" | "AGGRESSIVE" | "TURBO" | "[paranoid]" | "[elvis]" | "gradient" | "[degen]";
@@ -41,15 +41,18 @@ export type RiskEngineSettings = {
 export const defaultRiskSettings: RiskEngineSettings = {
   sizingModel: "VOLATILITY_PARITY",
   sizingProfile: "OPTIMUM_SWEET_SPOT",
-  riskPerTrade: 0.025,
+  // Risk a small, fixed slice of equity per trade. At 1.2% a normal stop-out
+  // costs ~1% of the book — small enough that two or three in a night are
+  // noise, not a drawdown. (Was 2.5%, which made every stop a >$10 hit.)
+  riskPerTrade: 0.012,
   atrMultiplier: 2.0,
   rewardMultiple: 3.0,
-  maxPositions: 4,
+  maxPositions: 6,
   maxBookExposure: 0.75,
   maxIdeaExposure: 0.28,
   maxDrawdownBreaker: 0.08,
-  minLiquidity: 10_000,
-  minTicket: 15.0,
+  minLiquidity: 5_000,
+  minTicket: 10.0,
   maxSlippageBps: 40,
   maxPerChain: 3,
   useTrailingStop: true,
@@ -131,8 +134,13 @@ export function evaluateRiskAndSize(
   const drawdown = peak > 0 ? (peak - currentEquity) / peak : 0;
   const dailyLossLimit =
     profile.id === "[degen]" ? 0.15 : profile.id === "[elvis]" ? 0.1 : 0.08;
-  // Settings are the sole concurrent-slot authority.
-  const maxSlots = resolveConcurrentSlots(settings.maxPositions);
+  // Settings are the sole concurrent-slot authority, but a small book cannot
+  // viably carry the full count: cap slots so each ticket clears the fee floor.
+  const stakeTierForSlots = TIER_CONFIGS[detectTier(currentEquity)];
+  const maxSlots = viableConcurrentSlots(
+    resolveConcurrentSlots(settings.maxPositions),
+    currentEquity * stakeTierForSlots.maxPortfolioExposure,
+  );
   const isDuplicate = book.positions.some((p) => p.tokenId === candidate.id);
   const cooling = book.cooldownUntil !== null && now < book.cooldownUntil;
   const { volatility, atr, regime } = estimateVolatility(candidate);
@@ -159,7 +167,10 @@ export function evaluateRiskAndSize(
   if (effectiveEdge < profile.minEdge) {
     return { allowed: false, notional: 0, qty: 0, entryPrice: candidate.priceUsd, stopPrice: candidate.priceUsd, targetPrice: candidate.priceUsd, stopLossPct: 0, takeProfitPct: 0, riskRewardRatio: 0, atr, volatility, volatilityRegime: regime, riskAmount: 0, valueAtRisk95: 0, checks: [], reasons: [`edge-below-${profile.id}`] };
   }
-  const calculatedStopPct = Math.max(0.02, Math.min(0.12, (atr * settings.atrMultiplier) / candidate.priceUsd));
+  // Bracket width is bounded on BOTH ends: a floor keeps a normal stop out of
+  // noise, and a hard ceiling keeps a single stop-out small. A 12% stop on a
+  // volatile name was producing >$10 losses per trade; 6% caps the damage.
+  const calculatedStopPct = Math.max(0.015, Math.min(0.06, (atr * settings.atrMultiplier) / candidate.priceUsd));
   const calculatedTargetPct = Math.max(0.04, calculatedStopPct * settings.rewardMultiple);
   const rrRatio = calculatedTargetPct / calculatedStopPct;
   const entryPrice = candidate.priceUsd;
@@ -180,8 +191,7 @@ export function evaluateRiskAndSize(
   const rawConviction = Math.min(1.35, Math.max(0.65, (candidate.score / 75) * (0.9 + 0.2 * resemblance)));
   const modelConviction = convictionForModel(effectiveEdge * 12, 20);
   const conviction = Math.min(1.35, Math.max(0.65, rawConviction * modelConviction));
-  const stakeTierForSlots = TIER_CONFIGS[detectTier(currentEquity)];
-  // maxSlots already from Settings
+  // maxSlots already from Settings (fee-viability capped above)
   const openSlots = Math.max(1, maxSlots - book.positions.length);
   const cashPerSlot = book.cash / openSlots;
   const stakeBudgetTotalPreview = Math.round(currentEquity * stakeTierForSlots.maxPortfolioExposure * 100) / 100;
@@ -243,9 +253,10 @@ export function evaluateRiskAndSize(
   const chainPass = chainCount < settings.maxPerChain;
   checks.push({ id: "chain", label: `Chain concentration (<${settings.maxPerChain})`, pass: chainPass, detail: `${chainCount}/${settings.maxPerChain} in ${candidate.chain}` });
   if (!chainPass) reasons.push(`Too many open positions in ${candidate.chain}`);
-  const scorePass = candidate.score >= minScore;
-  checks.push({ id: "score", label: `Adaptive score floor (≥${minScore})`, pass: scorePass, detail: `${candidate.score}/100` });
-  if (!scorePass) reasons.push(`Score ${candidate.score} below adaptive floor ${minScore}`);
+  const scoreFloor = entryFloorFor(candidate, minScore);
+  const scorePass = candidate.score >= scoreFloor;
+  checks.push({ id: "score", label: `Adaptive score floor (≥${scoreFloor})`, pass: scorePass, detail: `${candidate.score}/100` });
+  if (!scorePass) reasons.push(`Score ${candidate.score} below adaptive floor ${scoreFloor}`);
   checks.push({ id: "fib-geometry", label: "Fib bracket geometry", pass: true, detail: fibNote ?? (settings.sizingProfile === "TURBO" ? "Raw ATR brackets (no level within snap)" : "Classic ATR brackets") });
   checks.push({ id: "winner-resemblance", label: "Resembles past winners", pass: true, detail: `${Math.round(resemblance * 100)}% vector similarity over ${math?.winnerVectors?.length ?? 0} wins` });
   if (math?.openVectors && math.openVectors.length > 0) {

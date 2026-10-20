@@ -15,9 +15,11 @@ import { Route as OpportunitiesRouteImport } from './routes/opportunities'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SignalsRouteImport } from './routes/signals'
 import { Route as TapeRouteImport } from './routes/tape'
+import { Route as TerminalRouteImport } from './routes/terminal'
 import { Route as WalletRouteImport } from './routes/wallet'
 import { Route as ApiSolanaSwapsRouteImport } from './routes/api/solana-swaps'
 import { Route as ApiTradingCycleRouteImport } from './routes/api/trading-cycle'
+import { Route as ApiWebhooksTradingviewRouteImport } from './routes/api/webhooks/tradingview'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -49,6 +51,11 @@ const TapeRoute = TapeRouteImport.update({
   path: '/tape',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TerminalRoute = TerminalRouteImport.update({
+  id: '/terminal',
+  path: '/terminal',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WalletRoute = WalletRouteImport.update({
   id: '/wallet',
   path: '/wallet',
@@ -64,6 +71,11 @@ const ApiTradingCycleRoute = ApiTradingCycleRouteImport.update({
   path: '/api/trading-cycle',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiWebhooksTradingviewRoute = ApiWebhooksTradingviewRouteImport.update({
+  id: '/api/webhooks/tradingview',
+  path: '/api/webhooks/tradingview',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -72,9 +84,11 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/signals': typeof SignalsRoute
   '/tape': typeof TapeRoute
+  '/terminal': typeof TerminalRoute
   '/wallet': typeof WalletRoute
   '/api/solana-swaps': typeof ApiSolanaSwapsRoute
   '/api/trading-cycle': typeof ApiTradingCycleRoute
+  '/api/webhooks/tradingview': typeof ApiWebhooksTradingviewRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -83,9 +97,11 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/signals': typeof SignalsRoute
   '/tape': typeof TapeRoute
+  '/terminal': typeof TerminalRoute
   '/wallet': typeof WalletRoute
   '/api/solana-swaps': typeof ApiSolanaSwapsRoute
   '/api/trading-cycle': typeof ApiTradingCycleRoute
+  '/api/webhooks/tradingview': typeof ApiWebhooksTradingviewRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -95,9 +111,11 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/signals': typeof SignalsRoute
   '/tape': typeof TapeRoute
+  '/terminal': typeof TerminalRoute
   '/wallet': typeof WalletRoute
   '/api/solana-swaps': typeof ApiSolanaSwapsRoute
   '/api/trading-cycle': typeof ApiTradingCycleRoute
+  '/api/webhooks/tradingview': typeof ApiWebhooksTradingviewRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -108,9 +126,11 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signals'
     | '/tape'
+    | '/terminal'
     | '/wallet'
     | '/api/solana-swaps'
     | '/api/trading-cycle'
+    | '/api/webhooks/tradingview'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -119,9 +139,11 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signals'
     | '/tape'
+    | '/terminal'
     | '/wallet'
     | '/api/solana-swaps'
     | '/api/trading-cycle'
+    | '/api/webhooks/tradingview'
   id:
     | '__root__'
     | '/'
@@ -130,9 +152,11 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signals'
     | '/tape'
+    | '/terminal'
     | '/wallet'
     | '/api/solana-swaps'
     | '/api/trading-cycle'
+    | '/api/webhooks/tradingview'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -142,9 +166,11 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   SignalsRoute: typeof SignalsRoute
   TapeRoute: typeof TapeRoute
+  TerminalRoute: typeof TerminalRoute
   WalletRoute: typeof WalletRoute
   ApiSolanaSwapsRoute: typeof ApiSolanaSwapsRoute
   ApiTradingCycleRoute: typeof ApiTradingCycleRoute
+  ApiWebhooksTradingviewRoute: typeof ApiWebhooksTradingviewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -191,6 +217,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TapeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/terminal': {
+      id: '/terminal'
+      path: '/terminal'
+      fullPath: '/terminal'
+      preLoaderRoute: typeof TerminalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/wallet': {
       id: '/wallet'
       path: '/wallet'
@@ -212,6 +245,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTradingCycleRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/webhooks/tradingview': {
+      id: '/api/webhooks/tradingview'
+      path: '/api/webhooks/tradingview'
+      fullPath: '/api/webhooks/tradingview'
+      preLoaderRoute: typeof ApiWebhooksTradingviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -222,9 +262,11 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   SignalsRoute: SignalsRoute,
   TapeRoute: TapeRoute,
+  TerminalRoute: TerminalRoute,
   WalletRoute: WalletRoute,
   ApiSolanaSwapsRoute: ApiSolanaSwapsRoute,
   ApiTradingCycleRoute: ApiTradingCycleRoute,
+  ApiWebhooksTradingviewRoute: ApiWebhooksTradingviewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

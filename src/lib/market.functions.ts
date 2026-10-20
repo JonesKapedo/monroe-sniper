@@ -188,6 +188,11 @@ function referenceRows(rows: GeckoCoin[], source: "coingecko" | "coinmarketcap")
       pairCreatedAt: null,
       url: null,
       venue: "dex",
+      // Index/coin reference rows are majors, not AMM pools: market cap is
+      // posed as liquidity for sizing, but pool DEPTH is unpublished. Without
+      // this flag the pre-trade screen treated turnover (volume / market cap,
+      // always tiny for majors) as a pool ratio and starved every one of them.
+      liquidityUnknown: true,
     });
     if (c) out.push(c);
   }
@@ -356,7 +361,7 @@ export const loadAnchorQuotes = createServerFn({ method: "POST" })
     });
   });
 
-const INTERVALS = new Set(["1m", "5m", "15m", "1h"]);
+const INTERVALS = new Set(["1m", "5m", "15m", "1h", "4h", "1d"]);
 const candleCache = createCache<{ candles: Candle[]; note: string }>(200);
 const CANDLE_CACHE_MS = 12_000;
 
@@ -432,6 +437,45 @@ export const loadKlines = createServerFn({ method: "POST" })
     return fetchCached(candleCache, cacheKey, CANDLE_CACHE_MS, () =>
       loadKlinesBody(data.symbol, data.interval),
     );
+  });
+
+export type DepthLevel = { price: number; qty: number };
+
+const depthCache = createCache<{ bids: DepthLevel[]; asks: DepthLevel[]; note: string }>(60);
+const DEPTH_CACHE_MS = 3_000;
+
+function parseDepth(rows: [string, string][] | undefined): DepthLevel[] {
+  return (rows ?? [])
+    .map(([p, q]) => ({ price: Number(p), qty: Number(q) }))
+    .filter((l) => Number.isFinite(l.price) && Number.isFinite(l.qty) && l.price > 0 && l.qty > 0);
+}
+
+/** Public order-book snapshot (top-of-book levels) for the depth ladder + flow meter. */
+export const loadDepth = createServerFn({ method: "POST" })
+  .validator((input: { symbol?: string; limit?: number }) => {
+    const symbol = String(input?.symbol ?? "BTCUSDT").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
+    const limit = Math.min(50, Math.max(5, Number(input?.limit ?? 20) || 20));
+    return { symbol: symbol || "BTCUSDT", limit };
+  })
+  .handler(async ({ data }): Promise<{ bids: DepthLevel[]; asks: DepthLevel[]; note: string }> => {
+    const cacheKey = `${data.symbol}:${data.limit}`;
+    return fetchCached(depthCache, cacheKey, DEPTH_CACHE_MS, async () => {
+      try {
+        const book = await getJson<{ bids?: [string, string][]; asks?: [string, string][] }>(
+          `https://api.binance.com/api/v3/depth?symbol=${encodeURIComponent(data.symbol)}&limit=${data.limit}`,
+        );
+        const bids = parseDepth(book.bids);
+        const asks = parseDepth(book.asks);
+        if (!bids.length && !asks.length) throw new Error("empty book");
+        return { bids, asks, note: `Binance depth ${data.symbol}` };
+      } catch (error) {
+        return {
+          bids: [],
+          asks: [],
+          note: `Depth unavailable (${error instanceof Error ? error.message : "error"})`,
+        };
+      }
+    });
   });
 
 export const scanMarket = createServerFn({ method: "POST" })

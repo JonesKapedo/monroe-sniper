@@ -5,12 +5,12 @@ import { kellyFraction } from "@/lib/sniper/risk";
 import { useSniper } from "@/lib/sniper/store";
 import { defaultSettings, SOURCE_META, type SourceId, type ThemeId } from "@/lib/sniper/types";
 import { useDesk } from "@/lib/desk-store";
-import { Button, Card, Label } from "@/components/ui";
+import { Badge, Button, Card, Label, PageHeader } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
 const THEMES: { id: ThemeId; label: string; detail: string }[] = [
   { id: "MONROE", label: "Monroe", detail: "Olive & brass" },
-  { id: "PAPER", label: "Paper", detail: "Warm light" },
+  { id: "PAPER", label: "Light", detail: "Warm parchment" },
   { id: "MIDNIGHT", label: "Pitch Black", detail: "True black backgrounds" },
 ];
 
@@ -93,17 +93,12 @@ export function SettingsView() {
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
-      <div>
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-2xl font-bold md:text-3xl">Professional Trader Settings</h1>
-          <span className="rounded-full bg-brass/20 px-2.5 py-0.5 text-xs font-semibold text-brass">
-            EAT GMT(+3) Nairobi Desk
-          </span>
-        </div>
-        <p className="mt-1 text-sm text-faint">
-          Fine-tune the quantitative sniper engine, dynamic position sizing corridors, capital preservation circuits, and academic research safeguards.
-        </p>
-      </div>
+      <PageHeader
+        stage="account"
+        title="Professional Trader Settings"
+        badge={<Badge tone="live">EAT GMT(+3) Nairobi Desk</Badge>}
+        subtitle="Fine-tune the quantitative sniper engine, dynamic position sizing corridors, capital preservation circuits, and academic research safeguards."
+      />
 
       <Card>
         <div className="flex items-center justify-between">
@@ -416,7 +411,7 @@ export function SettingsView() {
       <Card>
         <Label>Sound</Label>
         <p className="mt-1 text-xs text-faint">
-          A hawk cries when Live trading engages; a soft chirp answers the return to paper.
+          A hawk cries when Live mode is selected; a soft chirp answers the return to demo.
         </p>
         <div className="mt-3 flex items-center justify-between gap-3">
           <div>

@@ -125,7 +125,7 @@ export const saveTradeLearning = createServerFn({ method: "POST" })
           singleton, seen, wins, losses, realized, min_score
         )
         SELECT
-          TRUE, 1, (pnl > 0)::INTEGER, (pnl < 0)::INTEGER, pnl, 62
+          TRUE, 1, (pnl > 0)::INTEGER, (pnl < 0)::INTEGER, pnl, 52
         FROM inserted
         ON CONFLICT (singleton) DO UPDATE SET
           seen = trade_learning_state.seen + 1,
@@ -133,16 +133,17 @@ export const saveTradeLearning = createServerFn({ method: "POST" })
           losses = trade_learning_state.losses + EXCLUDED.losses,
           realized = trade_learning_state.realized + EXCLUDED.realized,
           min_score = CASE
-            WHEN trade_learning_state.seen + 1 < 4 THEN trade_learning_state.min_score
+            WHEN trade_learning_state.seen + 1 < 4 THEN LEAST(trade_learning_state.min_score, 54)
             WHEN (trade_learning_state.wins + EXCLUDED.wins)::DOUBLE PRECISION /
-              (trade_learning_state.seen + 1) < 0.4
-              OR trade_learning_state.realized + EXCLUDED.realized < 0
-              THEN LEAST(85, 62 + 2 * (trade_learning_state.seen + 1 - 3))
+              (trade_learning_state.seen + 1) < 0.35
+              OR (trade_learning_state.realized + EXCLUDED.realized < 0
+                  AND trade_learning_state.seen + 1 >= 8)
+              THEN LEAST(68, 52 + LEAST(14, trade_learning_state.seen + 1 - 3))
             WHEN (trade_learning_state.wins + EXCLUDED.wins)::DOUBLE PRECISION /
-              (trade_learning_state.seen + 1) > 0.55
+              (trade_learning_state.seen + 1) > 0.5
               AND trade_learning_state.realized + EXCLUDED.realized > 0
-              THEN GREATEST(55, 62 - (trade_learning_state.seen + 1 - 3))
-            ELSE 62
+              THEN GREATEST(46, 52 - LEAST(8, trade_learning_state.seen + 1 - 3))
+            ELSE LEAST(trade_learning_state.min_score, 54)
           END
         RETURNING seen, wins, losses, realized, min_score
       )
@@ -340,8 +341,8 @@ export const purgeTradeLearning = createServerFn({ method: "POST" }).handler(asy
   await sql.query(`TRUNCATE qualifying_trades`);
   await sql.query(`
     INSERT INTO trade_learning_state (singleton, seen, wins, losses, realized, min_score)
-    VALUES (TRUE, 0, 0, 0, 0, 62)
-    ON CONFLICT (singleton) DO UPDATE SET seen = 0, wins = 0, losses = 0, realized = 0, min_score = 62
+    VALUES (TRUE, 0, 0, 0, 0, 52)
+    ON CONFLICT (singleton) DO UPDATE SET seen = 0, wins = 0, losses = 0, realized = 0, min_score = 52
   `);
   await sql.query(`
     INSERT INTO readiness_state (

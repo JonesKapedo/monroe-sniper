@@ -51,8 +51,21 @@ export const defaultDisciplineRules: DisciplineRules = {
   reentryCooldownMinutes: 12,
 };
 
+export type AvenueTapeRow = {
+  symbol: string;
+  priceUsd: number;
+  liquidityUsd: number | null;
+  volume24h: number | null;
+  change24h: number | null;
+  liquidityUnknown?: boolean;
+  chain?: string;
+};
+
 export type AvenueLive = {
   funding?: PerpFunding[];
+  /** Market tape — surfaces SPOT_MOMENTUM swing avenues alongside perps, so the
+   *  avenue book is not perps-only. */
+  tape?: AvenueTapeRow[];
 };
 
 /**
@@ -78,6 +91,10 @@ export function scanAllAvenues(
     const regime = interpretPerpRegime(row.funding1h, row.openInterest);
     if (!regime) continue;
     if (Math.abs(regime.funding8h) < 0.00005) continue;
+    // The paper book is long-only, so only negative funding (shorts pay
+    // longs) is expressible as a LONG harvest. Positive funding would need
+    // a short and is skipped rather than mis-modeled.
+    if (regime.side === "SHORT") continue;
 
     const coin = row.coin.toUpperCase();
     const symbol = `${coin}-PERP`;
@@ -126,7 +143,82 @@ export function scanAllAvenues(
       liveData: true,
     });
   }
+  if (live.tape && live.tape.length) {
+    out.push(...scanSpotMomentumAvenues(live.tape, currentEquity, rules, now));
+  }
   return out.sort((a, b) => b.confidenceScore - a.confidenceScore);
+}
+
+const SPOT_STABLE_BASES = new Set([
+  "USDT", "USDC", "DAI", "FDUSD", "TUSD", "USDE", "PYUSD", "GUSD", "USDD", "LUSD", "FRAX", "SUSD",
+]);
+
+/**
+ * Swing avenues derived from the market tape — momentum names with real depth
+ * and a meaningful 24h move. These ride the same discipline/sizing gates as the
+ * perp avenues; the anchor is the tape symbol's own base so the desk marks them
+ * from the live quote it already holds.
+ */
+export function scanSpotMomentumAvenues(
+  tape: AvenueTapeRow[],
+  currentEquity: number,
+  rules: DisciplineRules = defaultDisciplineRules,
+  now: number = Date.now(),
+): AvenueOpportunity[] {
+  const out: AvenueOpportunity[] = [];
+  for (const row of tape) {
+    if (!(row.priceUsd > 0)) continue;
+    const base = tapeBaseOf(row.symbol);
+    const cleanBase = base.replace(/USDT$|USDC$|USD$/, "") || base;
+    if (SPOT_STABLE_BASES.has(base) || SPOT_STABLE_BASES.has(cleanBase)) continue;
+    const change = row.change24h ?? 0;
+    const momentum = Math.abs(change);
+    if (momentum < 2.5) continue;
+    const liq = row.liquidityUsd ?? 0;
+    const unknownDepth = row.liquidityUnknown === true || row.liquidityUsd == null;
+    if (!unknownDepth && liq < 150_000) continue;
+    const vol = row.volume24h ?? 0;
+    if (!unknownDepth && vol > 0 && vol < 75_000) continue;
+
+    const side: "LONG" | "SHORT" = change >= 0 ? "LONG" : "SHORT";
+    const stopPct = Math.max(0.02, Math.min(0.06, momentum / 100));
+    const rewardMultiple = Math.max(2.5, rules.minRiskRewardRatio);
+    const price = row.priceUsd;
+    const stop = side === "LONG" ? price * (1 - stopPct) : price * (1 + stopPct);
+    const target = side === "LONG" ? price * (1 + stopPct * rewardMultiple) : price * (1 - stopPct * rewardMultiple);
+    const rr = Math.round((Math.abs(target - price) / (Math.abs(price - stop) || price * stopPct)) * 10) / 10;
+    const conf = Math.round(
+      Math.min(92, 58 + Math.min(22, momentum * 1.6) + (unknownDepth ? 0 : Math.min(10, liq / 200_000))),
+    );
+    if (conf < 60) continue;
+
+    out.push({
+      id: `spot-${base.toLowerCase()}-mom`,
+      category: "SPOT_MOMENTUM",
+      symbol: base,
+      title: `${cleanBase} ${side === "LONG" ? "bullish" : "bearish"} momentum swing (${change >= 0 ? "+" : ""}${change.toFixed(1)}% 24h)`,
+      venueA: "Spot tape",
+      chain: (row.chain as AvenueOpportunity["chain"]) ?? "ethereum",
+      priceA: price,
+      perpSide: side,
+      riskRewardRatio: rr,
+      stopLossPct: stopPct,
+      stopLossPrice: stop,
+      targetPrice: target,
+      maxCapitalAllocationUsd: currentEquity * 0.16,
+      disciplineApproved: conf >= 62,
+      disciplineNotes: [
+        `24h move ${change >= 0 ? "+" : ""}${change.toFixed(1)}%`,
+        unknownDepth ? "Depth unpublished (CEX major)" : `Pool liquidity $${Math.round(liq).toLocaleString()}`,
+        `Stop ${(stopPct * 100).toFixed(1)}%, target ${rr.toFixed(1)}:1 R:R`,
+      ],
+      confidenceScore: conf,
+      discoveredAt: now,
+      anchorSymbol: base,
+      liveData: true,
+    });
+  }
+  return out;
 }
 
 function tapeBaseOf(symbol: string): string {
@@ -306,18 +398,18 @@ export function calculatePaperReadiness(
 
   let status: "TRAINING" | "QUALIFYING" | "PAPER_PROVEN" = "TRAINING";
   let statusMessage =
-    "Paper training is active; only bracket-resolved trades (targets and stops) count toward the edge estimate.";
+    "Simulation training is active; only bracket-resolved trades (targets and stops) count toward the edge estimate.";
   let recommendation =
-    `Keep the bot in paper mode while it collects ${targetDemoTrades} qualifying trades at a ${MIN_WIN_RATE}%+ win rate.`;
+    `Keep the bot in demo mode while it collects ${targetDemoTrades} qualifying trades at a ${MIN_WIN_RATE}%+ win rate.`;
 
   if (!floored && readinessScore >= 85 && completedDemoTrades >= targetDemoTrades) {
     status = "PAPER_PROVEN";
-    statusMessage = `Paper thresholds met: ${targetDemoTrades}+ qualifying trades at ${MIN_WIN_RATE}%+ win rate. This is not approval for real-money trading.`;
+    statusMessage = `Simulation thresholds met: ${targetDemoTrades}+ qualifying trades at ${MIN_WIN_RATE}%+ win rate. This is not approval for real-money trading.`;
     recommendation =
-      "The qualifying sample meets the configured paper thresholds. Live execution remains unavailable.";
+      "The qualifying sample meets the configured simulation thresholds. Live execution remains unavailable.";
   } else if (!floored && readinessScore >= 60) {
     status = "QUALIFYING";
-    statusMessage = "Paper review in progress; collecting qualifying target/stop outcomes.";
+    statusMessage = "Simulation review in progress; collecting qualifying target/stop outcomes.";
     recommendation =
       `Bot is performing well in simulated market flow. Allow it to finish the ${targetDemoTrades}-trade qualifying sample to confirm drawdown stability.`;
   } else if (floored && completedDemoTrades >= MIN_QUALIFYING) {

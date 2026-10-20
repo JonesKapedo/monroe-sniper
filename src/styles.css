@@ -282,6 +282,60 @@ textarea:focus::placeholder {
   animation: live-flash 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+/* ── Sleek golden scrollbars ──────────────────────────────────────────────
+   A pitch-black, edge-to-edge track with a slim golden "needle" thumb. The
+   thumb stays invisible until the pointer is over the scrolling surface (or
+   the thumb itself), so the desk reads clean at rest and lights up on touch.
+   Chromium/Safari drive the reveal on :hover; Firefox keeps the thin brass
+   rail via `scrollbar-color` (its thumb is always visible). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-brass) 55%, transparent) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  transition: background 200ms ease;
+}
+
+/* Reveal the golden needle while the pointer is anywhere over the scroller
+   (hovering a child also hovers the ancestor scroll container). */
+*:hover::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-brass) 88%, #ffffff),
+    var(--color-brass)
+  );
+}
+
+/* Solid brass while actively dragging the needle. */
+*:active::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb:active {
+  background: var(--color-brass);
+}
+
+/* Legacy utility used by a few horizontal rails — keep it aligned. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+
 @utility num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;

@@ -59,7 +59,7 @@ export function auditAcademicSafeguards(
 
   // 1. INVESTOPEDIA MISTAKE #1: Anti-FOMO Green Candle Chaser Rule
   // (Buying at extreme extended peaks without pullbacks)
-  const isFomoTop = change > 75 && volToLiqRatio > 2.0;
+  const isFomoTop = change > 60 || (change > 35 && volToLiqRatio > 1.4);
   if (isFomoTop) {
     flags.push("FOMO_TOP_RISK");
   }
@@ -75,7 +75,7 @@ export function auditAcademicSafeguards(
 
   // 2. RESEARCHGATE & BINANCE: Insider Anticipated Purchases (IAP) & Pump-and-Dump Detector
   // Anomalous volume spike (>1.5x pool depth) combined with fresh token age or extreme spread
-  const isInsiderPump = volToLiqRatio > 1.8 && (candidate.pairAgeHours !== null && candidate.pairAgeHours < 12);
+  const isInsiderPump = volToLiqRatio > 1.2 && (candidate.pairAgeHours !== null && candidate.pairAgeHours < 12);
   if (isInsiderPump) {
     flags.push("INSIDER_PUMP_PATTERN");
   }
@@ -90,7 +90,12 @@ export function auditAcademicSafeguards(
   });
 
   // 3. AML WATCHER: Rug Pull vs Organic Liquidity Gate
-  // Evaluates contract flags for honeypot traits, mint authority, and pool depth
+  // Evaluates contract flags for honeypot traits, mint authority, and pool depth.
+  // CEX majors publish flow, not pool depth — an unpublished book (depthUnknown)
+  // is neutral here, exactly like the pre-trade screen and entry verdict treat
+  // it. Un-vetoed depth never fakes depth: the $10k floor still applies to
+  // every venue that publishes a real number.
+  const depthUnknown = candidate.liquidityUnknown === true;
   const hasRugFlag = candidate.flags.some(
     (f) =>
       f.includes("THIN") ||
@@ -98,7 +103,7 @@ export function auditAcademicSafeguards(
       f.includes("MINTABLE") ||
       f.includes("BLACKLIST"),
   );
-  const isRugRisk = hasRugFlag || liq < 12_000;
+  const isRugRisk = hasRugFlag || (!depthUnknown && liq < 12_000);
   if (isRugRisk) {
     flags.push("RUG_OR_LIQUIDITY_DEFICIT");
   }

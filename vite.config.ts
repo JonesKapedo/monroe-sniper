@@ -36,17 +36,22 @@ function pgliteBootstrapPlugin(): Plugin {
     apply: "serve",
     async configureServer(server) {
       if (!hasGlobbedMigrations(server.config.root)) return;
-      try {
-        const mod = (await server.ssrLoadModule("/src/lib/db.ts")) as {
-          ensureDbReady?: () => Promise<void>;
-        };
-        if (typeof mod.ensureDbReady === "function") {
-          await mod.ensureDbReady();
+      // ssrLoadModule requires the 'ssr' environment to be runnable, which only
+      // completes once Start/Nitro finish configuring. Boot in the post-hook
+      // (vite awaits it after listening), and never block the dev boot: the
+      // production path kicks ensureDbReady lazily on first server import.
+      return async () => {
+        try {
+          const mod = (await server.ssrLoadModule("/src/lib/db.ts")) as {
+            ensureDbReady?: () => Promise<void>;
+          };
+          if (typeof mod.ensureDbReady === "function") {
+            await mod.ensureDbReady();
+          }
+        } catch (err) {
+          console.error("[app-builder] DB bootstrap deferred (non-fatal):", err);
         }
-      } catch (err) {
-        console.error("[app-builder] DB bootstrap failed:", err);
-        throw err;
-      }
+      };
     },
   };
 }
@@ -150,6 +155,13 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 8080,
     strictPort: true,
+  },
+  // @ledgerhq's lib-es build uses extensionless internal imports — legal for
+  // bundlers, fatal in raw Node ESM. Force SSR bundling instead of
+  // externalization so dev resolutions match the production build.
+  ssr: { noExternal: [/^@ledgerhq\//] },
+  environments: {
+    ssr: { resolve: { noExternal: [/^@ledgerhq\//] } },
   },
   preview: {
     host: "127.0.0.1",

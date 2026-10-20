@@ -46,6 +46,7 @@ export const FLOW_RELAX_STEPS: ReadonlyArray<{
 
 export const MAX_RELAX_STEPS = FLOW_RELAX_STEPS.length;
 
+/** Was 30 — too slow; desk looked dead before any relaxation. 10 cycles ≈ a few minutes of idle tape. */
 export const MAX_STARVED_CYCLES_BEFORE_RELAX = 10;
 export const REJECTION_RING_SIZE = 200;
 export const ALERT_RING_SIZE = 50;

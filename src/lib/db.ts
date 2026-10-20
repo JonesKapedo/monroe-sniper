@@ -19,6 +19,20 @@ const databaseUrl =
 export const dbSource: DbSource = databaseUrl ? "neon" : "pglite";
 
 /**
+ * A serverless runtime (Vercel / Lambda) has no durable filesystem and no
+ * persistent process, so the embedded PGLite fallback can neither open nor
+ * keep a database — attempting it just throws an ENOENT on `/var/task/…`.
+ * Detect it so we fail once, with a message that names the real fix, instead
+ * of spamming the tape.
+ */
+const serverlessRuntime =
+  typeof process !== "undefined" &&
+  Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
+
+/** True when learning can persist to a real database on this deployment. */
+export const durableDbAvailable = databaseUrl ? true : !serverlessRuntime;
+
+/**
  * Minimal shared SQL surface, satisfied by both Neon and PGLite. Both the
  * tagged-template and `.query()` forms resolve to an array of row objects:
  *
@@ -106,6 +120,12 @@ function createNeonSql(): Promise<Sql> {
 }
 
 async function createPgliteSql(): Promise<Sql> {
+  if (serverlessRuntime) {
+    throw new Error(
+      "DATABASE_URL is not set on this deployment — the embedded fallback cannot " +
+        "run on serverless. Learning is being kept locally in the browser instead.",
+    );
+  }
   // Embedded Postgres, imported on demand so it never loads on the Neon path.
   // One in-memory instance per process, shared across HMR module instances, so
   // data survives source edits (it resets on dev-server restart).
@@ -221,6 +241,7 @@ export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite
  */
 export function ensureDbReady(): Promise<void> {
   if (dbSource !== "pglite") return Promise.resolve();
+  if (serverlessRuntime) return Promise.resolve();
   return getSql().then(() => undefined);
 }
 
@@ -229,7 +250,7 @@ export function ensureDbReady(): Promise<void> {
 const globalBoot = globalThis as typeof globalThis & {
   __pgBootstrapPromise__?: Promise<void>;
 };
-if (typeof window === "undefined" && dbSource === "pglite") {
+if (typeof window === "undefined" && dbSource === "pglite" && !serverlessRuntime) {
   globalBoot.__pgBootstrapPromise__ ??= ensureDbReady().catch((err) => {
     globalBoot.__pgBootstrapPromise__ = undefined;
     console.error("[db] PGLite bootstrap failed:", err);

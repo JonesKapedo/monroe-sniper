@@ -37,7 +37,7 @@ export function StandbyPositionsModal({
           </p>
           <h2 id="standby-review-title" className="mt-1 text-lg font-semibold">
             {positions.length
-              ? `${positions.length} open paper position${positions.length === 1 ? "" : "s"}`
+              ? `${positions.length} open position${positions.length === 1 ? "" : "s"}`
               : "Trading paused"}
           </h2>
           <p className="mt-2 text-sm leading-relaxed text-faint">
@@ -80,7 +80,7 @@ export function StandbyPositionsModal({
                   onClick={() => closePosition(position.id)}
                   className="mt-3 min-h-10 rounded-lg border border-loss/40 px-3 text-xs font-semibold text-loss hover:bg-loss/10"
                 >
-                  Close {position.symbol} at last paper mark
+                  Close {position.symbol} at last mark
                 </button>
               </article>
             );
