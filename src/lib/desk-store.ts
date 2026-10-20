@@ -211,6 +211,8 @@ export type WalletTx = {
 
 type DeskState = {
   power: boolean;
+  /** True only when the operator explicitly put the desk on standby. Demo auto-arms otherwise. */
+  manuallyDisarmed: boolean;
   mode: Mode;
   demo: Book;
   live: Book;
@@ -717,7 +719,8 @@ function archiveClosedTrades(records: Array<{ trade: ClosedTrade; mode: Mode }>)
 export const useDesk = create<DeskState>()(
   persist(
     (set, get) => ({
-      power: false,
+      power: true,
+      manuallyDisarmed: false,
       mode: "demo",
       demo: emptyBook(DEMO_START),
       tradingLedger: createPaperAccount(DEMO_START),
@@ -872,6 +875,7 @@ export const useDesk = create<DeskState>()(
             startMinScore: s.memory.minScore,
           },
           power: true,
+          manuallyDisarmed: false,
           note: `TURBO ARMED — ${runMinutes}-minute max-aggression run. Safety gates stay armed.`,
           log: pushLog(s.log, `TURBO run started (${runMinutes}:00)`),
         });
@@ -1138,6 +1142,7 @@ export const useDesk = create<DeskState>()(
       setPower: (on) => {
         set((s) => ({
           power: s.mode === "live" ? false : on,
+          manuallyDisarmed: !on,
           note: on
             ? s.mode === "live"
               ? "Live execution is gated. This build runs simulated fills only."
@@ -1159,14 +1164,15 @@ export const useDesk = create<DeskState>()(
 
       setMode: (mode) => {
         // Mode sounds fire only on real transitions: hawk cry into live,
-        // soft chirp back to demo. Switching modes always stands the desk
-        // down; live selection is honoured but execution stays gated until a
-        // broker is connected (there is no order routing in this build).
+        // soft chirp back to demo. Live selection is honoured but execution
+        // stays gated until a broker is connected (there is no order routing
+        // in this build). Demo is the learning sandbox, so it re-arms itself.
         const prevMode = get().mode;
         if (mode === prevMode) return;
         set((s) => ({
           mode,
-          power: false,
+          power: mode === "demo",
+          manuallyDisarmed: mode !== "demo",
           note:
             mode === "live"
               ? "Live mode selected. Execution is gated until a broker is connected — orders are not routed in this build."
@@ -2604,6 +2610,7 @@ export const useDesk = create<DeskState>()(
       ),
       partialize: (s) => ({
         power: s.power,
+        manuallyDisarmed: s.manuallyDisarmed,
         mode: s.mode,
         demo: s.demo,
         live: s.live,
@@ -2658,9 +2665,11 @@ export const useDesk = create<DeskState>()(
           if (!state.tradingLedger) {
             state.tradingLedger = createPaperAccount(state.demo?.cash ?? DEMO_START);
           }
-          // Never disarm on refresh: the persisted power switch is the
-          // owner's intent. The loop in Frame resumes auto-stepping.
-          if (typeof state.power !== "boolean") state.power = false;
+          // Demo is the learning sandbox: arm it on load so the desk keeps
+          // scanning and closing trades to learn from. Only an explicit
+          // operator standby ("manuallyDisarmed") survives a reload.
+          if (typeof state.manuallyDisarmed !== "boolean") state.manuallyDisarmed = false;
+          state.power = !state.manuallyDisarmed;
           if (state.demo && state.demo.cash === 100 && state.demo.trades.length === 0) {
             state.demo.cash = DEMO_START;
             state.demo.peakEquity = DEMO_START;
