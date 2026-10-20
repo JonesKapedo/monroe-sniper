@@ -67,9 +67,14 @@ describe("risk-engine honesty gates", () => {
     };
     const verdict = evaluateRiskAndSize(full, candidate("SOL", 100));
     assert.equal(verdict.allowed, false);
-    // A $50 book carries one viable slot, so the second entry is stopped by the
-    // slot cap; a larger book stops on the budget. Either way: no room.
-    assert.ok(/Stake budget|max-positions/.test(verdict.reasons.join(" ")), verdict.reasons.join("; "));
+    // A $50 micro book splits its 45% budget across several slots, so no single
+    // ticket clears the $25 execution floor: the entry is refused on the
+    // budget/min-ticket gate. A fuller book is refused by the slot or stake cap.
+    // Either way: no room.
+    assert.ok(
+      /Stake budget|max-positions|minimum viable size|Micro-sizing/.test(verdict.reasons.join(" ")),
+      verdict.reasons.join("; "),
+    );
   });
 });
 

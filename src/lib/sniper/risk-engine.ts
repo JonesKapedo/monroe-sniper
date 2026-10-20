@@ -5,7 +5,7 @@ import { fibExtensions, snapToFib } from "../math/fib";
 import { isCorrelatedDuplicate, setupVector, winnerResemblance, type SetupVector } from "../math/vectors";
 import { MODELS, selectModel, type RiskModelProfile } from "./risk-models";
 import { TIER_CONFIGS, applyStakeBudget, detectTier } from "./tier-config";
-import { resolveConcurrentSlots, viableConcurrentSlots } from "./slots";
+import { resolveConcurrentSlots, viableConcurrentSlots, viableTicketFloorFor } from "./slots";
 
 export type SizingModel = "VOLATILITY_PARITY" | "FRACTIONAL_KELLY" | "FIXED_FRACTION";
 export type SizingProfile = "CONSERVATIVE" | "OPTIMUM_SWEET_SPOT" | "AGGRESSIVE" | "TURBO" | "[paranoid]" | "[elvis]" | "gradient" | "[degen]";
@@ -136,10 +136,21 @@ export function evaluateRiskAndSize(
     profile.id === "[degen]" ? 0.15 : profile.id === "[elvis]" ? 0.1 : 0.08;
   // Settings are the sole concurrent-slot authority, but a small book cannot
   // viably carry the full count: cap slots so each ticket clears the fee floor.
+  // Unknown-depth reference rows and CEX majors clear at the CEX fee, so the
+  // soft (equity-aware) floor applies. A real AMM pool still pays the $0.45
+  // swap fee — ≈$45 at a 4% target with the 25% fee-drag guard — so its slot
+  // floor never drops below that or the fee-erosion audit vetoes every ticket.
   const stakeTierForSlots = TIER_CONFIGS[detectTier(currentEquity)];
+  const stakeBudgetForSlots = currentEquity * stakeTierForSlots.maxPortfolioExposure;
+  const feeBearingPool = candidate.venue !== "binance" && candidate.liquidityUnknown !== true;
+  const ticketFloorForSlots = Math.max(
+    viableTicketFloorFor(stakeBudgetForSlots),
+    feeBearingPool ? 45 : 5,
+  );
   const maxSlots = viableConcurrentSlots(
     resolveConcurrentSlots(settings.maxPositions),
-    currentEquity * stakeTierForSlots.maxPortfolioExposure,
+    stakeBudgetForSlots,
+    ticketFloorForSlots,
   );
   const isDuplicate = book.positions.some((p) => p.tokenId === candidate.id);
   const cooling = book.cooldownUntil !== null && now < book.cooldownUntil;

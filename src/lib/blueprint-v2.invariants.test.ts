@@ -14,6 +14,7 @@ import {
   recordRejection,
   flowSummary,
   currentRelax,
+  MAX_STARVED_CYCLES_BEFORE_RELAX,
 } from "./flow/governor.ts";
 import { netPnl, quoteFill } from "./sim/execution-v2.ts";
 
@@ -168,13 +169,13 @@ describe("I2 — Exit Integrity: no winner round-trips to a stop", () => {
 });
 
 describe("Flow Governor — starvation watchdog", () => {
-  it("relaxes gates in ranked order after 30 starved cycles and never touches HALTs", () => {
+  it("relaxes gates in ranked order after the starvation threshold and never touches HALTs", () => {
     let g = initFlowGovernor();
     let alert: string | null = null;
-    // Exactly 30 ticks: starvation counter reaches the threshold ON the 30th
-    // tick, which fires the relax and its alert. (A 31st tick would reset the
-    // counter to 0 after the relax and overwrite `alert` with null.)
-    for (let i = 0; i < 30; i++) {
+    // Exactly MAX_STARVED_CYCLES_BEFORE_RELAX ticks: the starvation counter hits
+    // the threshold ON that tick, which fires the relax and its alert. (One more
+    // tick would reset the counter to 0 after the relax, overwriting `alert`.)
+    for (let i = 0; i < MAX_STARVED_CYCLES_BEFORE_RELAX; i++) {
       const res = tickGovernor(g, { entriesFilled: 0, guardHalted: false, feedsAlive: 2 });
       g = res.state;
       alert = res.alert;
@@ -190,7 +191,7 @@ describe("Flow Governor — starvation watchdog", () => {
 
   it("resets starvation on a filled entry but keeps the applied ladder", () => {
     let g = initFlowGovernor();
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < MAX_STARVED_CYCLES_BEFORE_RELAX; i++) {
       g = tickGovernor(g, { entriesFilled: 0, guardHalted: false, feedsAlive: 1 }).state;
     }
     assert.equal(g.relaxStep, 1);
