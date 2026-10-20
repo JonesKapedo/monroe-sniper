@@ -73,6 +73,25 @@ describe("per-model exit ladders", () => {
     assert.ok((exitProfileForModel(MODELS.gradient).timeStopMinutes ?? 0) > MODELS["[degen]"].runMinutes!);
   });
 
+  it("demo training books reap dead tickets in 15 minutes; live keeps 4h", () => {
+    const train = exitProfileForModel(MODELS.gradient, { training: true });
+    const live = exitProfileForModel(MODELS.gradient);
+    assert.equal(train.timeStopMinutes, 15);
+    assert.equal(live.timeStopMinutes, 240);
+  });
+
+  it("the training time stop actually closes a dead ticket", () => {
+    const now = Date.now();
+    const plan = buildExitPlan(100, 98, exitProfileForModel(MODELS.gradient, { training: true }));
+    const runtime = initExitRuntime(100, plan, 1, 2, now - 16 * 60_000);
+    const decision = evaluateExit("LONG", 100, 100.1, plan, runtime, {
+      now,
+      lastFreshMarkAt: now,
+    });
+    assert.equal(decision.action.kind, "CLOSE");
+    assert.match((decision.action as { reason: string }).reason, /Time stop: 16min/);
+  });
+
   it("a Turbo ladder scales out sooner than the default ladder at the same R", () => {
     const entry = 100;
     const stop = 98; // risk 2

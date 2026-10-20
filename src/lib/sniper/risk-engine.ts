@@ -118,6 +118,8 @@ export function evaluateRiskAndSize(
   modelId: RiskModelProfile["id"] = "gradient",
   /** Equity-guard risk multiplier (0-1): scales the dollar risk budget before all caps. */
   riskMultiplier = 1.0,
+  /** Demo training book: allows a smaller ticket floor and a 5% sizing corridor. */
+  learning = false,
 ): SizingVerdict {
   const profile: RiskModelProfile =
     selectModel(modelId) ?? selectModel("gradient") ?? MODELS["gradient"];
@@ -145,7 +147,7 @@ export function evaluateRiskAndSize(
   const feeBearingPool = candidate.venue !== "binance" && candidate.liquidityUnknown !== true;
   const ticketFloorForSlots = Math.max(
     viableTicketFloorFor(stakeBudgetForSlots),
-    feeBearingPool ? 45 : 5,
+    feeBearingPool ? (learning ? 30 : 45) : 5,
   );
   const maxSlots = viableConcurrentSlots(
     resolveConcurrentSlots(settings.maxPositions),
@@ -240,7 +242,12 @@ export function evaluateRiskAndSize(
   const roundedNotional = stakeSplit.blocked ? 0 : Math.round(stakeSplit.notional * 100) / 100;
   const qty = roundedNotional > 0 && entryPrice > 0 ? roundedNotional / entryPrice : 0;
   const valueAtRisk95 = Math.round(roundedNotional * volatility * 1.645 * 100) / 100;
-  const academicAudit = auditAcademicSafeguards(candidate, roundedNotional, currentEquity);
+  const academicAudit = auditAcademicSafeguards(
+    candidate,
+    roundedNotional,
+    currentEquity,
+    learning ? 0.05 : 0.08,
+  );
   academicAudit.audits.forEach((audit) => {
     checks.push({ id: audit.rule.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 24), label: audit.rule, pass: audit.passed, detail: `${audit.source}: ${audit.metric}` });
     if (!audit.passed) reasons.push(`[${audit.source}] ${audit.description}`);
@@ -261,8 +268,11 @@ export function evaluateRiskAndSize(
   checks.push({ id: "dup", label: "Not already held", pass: !isDuplicate, detail: isDuplicate ? "Held" : "New entry" });
   if (isDuplicate) reasons.push("Candidate asset is already held in book");
   const chainCount = book.positions.filter((p) => p.chain === candidate.chain).length;
-  const chainPass = chainCount < settings.maxPerChain;
-  checks.push({ id: "chain", label: `Chain concentration (<${settings.maxPerChain})`, pass: chainPass, detail: `${chainCount}/${settings.maxPerChain} in ${candidate.chain}` });
+  // Demo training may fill every slot from one venue/chain; live keeps the
+  // operator's concentration cap.
+  const chainLimit = learning ? Math.max(settings.maxPerChain, maxSlots) : settings.maxPerChain;
+  const chainPass = chainCount < chainLimit;
+  checks.push({ id: "chain", label: `Chain concentration (<${chainLimit})`, pass: chainPass, detail: `${chainCount}/${chainLimit} in ${candidate.chain}` });
   if (!chainPass) reasons.push(`Too many open positions in ${candidate.chain}`);
   const scoreFloor = entryFloorFor(candidate, minScore);
   const scorePass = candidate.score >= scoreFloor;

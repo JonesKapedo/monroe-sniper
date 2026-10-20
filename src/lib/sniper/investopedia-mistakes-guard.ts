@@ -48,6 +48,7 @@ export function auditAcademicSafeguards(
   candidate: Candidate,
   plannedNotional: number,
   portfolioBalance: number,
+  minSizingFraction = 0.08,
 ): AcademicSafeguardResult {
   const audits: AcademicSafeguardResult["audits"] = [];
   const flags: string[] = [];
@@ -158,18 +159,20 @@ export function auditAcademicSafeguards(
   const notionalEquityFraction = portfolioBalance > 0 ? plannedNotional / portfolioBalance : 0;
   const isSweetSpotSizing =
     plannedNotional >= 15 &&
-    notionalEquityFraction >= 0.08 &&
+    notionalEquityFraction >= minSizingFraction &&
     notionalEquityFraction <= 0.55;
   audits.push({
     rule: "Compounding Sweet-Spot Position Sizing",
     source: "Medium & Investopedia: Dynamic Capital Allocation",
     passed: isSweetSpotSizing,
-    metric: `Size: $${plannedNotional.toFixed(2)} (${(notionalEquityFraction * 100).toFixed(1)}% of $${portfolioBalance.toFixed(2)})`,
+    metric: `Size: $${plannedNotional.toFixed(2)} (${(notionalEquityFraction * 100).toFixed(1)}% of $${portfolioBalance.toFixed(2)}; corridor ${(minSizingFraction * 100).toFixed(0)}%-55%)`,
     description: isSweetSpotSizing
-      ? "Position sizing dynamically scaled to current balance in the optimal compounding corridor (8%-55%)."
+      ? `Position sizing dynamically scaled to current balance in the optimal compounding corridor (${(minSizingFraction * 100).toFixed(0)}%-55%).`
       : plannedNotional < 15
         ? "Micro-sizing detected (<$15); profit potential will be trivial. Sizing should be bumped."
-        : "Oversized exposure detected (>55% equity); trimmed for capital preservation.",
+        : notionalEquityFraction > 0.55
+          ? "Oversized exposure detected (>55% equity); trimmed for capital preservation."
+          : `Undersized exposure detected (<${(minSizingFraction * 100).toFixed(0)}% equity); size up to keep profit meaningful.`,
   });
 
   // Calculate composite score

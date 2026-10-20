@@ -543,8 +543,15 @@ function openVectorsOf(book: Book): SetupVector[] {
   );
 }
 
-function mathOverlays(book: Book): { winnerVectors: SetupVector[]; openVectors: SetupVector[] } {
-  return { winnerVectors: winnerVectors(), openVectors: openVectorsOf(book) };
+function mathOverlays(
+  book: Book,
+  includeCorrelation = true,
+): { winnerVectors: SetupVector[]; openVectors: SetupVector[] } {
+  // Demo is a training book: the character-correlation guard rejects almost
+  // every candidate once two tickets are open (all setup vectors share the same
+  // score/liquidity dimensions), so the desk stops filling slots and produces
+  // no closed trades to learn from. Live keeps the guard.
+  return { winnerVectors: winnerVectors(), openVectors: includeCorrelation ? openVectorsOf(book) : [] };
 }
 
 /** Fire-and-forget Telegram trade alert — alerts never break trading. */
@@ -1708,8 +1715,10 @@ export const useDesk = create<DeskState>()(
               st.riskSettings,
               floor,
               Date.now(),
-              mathOverlays(bookNow),
+              mathOverlays(bookNow, st.mode !== "demo"),
               st.selectedModel.id,
+              1,
+              st.mode === "demo",
             );
             const stake = clampToStakeBudget(
               st.tierConfig,
@@ -1731,7 +1740,7 @@ export const useDesk = create<DeskState>()(
               target: avenue.targetPrice,
               priceSource,
               maxPositions: maxSlots,
-              exitProfile: exitProfileForModel(st.selectedModel),
+              exitProfile: exitProfileForModel(st.selectedModel, { training: st.mode === "demo" }),
             });
             if (!result.ok) continue;
             cycleFills += 1;
@@ -1849,8 +1858,10 @@ export const useDesk = create<DeskState>()(
             live.riskSettings,
             floorNow,
             Date.now(),
-            mathOverlays(tapeBook),
+            mathOverlays(tapeBook, live.mode !== "demo"),
             live.selectedModel.id,
+            1,
+            live.mode === "demo",
           );
 
           if (!verdict.allowed || verdict.notional <= 0) {
@@ -1915,7 +1926,7 @@ export const useDesk = create<DeskState>()(
             target: verdict.targetPrice,
             priceSource: `tape:${pick.id}`,
             maxPositions: tapeMaxSlots,
-            exitProfile: exitProfileForModel(live.selectedModel),
+            exitProfile: exitProfileForModel(live.selectedModel, { training: live.mode === "demo" }),
           });
 
           if (!result.ok) break;

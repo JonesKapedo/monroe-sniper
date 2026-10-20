@@ -104,7 +104,10 @@ export const DEFAULT_MODEL_ID = "gradient";
  *  - trailPct drives the runner trail width (null = wide/no trail churn).
  *  - exitAtRunBoundary (Turbo) caps the time stop at the run length.
  */
-export function exitProfileForModel(profile: RiskModelProfile): ExitProfile {
+export function exitProfileForModel(
+  profile: RiskModelProfile,
+  opts: { training?: boolean } = {},
+): ExitProfile {
   const tp = Math.max(0.5, profile.takeProfitR);
   const trailMult =
     profile.trailPct == null ? 3.0 : profile.trailPct >= 1.5 ? 1.5 : profile.trailPct >= 1 ? 2.0 : 2.6;
@@ -115,6 +118,12 @@ export function exitProfileForModel(profile: RiskModelProfile): ExitProfile {
     runnerTrailAtrMult: trailMult,
     volSpikeTrailAtrMult: Math.max(1, Math.round((trailMult - 0.6) * 10) / 10),
     // Reap dead trades in 4h rather than letting a stalled name hold a slot all day.
-    timeStopMinutes: profile.exitAtRunBoundary ? (profile.runMinutes ?? 34) : 240,
+    // Demo training cycles faster: a 15-minute time stop closes dead tickets so
+    // the learning memory gets real outcomes instead of sitting on open risk.
+    timeStopMinutes: opts.training
+      ? 15
+      : profile.exitAtRunBoundary
+        ? (profile.runMinutes ?? 34)
+        : 240,
   };
 }
