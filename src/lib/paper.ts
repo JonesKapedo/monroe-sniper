@@ -26,6 +26,12 @@ export const MIN_LIQ = 10_000;
  * raise the bar; they just can't push it past a reachable, disciplined level.
  */
 export const CEX_ENTRY_FLOOR_CEIL = 64;
+/**
+ * GMGN's own screen already applies the contract, dev and consensus gates.
+ * Keep a learned floor from starving the primary memecoin source, while still
+ * refusing anything below the desk's absolute score floor.
+ */
+export const GMGN_ENTRY_FLOOR_CEIL = 68;
 
 /**
  * Effective entry floor for one candidate. Unknown-depth rows are capped at
@@ -33,7 +39,13 @@ export const CEX_ENTRY_FLOOR_CEIL = 64;
  * demand a score a major cannot produce; known-depth rows use the floor as-is.
  * Every score gate must route through this so entry, sizing and telemetry agree.
  */
-export function entryFloorFor(c: { liquidityUnknown?: boolean }, floor: number): number {
+export function entryFloorFor(
+  c: { liquidityUnknown?: boolean; flags?: string[] },
+  floor: number,
+): number {
+  if (c.flags?.includes("GMGN")) {
+    return Math.min(Math.max(floor, MIN_SCORE), GMGN_ENTRY_FLOOR_CEIL);
+  }
   return c.liquidityUnknown === true ? Math.min(floor, CEX_ENTRY_FLOOR_CEIL) : floor;
 }
 export const MIN_TICKET = 5;
@@ -474,6 +486,12 @@ export type MarkOptions = {
    * preserve legacy behavior for callers that mark a single coherent feed.
    */
   sources?: Record<string, string>;
+  /**
+   * Demo training override: an aged, quote-less ticket recycles after this
+   * many minutes even when its stored exit profile predates the fast cycle.
+   * Live never passes it, so live keeps the model's own time stop.
+   */
+  staleTimeStopMinutes?: number;
 };
 
 /** UTC day stamp for the one true day boundary (docs: all risk days are UTC). */
@@ -527,6 +545,37 @@ export function markBook(
     let runtime =
       p.exitRuntime ??
       initExitRuntime(p.entryPrice, plan, p.qty, Math.abs(p.entryPrice - p.stop) || p.entryPrice * 0.02, p.openedAt);
+    const staleTimeStop = opts.staleTimeStopMinutes ?? plan.timeStopMinutes;
+    if (stale && staleTimeStop !== null && now - p.openedAt >= staleTimeStop * 60_000) {
+      // A quote-less position cannot be marked, stopped, or learned from. It
+      // still must not hold a slot forever: recycle it at the last mark after
+      // the model's time stop. Simulated closes are excluded from learning.
+      const pnl = (px - p.entryPrice) * p.qty;
+      cash += p.qty * px;
+      extraTrades.push({
+        id: stamp("tr"),
+        symbol: p.symbol,
+        pnl,
+        reason: "TIME",
+        simulated: true,
+        closedAt: now,
+        chain: p.chain,
+        venue: p.venue,
+        priceSource: p.priceSource,
+        markSource: tickSource ?? p.priceSource,
+        entryPrice: p.entryPrice,
+        exitPrice: px,
+        qty: p.qty,
+        openedAt: p.openedAt,
+        entryScore: p.entryScore,
+        entryChange24h: p.entryChange24h,
+        entryLiquidityUsd: p.entryLiquidityUsd,
+        entryVolume24h: p.entryVolume24h,
+        pairAgeHours: p.pairAgeHours,
+        holdMinutes: Math.round((now - p.openedAt) / 60_000),
+      });
+      continue;
+    }
     const lastFresh = stale ? (p.lastFreshMarkAt ?? p.openedAt) : now;
     if (!stale) {
       const decision = evaluateExit("LONG", p.entryPrice, px, plan, runtime, {
@@ -906,7 +955,12 @@ export function chooseEntry(
   const ranked = tape
     .map((c) => ({ c, edge: assessEdge(c, relaxStep) }))
     .filter((row) => row.edge.act)
-    .sort((a, b) => b.edge.edge - a.edge.edge || b.c.score - a.c.score);
+    .sort(
+      (a, b) =>
+        Number(b.c.flags.includes("GMGN")) - Number(a.c.flags.includes("GMGN")) ||
+        b.edge.edge - a.edge.edge ||
+        b.c.score - a.c.score,
+    );
   for (const row of ranked) {
     // A verified hard-reject (honeypot, mint/freeze, unlocked LP, >15% tax)
     // vetoes the entry no matter what the score says.

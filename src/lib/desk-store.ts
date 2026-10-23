@@ -33,6 +33,7 @@ import {
   type SizingVerdict,
 } from "./sniper/risk-engine";
 import { MODELS, exitProfileForModel, type RiskModelProfile } from "./sniper/risk-models";
+import { memecoinExitProfile } from "./intel/memecoin";
 import {
   TIER_CONFIGS,
   applyStakeBudget,
@@ -434,7 +435,7 @@ function venueFor(c: Pick<Candidate, "venue" | "chain">): ExecutionVenue {
   if (c.venue === "binance") return "Binance Spot";
   // DEX fills never record which pool routed them, so venue display stays at
   // chain level instead of guessing a DEX name.
-  if (c.chain === "solana") return "Solana DEX";
+  if (c.chain === "solana" || c.chain === "sol") return "Solana DEX";
   if (c.chain === "bsc") return "PancakeSwap";
   return "Uniswap v3";
 }
@@ -597,9 +598,14 @@ function absorb(
   monitorOnly = false,
   staleIds: ReadonlySet<string> = EMPTY_SET,
   sources?: Record<string, string>,
+  training = false,
 ): { book: Book; memory: Memory; newTrades: typeof book.trades } {
   const priorIds = new Set(book.trades.map((trade) => trade.id));
-  const next = markBook(book, prices, Date.now(), !monitorOnly, { staleIds, sources });
+  const next = markBook(book, prices, Date.now(), !monitorOnly, {
+    staleIds,
+    sources,
+    staleTimeStopMinutes: training ? 15 : undefined,
+  });
   let mem = memory;
   const newTrades = next.trades.filter((trade) => !priorIds.has(trade.id));
   for (const trade of newTrades) {
@@ -1194,7 +1200,7 @@ export const useDesk = create<DeskState>()(
       refreshTape: async () => {
         const { loadFeeds } = await import("./market.functions");
         const feeds = await loadFeeds({ data: {} });
-        const combined = [...feeds.binance, ...feeds.dex];
+        const combined = [...feeds.binance, ...feeds.dex, ...feeds.gmgn];
         if (combined.length) {
           get().setTape(combined, feeds.note);
           return combined.length;
@@ -1452,7 +1458,7 @@ export const useDesk = create<DeskState>()(
             sources[p.tokenId] = positionPriceSource(p) ?? `tape:${p.tokenId}`;
           }
         }
-        const demoAbs = absorb(s.demo, enriched, s.memory, monitorOnly, staleIds, sources);
+        const demoAbs = absorb(s.demo, enriched, s.memory, monitorOnly, staleIds, sources, s.mode === "demo");
         // When live is armed, never let the sync engine simulate a live close —
         // it still marks positions, but exits become REAL orders in liveStep.
         const liveArmedNow = s.mode === "live" && (s.liveStatus?.configured ?? false);
@@ -1646,7 +1652,12 @@ export const useDesk = create<DeskState>()(
         });
         if (s.entrySources.avenues && avenues.length > 0 && s.mode === "demo") {
           const maxSlots = cycleMaxSlots;
-          const slotsLeft = Math.max(0, maxSlots - currentBook.positions.length);
+          const gmgnWaiting = s.tape.some(
+            (c) => c.flags.includes("GMGN") && c.score >= 55,
+          );
+          const gmgnReserve = gmgnWaiting ? Math.min(2, Math.max(0, maxSlots - 1)) : 0;
+          const avenueCap = Math.max(0, maxSlots - gmgnReserve);
+          const slotsLeft = Math.max(0, avenueCap - currentBook.positions.length);
           // Per-symbol cooldown only — a loss on BTC does not freeze SOL/ETH.
           const ranked: RankedOpportunity[] = avenues
             .filter(
@@ -1675,7 +1686,7 @@ export const useDesk = create<DeskState>()(
           for (const pick of picks) {
             const st = useDesk.getState();
             const bookNow = st[st.mode];
-            if (bookNow.positions.length >= maxSlots) break;
+            if (bookNow.positions.length >= avenueCap) break;
             if (bookNow.positions.some((pos) => pos.tokenId === pick.id)) continue;
             const avenue = avenues.find((a) => a.id === pick.id);
             if (!avenue || !(avenue.priceA > 0)) continue;
@@ -1880,7 +1891,7 @@ export const useDesk = create<DeskState>()(
             live.tierConfig,
             tapeBook,
             verdict.notional * guardRisk,
-            verdict.takeProfitPct,
+            pick.flags.includes("GMGN") ? 0.06 : verdict.takeProfitPct,
             resolveConcurrentSlots(live.riskSettings.maxPositions),
           );
           if (tapeStake.blocked) {
@@ -1926,7 +1937,9 @@ export const useDesk = create<DeskState>()(
             target: verdict.targetPrice,
             priceSource: `tape:${pick.id}`,
             maxPositions: tapeMaxSlots,
-            exitProfile: exitProfileForModel(live.selectedModel, { training: live.mode === "demo" }),
+            exitProfile: pick.flags.includes("GMGN")
+              ? memecoinExitProfile(pick, { training: live.mode === "demo" })
+              : exitProfileForModel(live.selectedModel, { training: live.mode === "demo" }),
           });
 
           if (!result.ok) break;

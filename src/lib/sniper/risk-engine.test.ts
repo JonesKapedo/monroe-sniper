@@ -85,6 +85,26 @@ describe("risk-engine bracket sizing", () => {
     assert.ok(v.stopLossPct <= 0.06 + 1e-9, `stop ${v.stopLossPct} exceeds the 6% ceiling`);
   });
 
+  it("gives a GMGN memecoin a survivable stop without breaking the risk budget", () => {
+    const gmgn: Candidate = {
+      ...candidate("CLEANCAT", 0.002),
+      chain: "sol",
+      venue: "dex",
+      liquidityUsd: 60_000,
+      volume24h: 300_000,
+      change24h: 42,
+      pairAgeHours: 0.7,
+      score: 90,
+      flags: ["GMGN", "GMGN-A"],
+      liquidityUnknown: false,
+    };
+    const v = evaluateRiskAndSize(emptyBook(500), gmgn, undefined, 55);
+    assert.ok(v.allowed, v.reasons.join("; "));
+    assert.ok(v.stopLossPct > 0.1 && v.stopLossPct <= 0.3 + 1e-9, `stop ${v.stopLossPct}`);
+    assert.ok(v.notional >= 15, `notional ${v.notional}`);
+    assert.ok(v.riskAmount <= 500 * 0.02, `risk $${v.riskAmount} exceeds 2% of $500`);
+  });
+
   it("keeps a normal stop-out well under 2% of a $500 book", () => {
     const v = evaluateRiskAndSize(emptyBook(500), candidate("ATOM", 8));
     assert.ok(v.allowed, v.reasons.join("; "));
