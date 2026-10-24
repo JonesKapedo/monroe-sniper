@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { exitHit, oppositeExit } from "./exit.ts";
 import type { Position } from "./types.ts";
 import { MODELS, exitProfileForModel } from "./risk-models.ts";
-import { buildExitPlan, evaluateExit, initExitRuntime } from "./exits.ts";
+import { buildExitPlan, evaluateExit, initExitRuntime, DEFAULT_EXIT_PROFILE } from "./exits.ts";
 
 const TIME_STOP = 28;
 
@@ -60,7 +60,7 @@ describe("per-model exit ladders", () => {
   it("banks earlier the more aggressive the model", () => {
     const degen = exitProfileForModel(MODELS["[degen]"]);
     const elvis = exitProfileForModel(MODELS["[elvis]"]);
-    const gradient = exitProfileForModel(MODELS["gradient"]);
+    const gradient = exitProfileForModel(MODELS.gradient);
     const paranoid = exitProfileForModel(MODELS["[paranoid]"]);
     assert.ok(degen.scaleOut2AtR! < elvis.scaleOut2AtR!);
     assert.ok(elvis.scaleOut2AtR! < gradient.scaleOut2AtR!);
@@ -113,24 +113,103 @@ describe("default exit ladder", () => {
     return { entry, plan, now: Date.now() };
   }
 
-  it("arms a breakeven stop at +0.75R so a winner cannot round-trip", () => {
+  it("arms a breakeven stop at +0.5R so a winner cannot round-trip", () => {
     const { entry, plan, now } = ladder();
     let rt = initExitRuntime(entry, plan, 10, 6, now);
-    const arms = evaluateExit("LONG", entry, 100 + 0.75 * 6, plan, rt, { now, lastFreshMarkAt: now });
+    const arms = evaluateExit("LONG", entry, 100 + 0.5 * 6, plan, rt, { now, lastFreshMarkAt: now });
     assert.equal(arms.action.kind, "MOVE_STOP");
     assert.ok(arms.runtime.stopPrice >= entry, "stop must be at or above entry once breakeven arms");
     rt = arms.runtime;
-    const held = evaluateExit("LONG", entry, 100 + 0.5 * 6, plan, rt, { now, lastFreshMarkAt: now });
-    assert.equal(held.action.kind, "HOLD", "pulling back to +0.5R must not exit after breakeven armed");
+    const held = evaluateExit("LONG", entry, 100 + 0.25 * 6, plan, rt, { now, lastFreshMarkAt: now });
+    assert.equal(held.action.kind, "HOLD", "pulling back above the new stop must not exit after breakeven armed");
   });
 
-  it("banks the first third at +1.25R", () => {
+  it("banks the first third at +1R", () => {
     const { entry, plan, now } = ladder();
     let rt = initExitRuntime(entry, plan, 10, 6, now);
-    rt = evaluateExit("LONG", entry, 100 + 0.8 * 6, plan, rt, { now, lastFreshMarkAt: now }).runtime;
-    const scale = evaluateExit("LONG", entry, 100 + 1.3 * 6, plan, rt, { now, lastFreshMarkAt: now });
+    rt = evaluateExit("LONG", entry, 100 + 0.6 * 6, plan, rt, { now, lastFreshMarkAt: now }).runtime;
+    const scale = evaluateExit("LONG", entry, 100 + 1.05 * 6, plan, rt, { now, lastFreshMarkAt: now });
     assert.equal(scale.action.kind, "SCALE_OUT");
     if (scale.action.kind === "SCALE_OUT") assert.ok(scale.action.fractionOfOriginal > 0.3);
+  });
+});
+
+describe("stale feed handling (delayed quotes)", () => {
+  const entry = 100;
+  const stop = 98; // risk 2 → 1R = 2 points
+
+  it("default ladder keeps the strict freeze on a stale mark — plain HOLD, stop unmoved", () => {
+    const plan = buildExitPlan(entry, stop);
+    const openedAt = Date.now() - 30 * 60_000;
+    const rt = initExitRuntime(entry, plan, 10, 1.5, openedAt);
+    const d = evaluateExit("LONG", entry, 101, plan, rt, {
+      now: Date.now(),
+      lastFreshMarkAt: openedAt, // 30 min stale > 15 min failsafe
+    });
+    assert.equal(d.action.kind, "HOLD");
+    assert.equal(d.runtime.stopPrice, plan.stopPrice, "stale mark must not move the stop");
+  });
+
+  it("banks a known small win when the feed delays (staleBankR opt-in)", () => {
+    // Profile as the desk builds it: staleBankR 0.5, staleCutR 0.75.
+    const plan = buildExitPlan(entry, stop, exitProfileForModel(MODELS.gradient));
+    const now = Date.now();
+    // Fresh marks climb to +1R — recorded in the runtime as mfeR — then the quote stalls.
+    let rt = initExitRuntime(entry, plan, 10, 1.5, now - 40 * 60_000);
+    rt = evaluateExit("LONG", entry, 101.2, plan, rt, {
+      now: now - 40 * 60_000,
+      lastFreshMarkAt: now - 40 * 60_000,
+    }).runtime; // +0.6R
+    rt = evaluateExit("LONG", entry, 102, plan, rt, {
+      now: now - 39 * 60_000,
+      lastFreshMarkAt: now - 39 * 60_000,
+    }).runtime; // +1R — mfeR = 1
+    // 20 minutes of quote delay later:
+    const d = evaluateExit("LONG", entry, 101, plan, rt, {
+      now,
+      lastFreshMarkAt: now - 39 * 60_000,
+    });
+    assert.equal(d.action.kind, "CLOSE");
+    assert.match((d.action as { reason: string }).reason, /Stale feed — banking/);
+  });
+
+  it("cuts a known loss when the feed delays (staleCutR opt-in)", () => {
+    const plan = buildExitPlan(entry, stop, exitProfileForModel(MODELS.gradient));
+    const now = Date.now();
+    // Fresh marks sag to −0.8R (maeR = 0.8) — not enough to hit the −1R initial stop —
+    // then the quote stalls.
+    let rt = initExitRuntime(entry, plan, 10, 1.5, now - 40 * 60_000);
+    rt = evaluateExit("LONG", entry, 98.4, plan, rt, {
+      now: now - 40 * 60_000,
+      lastFreshMarkAt: now - 40 * 60_000,
+    }).runtime; // −0.8R
+    const d = evaluateExit("LONG", entry, 99, plan, rt, {
+      now,
+      lastFreshMarkAt: now - 40 * 60_000, // > 15 min stale
+    });
+    assert.equal(d.action.kind, "CLOSE");
+    assert.match((d.action as { reason: string }).reason, /Stale feed — cutting/);
+  });
+
+  it("does not act on a stale mark when neither threshold was reached while fresh", () => {
+    const plan = buildExitPlan(entry, stop, exitProfileForModel(MODELS.gradient));
+    const now = Date.now();
+    // Flat drift, never reached ±0.5R — mfeR/maeR both below the opt-in thresholds.
+    let rt = initExitRuntime(entry, plan, 10, 1.5, now - 40 * 60_000);
+    rt = evaluateExit("LONG", entry, 100.3, plan, rt, {
+      now: now - 40 * 60_000,
+      lastFreshMarkAt: now - 40 * 60_000,
+    }).runtime; // +0.15R
+    const d = evaluateExit("LONG", entry, 100.1, plan, rt, {
+      now,
+      lastFreshMarkAt: now - 40 * 60_000,
+    });
+    assert.equal(d.action.kind, "HOLD");
+  });
+
+  it("DEFAULT_EXIT_PROFILE keeps the strict freeze (no opt-in thresholds)", () => {
+    assert.equal(DEFAULT_EXIT_PROFILE.staleBankR, null);
+    assert.equal(DEFAULT_EXIT_PROFILE.staleCutR, null);
   });
 });
 
