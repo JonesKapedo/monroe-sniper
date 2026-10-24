@@ -120,8 +120,19 @@ describe("default exit ladder", () => {
     assert.equal(arms.action.kind, "MOVE_STOP");
     assert.ok(arms.runtime.stopPrice >= entry, "stop must be at or above entry once breakeven arms");
     rt = arms.runtime;
-    const held = evaluateExit("LONG", entry, 100 + 0.25 * 6, plan, rt, { now, lastFreshMarkAt: now });
-    assert.equal(held.action.kind, "HOLD", "pulling back above the new stop must not exit after breakeven armed");
+    // +0.4R sits above the armed +0.25R buffer stop — the runner holds.
+    const held = evaluateExit("LONG", entry, 100 + 0.4 * 6, plan, rt, { now, lastFreshMarkAt: now });
+    assert.equal(held.action.kind, "HOLD", "pulling back above the armed stop must not exit after breakeven armed");
+  });
+
+  it("closes at the armed breakeven stop when the winner round-trips to it — worst case is a tiny win", () => {
+    const { entry, plan, now } = ladder();
+    let rt = initExitRuntime(entry, plan, 10, 6, now);
+    rt = evaluateExit("LONG", entry, 100 + 0.6 * 6, plan, rt, { now, lastFreshMarkAt: now }).runtime;
+    // Pull back exactly onto the +0.25R buffer stop (101.5) — the stop closes it above entry.
+    const d = evaluateExit("LONG", entry, 100 + 0.25 * 6, plan, rt, { now, lastFreshMarkAt: now });
+    assert.equal(d.action.kind, "CLOSE");
+    assert.ok(rt.stopPrice > entry, "the armed stop sits above entry — the close books a tiny win");
   });
 
   it("banks the first third at +1R", () => {
