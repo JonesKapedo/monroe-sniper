@@ -109,7 +109,8 @@ describe("I2 — Exit Integrity: no winner round-trips to a stop", () => {
   it("arms breakeven at +1R and the worst later outcome is a tiny win, not −1R", () => {
     let rt: ExitRuntime = initExitRuntime(entry, plan, 10, 1.5, Date.now());
     const now = Date.now();
-    // Climb to +1R (risk 2 → mark 102)
+    // Climb to +1R (risk 2 → mark 102) — clears the +0.5R breakeven trigger
+    // with margin, arming the stop at entry + 0.25R fee buffer (100.5).
     let d = evaluateExit("LONG", entry, 102, plan, rt, { now, lastFreshMarkAt: now });
     assert.equal(d.action.kind, "MOVE_STOP");
     assert.equal(d.state, "BREAKEVEN");
@@ -124,7 +125,8 @@ describe("I2 — Exit Integrity: no winner round-trips to a stop", () => {
   });
 
   it("banks 33% at +2R (scale-out 1) then 33% at +3.5R (scale-out 2) — growth ladder", () => {
-    // DEFAULT_EXIT_PROFILE: scaleOut1AtR=2.0 / 0.33, scaleOut2AtR=3.5 / 0.33
+    // Small-win profile: scaleOut1AtR=1.0 / 0.33, scaleOut2AtR=2.5 / 0.33.
+    // The +2R and +3.5R marks here both clear their rungs with margin.
     let rt = initExitRuntime(entry, plan, 10, 1.5, Date.now());
     const now = Date.now();
     // +1R first (arms breakeven)… risk=2 → mark 102
@@ -142,13 +144,13 @@ describe("I2 — Exit Integrity: no winner round-trips to a stop", () => {
   });
 
   it("trails the runner (Chandelier) and only ever tightens", () => {
-    // Growth ladder: BE @ +1R, SO1 @ +2R, SO2 @ +3.5R, then 3×ATR trail on runner
+    // Growth ladder: BE ≥ +0.5R, SO1 ≥ +1R, SO2 ≥ +2.5R, then a 2.5×ATR trail on the runner.
     let rt = initExitRuntime(entry, plan, 10, 1.5, Date.now());
     const now = Date.now();
     rt = evaluateExit("LONG", entry, 102, plan, rt, { now, lastFreshMarkAt: now }).runtime; // +1R BE
     rt = evaluateExit("LONG", entry, 104, plan, rt, { now, lastFreshMarkAt: now }).runtime; // +2R SO1
     rt = evaluateExit("LONG", entry, 107, plan, rt, { now, lastFreshMarkAt: now }).runtime; // +3.5R SO2
-    // Runner stretches higher; 3×ATR trail from best mark only tightens.
+    // Runner stretches higher; 2.5×ATR trail from best mark only tightens.
     const priorStop = rt.stopPrice;
     const d = evaluateExit("LONG", entry, 112, plan, rt, { now, lastFreshMarkAt: now });
     assert.ok(d.runtime.stopPrice > priorStop, "trail must only tighten upward for a LONG");
