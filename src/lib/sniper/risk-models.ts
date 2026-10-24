@@ -1,4 +1,5 @@
-/** Risk-model profiles — four configurations that change the bot's edge, sizing, and exit behaviour.
+/**
+ * Risk-model profiles — four configurations that change the bot's edge, sizing, and exit behaviour.
  * Ordered from most conservative to most aggressive:
  *   Conservative ([paranoid]) → Sweet Spot (gradient) → Aggressive Growth ([elvis]) → Turbo Gambler ([degen])
  */
@@ -103,6 +104,11 @@ export const DEFAULT_MODEL_ID = "gradient";
  *    ride deeper (conservative) without ever letting a winner round-trip.
  *  - trailPct drives the runner trail width (null = wide/no trail churn).
  *  - exitAtRunBoundary (Turbo) caps the time stop at the run length.
+ *  - staleBankR/staleCutR opt every model into the delayed-quote rules: bank a
+ *    small win the last FRESH mark already confirmed (+0.5R — the +$1–$3 band
+ *    on a ~$33 ticket), and cut a known loss (−0.75R) so delayed feeds stop
+ *    freezing open risk into dead slots. No price is invented: the close acts
+ *    on the runtime's recorded last-fresh excursion, never the stale mark.
  */
 export function exitProfileForModel(
   profile: RiskModelProfile,
@@ -125,5 +131,7 @@ export function exitProfileForModel(
       : profile.exitAtRunBoundary
         ? (profile.runMinutes ?? 34)
         : 240,
+    staleBankR: 0.5,
+    staleCutR: 0.75,
   };
 }
