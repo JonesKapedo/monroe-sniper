@@ -4,13 +4,20 @@
  * Pure functions, no I/O, no store access. The desk wires evaluateExit()
  * into its tick loop: one call per open position per cycle.
  *
- * Lifecycle: ARMING → BREAKEVEN (+1R) → SCALED_1 → SCALED_2 → RUNNER (Chandelier trail) → CLOSED.
- * Once +1R is touched the worst remaining outcome is the breakeven stop:
- * a winner can never round-trip to a full stop.
+ * Lifecycle: ARMING → BREAKEVEN (+0.5R) → SCALED_1 → SCALED_2 → RUNNER (Chandelier trail) → CLOSED.
+ * Once +0.5R is touched the worst remaining outcome is the breakeven-plus-buffer
+ * stop: a winner can never round-trip to a full stop, and the buffer makes the
+ * worst case a small booked win (~+0.25R) rather than a scratch.
  *
- * Growth profile: bank ~1/3 early, let the bulk run under a wide trail.
- * Side exits: time stop, volatility-spike trail tightening, stale failsafe
- * (freeze — never drift, never invent prices).
+ * Growth profile: bank ~1/3 early at +1R — the +$1–$3 band on a ~$33 ticket —
+ * then let the bulk run under a wide trail.
+ * Side exits: time stop, volatility-spike trail tightening, stale failsafe.
+ *
+ * Stale feeds: the freeze principle stands — a stale mark never moves a stop,
+ * trail, or scale, and no price is ever invented. Operators may opt in via
+ * staleBankR/staleCutR on the profile to act on the last FRESH excursion the
+ * runtime recorded (mfeR/maeR): bank a known small win or cut a known loss
+ * while the quote delays. Defaults keep the strict freeze (plain HOLD).
  */
 
 export type ExitSide = "LONG" | "SHORT";
@@ -36,6 +43,17 @@ export interface ExitPlan {
   volSpikeTrailAtrMult: number;
   timeStopMinutes: number | null;
   staleFailsafeMinutes: number;
+  /**
+   * Opt-in stale-feed handling: close (bank) the position when the last FRESH
+   * mark reached at least this many R while the quote is delayed. null keeps
+   * the strict freeze — plain HOLD, no invented prices.
+   */
+  staleBankR: number | null;
+  /**
+   * Opt-in stale-feed loss cut: close when the last FRESH drawdown reached at
+   * least this many R while the quote is delayed. null keeps the freeze.
+   */
+  staleCutR: number | null;
 }
 
 export interface ExitRuntime {
@@ -63,16 +81,17 @@ export interface ExitDecision {
 }
 
 /**
- * Growth-first profile with an earlier hand on the wheel. The desk books a
- * third at +1.25R (so most deals pay *something*), arms a breakeven-plus-buffer
- * stop at +0.75R (so a winner cannot round-trip into a loser), and lets the
- * remainder run under a 2.5×ATR Chandelier trail. Trades that never go anywhere
- * are reaped by a 4-hour time stop instead of sitting dead in a slot.
+ * Small-win-first profile. The desk books a third at +1R (so most deals pay
+ * something in the +$1–$3 band on a ~$33 ticket), arms a breakeven-plus-buffer
+ * stop at +0.5R (so a winner cannot round-trip into a loser and the worst case
+ * books ~+0.25R), and lets the remainder run under a 2.5×ATR Chandelier trail.
+ * Trades that never go anywhere are reaped by a 4-hour time stop instead of
+ * sitting dead in a slot.
  */
 export const DEFAULT_EXIT_PROFILE = {
-  breakevenTriggerR: 0.75,
-  breakevenBufferR: 0.2,
-  scaleOut1AtR: 1.25,
+  breakevenTriggerR: 0.5,
+  breakevenBufferR: 0.25,
+  scaleOut1AtR: 1.0,
   scaleOut1Fraction: 0.33,
   scaleOut2AtR: 2.5,
   scaleOut2Fraction: 0.33,
@@ -80,6 +99,8 @@ export const DEFAULT_EXIT_PROFILE = {
   volSpikeTrailAtrMult: 1.4,
   timeStopMinutes: 240,
   staleFailsafeMinutes: 15,
+  staleBankR: null,
+  staleCutR: null,
 } as const;
 
 export interface ExitProfile {
@@ -93,6 +114,8 @@ export interface ExitProfile {
   volSpikeTrailAtrMult?: number;
   timeStopMinutes?: number | null;
   staleFailsafeMinutes?: number;
+  staleBankR?: number | null;
+  staleCutR?: number | null;
 }
 
 export function buildExitPlan(
@@ -147,6 +170,33 @@ export function evaluateExit(
   }
 
   if (opts.now - opts.lastFreshMarkAt > plan.staleFailsafeMinutes * 60_000) {
+    // Delayed feed. The stale mark is never trusted to move a stop, trail, or
+    // scale (freeze — never drift, never invent prices). But the runtime
+    // remembers the last FRESH excursions (mfeR/maeR), so an opted-in desk
+    // can bank a known small win or cut a known loss instead of holding
+    // frozen risk. Defaults (null) keep the strict freeze: plain HOLD.
+    if (plan.staleBankR != null && rt.mfeR >= plan.staleBankR) {
+      rt.state = "CLOSED";
+      return {
+        action: {
+          kind: "CLOSE",
+          reason: `Stale feed — banking last fresh +${rt.mfeR.toFixed(2)}R win while the quote delays`,
+        },
+        state: "CLOSED",
+        runtime: rt,
+      };
+    }
+    if (plan.staleCutR != null && rt.maeR >= plan.staleCutR) {
+      rt.state = "CLOSED";
+      return {
+        action: {
+          kind: "CLOSE",
+          reason: `Stale feed — cutting last fresh −${rt.maeR.toFixed(2)}R loss while the quote delays`,
+        },
+        state: "CLOSED",
+        runtime: rt,
+      };
+    }
     return { action: { kind: "HOLD" }, state: rt.state, runtime: rt };
   }
 
