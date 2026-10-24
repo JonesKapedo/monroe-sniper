@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type FeedHealth = {
-  id: "binance" | "dex" | "coingecko" | "coinmarketcap";
+  id: "binance" | "dex" | "gmgn" | "coingecko" | "coinmarketcap";
   label: string;
   state: "live" | "down" | "locked";
   detail: string;

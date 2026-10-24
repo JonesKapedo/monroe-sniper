@@ -115,6 +115,22 @@ describe("paper desk", () => {
     );
   });
 
+  it("recycles a quote-less position at its model time stop without learning", () => {
+    const candidate = sampleTape()[0];
+    assert.ok(candidate);
+    const opened = enter(emptyBook(), candidate);
+    assert.equal(opened.ok, true);
+    const position = { ...opened.book.positions[0], exitProfile: { ...opened.book.positions[0].exitProfile, timeStopMinutes: 15 } };
+    const book = { ...opened.book, positions: [position] };
+    const later = position.openedAt + 20 * 60_000;
+    const marked = markBook(book, {}, later, true);
+    assert.equal(marked.positions.length, 0);
+    assert.equal(marked.trades.length, 1);
+    assert.equal(marked.trades[0].reason, "TIME");
+    assert.equal(marked.trades[0].simulated, true);
+    assert.equal(marked.dayPnl, 0);
+  });
+
   it("keeps entry conditions on a closed trade for durable learning", () => {
     const candidate = sampleTape().find((item) => item.symbol === "WETH");
     assert.ok(candidate);
@@ -196,16 +212,26 @@ describe("paper desk", () => {
     assert.equal(held.trades.length, 0);
   });
 
-  it("flags stale closes simulated and keeps them out of learning counters", () => {
+  it("uses the demo training clock for legacy quote-less tickets", () => {
+    const aged = { ...avenuePosition(), openedAt: Date.now() - 20 * 60 * 1000 };
+    const book = { ...emptyBook(), positions: [aged] };
+    const held = markBook(book, {}, Date.now(), true, { staleTimeStopMinutes: 15 });
+    assert.equal(held.positions.length, 0);
+    assert.equal(held.trades[0]?.reason, "TIME");
+    assert.equal(held.trades[0]?.simulated, true);
+  });
+
+  it("recycles an aged quote-less position as a simulated TIME close", () => {
     // Quote-less path is fail-closed: never invent marks for stops/targets.
-    // Position stays open and simulated; dayPnl / streak untouched.
-    // (Hard TIME close for aged stale marks is restored in markBook separately.)
+    // After the model time stop it leaves the slot at the last mark, and the
+    // simulated close never touches dayPnl, the loss streak, or learning.
     const aged = { ...avenuePosition(), openedAt: Date.now() - 9 * 60 * 60 * 1000 };
     const book = { ...emptyBook(), positions: [aged] };
     const held = markBook(book, {}, Date.now(), true);
-    assert.equal(held.positions.length, 1);
-    assert.equal(held.positions[0]?.markSimulated, true);
-    assert.equal(held.trades.length, 0);
+    assert.equal(held.positions.length, 0);
+    assert.equal(held.trades.length, 1);
+    assert.equal(held.trades[0]?.reason, "TIME");
+    assert.equal(held.trades[0]?.simulated, true);
     assert.equal(held.dayPnl, 0);
     assert.equal(held.consecutiveLosses, 0);
   });

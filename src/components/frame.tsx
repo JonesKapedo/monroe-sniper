@@ -128,7 +128,8 @@ export function Frame({ children }: { children: ReactNode }) {
       if ((desk.power || desk.demo.positions.length > 0 || hasWorking || hasAlerts) && tickCount % 3 === 0) {
         try {
           const feeds = await loadFeeds({ data: {} });
-          const combined = [...feeds.binance, ...feeds.dex];
+          useFeedHealth.getState().setRows(feeds.health);
+          const combined = [...feeds.binance, ...feeds.dex, ...feeds.gmgn];
           if (!combined.length) {
             if (lastHadPrices) {
               const current = useDesk.getState();
@@ -137,6 +138,7 @@ export function Frame({ children }: { children: ReactNode }) {
               useFeedHealth.getState().setRows([
                 { id: "binance", label: "Binance", state: "down", detail: "Outage — last-known marks" },
                 { id: "dex", label: "DEX", state: "down", detail: "Outage — last-known marks" },
+                { id: "gmgn", label: "GMGN", state: "down", detail: "Outage — last-known marks" },
                 { id: "coingecko", label: "CoinGecko", state: "down", detail: "Outage — last-known marks" },
                 { id: "coinmarketcap", label: "CoinMarketCap", state: "down", detail: "Outage — last-known marks" },
               ]);
@@ -175,6 +177,24 @@ export function Frame({ children }: { children: ReactNode }) {
             const prices: Record<string, number> = {};
             for (const c of combined) {
               prices[c.id] = c.priceUsd;
+            }
+            for (const c of feeds.gmgnQuotes) {
+              prices[c.id] = c.priceUsd;
+            }
+            const gmgnOpen = [...current.demo.positions, ...current.live.positions]
+              .map((p) => {
+                const m = /^gmgn:([^:]+):(.+)$/.exec(p.tokenId);
+                return m ? { id: p.tokenId, chain: m[1], address: m[2] } : null;
+              })
+              .filter((row): row is { id: string; chain: string; address: string } => row !== null);
+            if (gmgnOpen.length) {
+              try {
+                const { loadTokenQuotes } = await import("@/lib/market.functions");
+                const quotes = await loadTokenQuotes({ data: { tokens: gmgnOpen } });
+                Object.assign(prices, quotes.prices);
+              } catch {
+                // GMGN positions hold their last mark when DexScreener is down.
+              }
             }
             const fxIdForPair = (pair: (typeof FX_PAIRS)[number]) => `fx:${pair.replace("/", "")}`;
             const fxSymbols = [...current.demo.positions, ...current.live.positions]

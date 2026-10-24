@@ -47,6 +47,20 @@ export function assessEdge(input: EdgeInput, relaxStep = 0): Edge {
   if (!depthUnknown && !(input.liquidityUsd >= 10_000)) {
     return { act: false, edge: 0, stance: "SKIP", why: "Book too thin to clear costs." };
   }
+  if (flags.includes("GMGN")) {
+    if (flags.includes("GMGN-REJECT")) {
+      return { act: false, edge: 0, stance: "SKIP", why: "GMGN memecoin quality gate rejected the row." };
+    }
+    if (input.score < 55) {
+      return { act: false, edge: 0, stance: "SKIP", why: `GMGN memecoin score ${input.score}/100 is below the source floor.` };
+    }
+    return {
+      act: true,
+      edge: Math.min(100, input.score),
+      stance: "TREND",
+      why: `GMGN memecoin ${input.score}/100 — contract, dev, supply and consensus gates cleared.`,
+    };
+  }
 
   const change = Number.isFinite(input.change24h) ? input.change24h : 0;
   const age = input.pairAgeHours;

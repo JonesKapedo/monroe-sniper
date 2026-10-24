@@ -121,7 +121,7 @@ export function Desk() {
     setBusy(true);
     try {
       const res = await loadFeeds({ data: { query: q } });
-      const combined = [...res.binance, ...res.dex, ...res.reference];
+      const combined = [...res.binance, ...res.dex, ...res.gmgn, ...res.reference];
       useFeedHealth.getState().setRows(res.health);
       if (combined.length) {
         setTape(combined, res.note);

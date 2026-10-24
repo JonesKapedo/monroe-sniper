@@ -8,6 +8,7 @@ import { fetchJupiterTicks, type JupiterTick } from "./charts/jupiter";
 import { FX_PAIRS, fetchFrankfurterSpot, fetchTwelveCandles, fxIntervalFor } from "./fx/twelvedata";
 import { fetchHyperliquidFunding, type PerpFunding } from "./perps/hyperliquid";
 import { dexSearch, verifySecurity, type SecurityReport, type TokenMetrics } from "./data/market-sources";
+import { dexChainId, loadGmgnPack } from "./gmgn";
 import {
   krakenIntervalFor,
   krakenPairFor,
@@ -140,6 +141,8 @@ function binanceRows(rows: { symbol?: string; lastPrice?: string; quoteVolume?: 
 export type FeedPack = {
   binance: Candidate[];
   dex: Candidate[];
+  gmgn: Candidate[];
+  gmgnQuotes: Candidate[];
   reference: Candidate[];
   health: FeedHealth[];
   note: string;
@@ -242,13 +245,14 @@ export const loadFeeds = createServerFn({ method: "POST" })
     const dexUrl = data.query
       ? `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(data.query)}`
       : "https://api.dexscreener.com/token-profiles/latest/v1";
-    const [bx, dx, gx, cx] = await Promise.allSettled([
+    const [bx, dx, gx, cx, gm] = await Promise.allSettled([
       getJson<{ symbol?: string; lastPrice?: string; quoteVolume?: string; priceChangePercent?: string }[]>(
         `https://api.binance.com/api/v3/ticker/24hr?symbols=${symbols}`,
       ),
       pull(dexUrl),
       pullCoinGecko(),
       pullCoinMarketCap(),
+      data.query ? Promise.resolve(null) : loadGmgnPack(),
     ]);
     const binance = bx.status === "fulfilled" ? binanceRows(bx.value) : [];
     const dexMap = new Map<string, Candidate>();
@@ -262,6 +266,7 @@ export const loadFeeds = createServerFn({ method: "POST" })
     const dex = [...dexMap.values()].sort((a, b) => b.score - a.score).slice(0, 12);
     const gecko = gx.status === "fulfilled" ? gx.value : [];
     const cmc = cx.status === "fulfilled" ? cx.value : { rows: [], locked: !process.env.CMC_API_KEY && !process.env.COINMARKETCAP_API_KEY };
+    const gmgn = gm.status === "fulfilled" ? gm.value : null;
     const health: FeedHealth[] = [
       { id: "binance", label: "Binance", state: binance.length ? "live" : "down", detail: binance.length ? `${binance.length} spot quotes` : "Public ticker unavailable" },
       { id: "dex", label: "DEX", state: dex.length ? "live" : "down", detail: dex.length ? `${dex.length} pairs` : "DexScreener unavailable" },
@@ -272,12 +277,80 @@ export const loadFeeds = createServerFn({ method: "POST" })
         state: cmc.locked ? "locked" : cmc.rows.length ? "live" : "down",
         detail: cmc.locked ? "Add CMC_API_KEY on the host" : cmc.rows.length ? `${cmc.rows.length} listings` : "CMC request failed",
       },
+      {
+        id: "gmgn",
+        label: "GMGN",
+        state: gmgn?.state ?? "down",
+        detail: gmgn?.detail ?? "Bridge not checked for this search",
+      },
     ];
     const reference = [...gecko, ...cmc.rows].slice(0, 16);
     const executionNote = binanceExecutionStatus().note;
     const note = health.map((row) => `${row.label} ${row.state}`).join(" · ");
-      return { binance, dex, reference, health, note, executionNote };
+      return {
+        binance,
+        dex,
+        gmgn: gmgn?.candidates ?? [],
+        gmgnQuotes: gmgn?.quotes ?? [],
+        reference,
+        health,
+        note,
+        executionNote,
+      };
     });
+  });
+
+const gmgnQuoteCache = createCache<Record<string, number>>(50);
+
+export const loadTokenQuotes = createServerFn({ method: "POST" })
+  .validator((input: { tokens?: { id?: string; chain?: string; address?: string }[] }) => ({
+    tokens: (Array.isArray(input?.tokens) ? input.tokens : [])
+      .slice(0, 24)
+      .map((t) => ({
+        id: String(t?.id ?? "").slice(0, 160),
+        chain: String(t?.chain ?? "sol").slice(0, 16),
+        address: String(t?.address ?? "").slice(0, 128),
+      }))
+      .filter((t) => t.id && t.address),
+  }))
+  .handler(async ({ data }): Promise<{ prices: Record<string, number> }> => {
+    if (!data.tokens.length) return { prices: {} };
+    const key = data.tokens.map((t) => t.id).sort().join("|");
+    const prices = await fetchCached(gmgnQuoteCache, key, 10_000, async () => {
+      const prices: Record<string, number> = {};
+      const groups = new Map<string, { id: string; address: string }[]>();
+      for (const token of data.tokens) {
+        const chain = dexChainId(token.chain);
+        const list = groups.get(chain) ?? [];
+        list.push({ id: token.id, address: token.address });
+        groups.set(chain, list);
+      }
+      await Promise.all(
+        [...groups.entries()].map(async ([chain, rows]) => {
+          const addresses = [...new Set(rows.map((r) => r.address.toLowerCase()))].slice(0, 30);
+          try {
+            const body = await getJson<{ pairs?: Pair[] } | Pair[]>(
+              `https://api.dexscreener.com/latest/dex/tokens/${addresses.map(encodeURIComponent).join(",")}`,
+              {},
+              7000,
+            );
+            const pairs = Array.isArray(body) ? body : (body.pairs ?? []);
+            for (const row of rows) {
+              const address = row.address.toLowerCase();
+              const best = pairs
+                .filter((p) => p.baseToken?.address?.toLowerCase() === address && (!p.chainId || p.chainId === chain))
+                .sort((a, b) => (num(b.liquidity?.usd) ?? 0) - (num(a.liquidity?.usd) ?? 0))[0];
+              const price = num(best?.priceUsd);
+              if (price && price > 0) prices[row.id] = price;
+            }
+          } catch {
+            // Missing quotes simply leave the position stale; markBook fails closed.
+          }
+        }),
+      );
+      return prices;
+    });
+    return { prices };
   });
 
 const anchorCache = createCache<{ rows: Candidate[]; note: string }>(100);

@@ -156,6 +156,8 @@ export function evaluateRiskAndSize(
   );
   const isDuplicate = book.positions.some((p) => p.tokenId === candidate.id);
   const cooling = book.cooldownUntil !== null && now < book.cooldownUntil;
+  const isGmgn = candidate.flags.includes("GMGN");
+  const gmgnTier = candidate.flags.includes("GMGN-A") ? "A" : candidate.flags.includes("GMGN-C") ? "C" : "B";
   const { volatility, atr, regime } = estimateVolatility(candidate);
   const failVerdict = (id: string, label: string, detail: string, reason: string): SizingVerdict => ({
     allowed: false, notional: 0, qty: 0, entryPrice: candidate.priceUsd, stopPrice: candidate.priceUsd,
@@ -183,8 +185,14 @@ export function evaluateRiskAndSize(
   // Bracket width is bounded on BOTH ends: a floor keeps a normal stop out of
   // noise, and a hard ceiling keeps a single stop-out small. A 12% stop on a
   // volatile name was producing >$10 losses per trade; 6% caps the damage.
-  const calculatedStopPct = Math.max(0.015, Math.min(0.06, (atr * settings.atrMultiplier) / candidate.priceUsd));
-  const calculatedTargetPct = Math.max(0.04, calculatedStopPct * settings.rewardMultiple);
+  const stopFloor = isGmgn ? 0.12 : 0.015;
+  const stopCap = isGmgn ? (gmgnTier === "A" ? 0.3 : gmgnTier === "B" ? 0.27 : 0.24) : 0.06;
+  const atrMult = isGmgn ? Math.max(settings.atrMultiplier, 2.5) : settings.atrMultiplier;
+  const calculatedStopPct = Math.max(stopFloor, Math.min(stopCap, (atr * atrMult) / candidate.priceUsd));
+  const calculatedTargetPct = Math.max(
+    isGmgn ? 0.3 : 0.04,
+    calculatedStopPct * (isGmgn ? 4.0 : settings.rewardMultiple),
+  );
   const rrRatio = calculatedTargetPct / calculatedStopPct;
   const entryPrice = candidate.priceUsd;
   let stopPrice = entryPrice * (1 - calculatedStopPct);
@@ -215,8 +223,12 @@ export function evaluateRiskAndSize(
   const maxBookExposure = profile.id === "[degen]" ? 0.85 : profile.id === "[elvis]" ? 0.70 : profile.id === "[paranoid]" ? 0.40 : 0.65;
   const bookCapRemaining = Math.max(0, currentEquity * maxBookExposure - currentExposure);
   let rawSize = 0;
+  const baseRiskFraction =
+    profile.id === "[degen]" ? 0.05 : profile.id === "[elvis]" ? 0.035 : profile.id === "[paranoid]" ? 0.015 : settings.riskPerTrade;
+  const riskFraction = isGmgn
+    ? Math.min(0.02, baseRiskFraction * (gmgnTier === "A" ? 1.15 : gmgnTier === "B" ? 1.0 : 0.85))
+    : baseRiskFraction;
   if (settings.sizingModel === "VOLATILITY_PARITY") {
-    const riskFraction = profile.id === "[degen]" ? 0.05 : profile.id === "[elvis]" ? 0.035 : profile.id === "[paranoid]" ? 0.015 : settings.riskPerTrade;
     const guardMult = Math.max(0, Math.min(1, riskMultiplier));
     const dollarRiskBudget = Math.max(currentEquity <= 250 ? 1.5 : 0, currentEquity * riskFraction * conviction) * guardMult;
     rawSize = dollarRiskBudget / calculatedStopPct;
@@ -228,8 +240,7 @@ export function evaluateRiskAndSize(
     const quarterKelly = Math.max(0.08, Math.min(0.32, fullKelly * 0.25 * conviction));
     rawSize = currentEquity * quarterKelly;
   } else {
-    const baseRiskFraction = profile.id === "[degen]" ? 0.05 : profile.id === "[elvis]" ? 0.035 : profile.id === "[paranoid]" ? 0.015 : settings.riskPerTrade;
-    rawSize = currentEquity * baseRiskFraction * 5 * conviction;
+    rawSize = currentEquity * riskFraction * 5 * conviction;
   }
   const stakeTier = TIER_CONFIGS[detectTier(currentEquity)];
   const stakeBudgetTotal = Math.round(currentEquity * stakeTier.maxPortfolioExposure * 100) / 100;
@@ -238,7 +249,15 @@ export function evaluateRiskAndSize(
   // ~2.6x the intended risk just to clear minNotional. The stake guard and
   // minTicket gate handle viability without distorting the risk budget.
   const bindingNotional = Math.max(0, Math.min(rawSize, maxIdeaCash, cashPerSlot, bookCapRemaining, stakeRemaining, stakePerSlot, book.cash));
-  const stakeSplit = applyStakeBudget({ equity: currentEquity, tier: stakeTier, currentExposure, riskNotional: bindingNotional, targetPct: calculatedTargetPct, openPositionCount: book.positions.length, maxConcurrentPositions: maxSlots });
+  const stakeSplit = applyStakeBudget({
+    equity: currentEquity,
+    tier: stakeTier,
+    currentExposure,
+    riskNotional: bindingNotional,
+    targetPct: isGmgn ? 0.06 : calculatedTargetPct,
+    openPositionCount: book.positions.length,
+    maxConcurrentPositions: maxSlots,
+  });
   const roundedNotional = stakeSplit.blocked ? 0 : Math.round(stakeSplit.notional * 100) / 100;
   const qty = roundedNotional > 0 && entryPrice > 0 ? roundedNotional / entryPrice : 0;
   const valueAtRisk95 = Math.round(roundedNotional * volatility * 1.645 * 100) / 100;
@@ -285,9 +304,18 @@ export function evaluateRiskAndSize(
     checks.push({ id: "correlation", label: "Uncorrelated with open risk", pass: !stacked, detail: stacked ? "Near-duplicate of an open position" : "Distinct market character" });
     if (stacked) reasons.push("Candidate duplicates the character of an open position");
   }
-  const liqUnknownCex = candidate.liquidityUnknown === true && candidate.venue === "binance";
+  const liqUnknownCex =
+    candidate.liquidityUnknown === true &&
+    (candidate.venue === "binance" || candidate.flags.includes("GMGN"));
   const liqPass = liqUnknownCex || candidate.liquidityUsd >= settings.minLiquidity;
-  checks.push({ id: "liq", label: liqUnknownCex ? "CEX spot depth (unpublished, majors only)" : `Pool liquidity (≥$${(settings.minLiquidity / 1000).toFixed(0)}k)`, pass: liqPass, detail: liqUnknownCex ? "CEX depth unpublished" : `$${Math.round(candidate.liquidityUsd).toLocaleString()}` });
+  checks.push({
+    id: "liq",
+    label: liqUnknownCex
+      ? (candidate.flags.includes("GMGN") ? "GMGN depth (source-screened)" : "CEX spot depth (unpublished, majors only)")
+      : `Pool liquidity (≥$${(settings.minLiquidity / 1000).toFixed(0)}k)`,
+    pass: liqPass,
+    detail: liqUnknownCex ? "Depth unpublished" : `$${Math.round(candidate.liquidityUsd).toLocaleString()}`,
+  });
   if (!liqPass) reasons.push(`Liquidity $${Math.round(candidate.liquidityUsd)} is below safe threshold`);
   const effectiveMinTicket = currentEquity <= 250 ? Math.min(25, book.cash) : settings.minTicket;
   const cashPass = roundedNotional >= effectiveMinTicket && roundedNotional <= book.cash;

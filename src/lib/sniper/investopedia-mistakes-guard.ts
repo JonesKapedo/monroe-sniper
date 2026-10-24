@@ -53,6 +53,7 @@ export function auditAcademicSafeguards(
   const audits: AcademicSafeguardResult["audits"] = [];
   const flags: string[] = [];
 
+  const isGmgn = candidate.flags.includes("GMGN");
   const change = candidate.change24h ?? 0;
   const vol = candidate.volume24h ?? 0;
   const liq = candidate.liquidityUsd ?? 0;
@@ -60,7 +61,9 @@ export function auditAcademicSafeguards(
 
   // 1. INVESTOPEDIA MISTAKE #1: Anti-FOMO Green Candle Chaser Rule
   // (Buying at extreme extended peaks without pullbacks)
-  const isFomoTop = change > 60 || (change > 35 && volToLiqRatio > 1.4);
+  const isFomoTop = isGmgn
+    ? change > 300 || (change > 120 && candidate.score < 72) || (change > 60 && candidate.score < 62)
+    : change > 60 || (change > 35 && volToLiqRatio > 1.4);
   if (isFomoTop) {
     flags.push("FOMO_TOP_RISK");
   }
@@ -76,7 +79,11 @@ export function auditAcademicSafeguards(
 
   // 2. RESEARCHGATE & BINANCE: Insider Anticipated Purchases (IAP) & Pump-and-Dump Detector
   // Anomalous volume spike (>1.5x pool depth) combined with fresh token age or extreme spread
-  const isInsiderPump = volToLiqRatio > 1.2 && (candidate.pairAgeHours !== null && candidate.pairAgeHours < 12);
+  const isInsiderPump =
+    !isGmgn &&
+    volToLiqRatio > 1.2 &&
+    candidate.pairAgeHours !== null &&
+    candidate.pairAgeHours < 12;
   if (isInsiderPump) {
     flags.push("INSIDER_PUMP_PATTERN");
   }
@@ -125,7 +132,7 @@ export function auditAcademicSafeguards(
   // same as the tape venues. A published DEX pool still pays the real swap cost.
   const isCexVenue = candidate.venue === "binance";
   const estFeeUsd = isCexVenue || depthUnknown ? 0.05 : 0.45; // CEX/reference vs Solana-L2 DEX fee
-  const minExpectedProfit = plannedNotional * 0.04; // 4% minimum profit target
+  const minExpectedProfit = plannedNotional * (isGmgn ? 0.4 : 0.04);
   const feeToProfitRatio = minExpectedProfit > 0 ? estFeeUsd / minExpectedProfit : 1;
   const isFeeErosion = feeToProfitRatio > 0.25; // Fees should never exceed 25% of expected profit
   if (isFeeErosion) {
@@ -157,9 +164,10 @@ export function auditAcademicSafeguards(
   // 6. INVESTOPEDIA: Dynamic Portfolio Sizing & Capital Compounding
   // Validates that notional is in the "Sweet Spot" (not micro toy $1, and not reckless >55%)
   const notionalEquityFraction = portfolioBalance > 0 ? plannedNotional / portfolioBalance : 0;
+  const effectiveMinSizingFraction = isGmgn ? Math.min(minSizingFraction, 0.03) : minSizingFraction;
   const isSweetSpotSizing =
     plannedNotional >= 15 &&
-    notionalEquityFraction >= minSizingFraction &&
+    notionalEquityFraction >= effectiveMinSizingFraction &&
     notionalEquityFraction <= 0.55;
   audits.push({
     rule: "Compounding Sweet-Spot Position Sizing",

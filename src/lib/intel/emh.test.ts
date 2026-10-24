@@ -35,6 +35,28 @@ test("honeypot is a hard skip", () => {
   assert.equal(edge.stance, "SKIP");
 });
 
+test("GMGN signals trust the source gates instead of the major-tape guards", () => {
+  const edge = assessEdge({
+    ...base,
+    flags: ["GMGN"],
+    score: 81,
+    change24h: 42,
+    pairAgeHours: 0.4,
+    liquidityUsd: 60_000,
+    volume24h: 180_000,
+  });
+  assert.equal(edge.act, true);
+  assert.equal(edge.stance, "TREND");
+});
+
+test("GMGN signals still respect the source priority floor and thin books", () => {
+  assert.equal(assessEdge({ ...base, flags: ["GMGN"], score: 30 }).act, false);
+  assert.equal(
+    assessEdge({ ...base, flags: ["GMGN"], score: 80, liquidityUsd: 4_000 }).act,
+    false,
+  );
+});
+
 // --- Quality guards: no relax step may loosen these (the losing entries). ---
 
 test("never chases a vertical blow-off, even fully relaxed", () => {
